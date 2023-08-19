@@ -1,0 +1,106 @@
+/* --------------------------------------------------------------------------------------------
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License. See License.txt in the project root for license information.
+ * ------------------------------------------------------------------------------------------ */
+
+import * as vscode from 'vscode';
+import * as path from 'path';
+import { workspace, ExtensionContext } from 'vscode';
+import * as vsclnt from 'vscode-languageclient';
+import * as cmd from "./commands";
+
+import {
+	LanguageClient,
+	LanguageClientOptions,
+	ServerOptions,
+	TransportKind
+} from 'vscode-languageclient/node';
+
+let client: LanguageClient;
+
+export function activate(context: ExtensionContext) {
+	// The server is implemented in node
+	const serverModule = context.asAbsolutePath(
+		path.join('server', 'out', 'server.js')
+	);
+
+	const debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] };
+
+	// If the extension is launched in debug mode then the debug server options are used
+	// Otherwise the run options are used
+	const serverOptions: ServerOptions = {
+		run: { module: serverModule, transport: TransportKind.ipc },
+		debug: {
+			module: serverModule,
+			transport: TransportKind.ipc,
+			options: debugOptions
+		}
+	};
+
+	// Options to control the language client
+	const clientOptions: LanguageClientOptions = {
+		documentSelector: [{ scheme: 'file', language: 'rpw65' }],
+		synchronize: {
+			// Notify the server about file changes to '.clientrc files contained in the workspace
+			fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
+		}
+	};
+
+	// Create the language client and start the client.
+	client = new LanguageClient(
+		'rpw65',
+		'RPW 6502',
+		serverOptions,
+		clientOptions
+	);
+
+	// Start the client. This will also launch the server
+	client.start();
+
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.renumberLocals", renumberCmd));
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabIndent", () => { cmd.tabIndentCmd(false); }));
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabOutdent", () => { cmd.tabIndentCmd(true); }));
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.delIndent", cmd.delIndentCmd));
+}
+
+export function deactivate(): Thenable<void> | undefined {
+	if (!client) {
+		return undefined;
+	}
+	return client.stop();
+}
+
+export async function renumberCmd(/*client: LanguageClient*/) {
+
+	// const files = await vscode.workspace.findFiles('*.rpw-project.json', '**/node_modules/**');
+
+	// const x = await vscode.workspace.fs.readDirectory(vscode.workspace.workspaceFolders[0].uri);
+
+	// vscode.workspace.openTextDocument(uri).then((document) => {
+	// 	const text = document.getText();
+	// });
+
+	// const docs = vscode.workspace.textDocuments;
+	// docs.forEach((doc) => {
+	// 	console.log(doc.fileName);
+	// });
+	// const wsfolders = vscode.workspace.workspaceFolders;
+
+	const editor = vscode.window.activeTextEditor;
+	const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
+		command: "rpw65.renumberLocals",
+		arguments: [
+			editor.document.uri.toString(),
+			editor.selection
+		]
+	});
+
+	if (content && content.edits.length > 0) {
+		editor.edit(edit => {
+			content.edits.forEach(myEdit => {
+				const range = new vscode.Range(myEdit.range.start, myEdit.range.end);
+				edit.replace(range, myEdit.newText);
+			});
+		});
+	}
+}

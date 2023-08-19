@@ -1,0 +1,115 @@
+{
+	"name": "rpw65",
+	"description": "Language server for 6502 assembly",
+	"author": "Sean Callahan",
+	"license": "MIT",
+	"version": "1.0.0",
+	"categories": [],
+	"keywords": [
+		"multi-root ready"
+	],
+	"engines": {
+		"vscode": "^1.75.0"
+	},
+	"activationEvents": [
+		"onLanguage:plaintext"
+	],
+	"main": "./client/out/extension",
+	"contributes": {
+		"configuration": {
+			"type": "object",
+			"title": "Example configuration",
+			"properties": {
+				"languageServerExample.maxNumberOfProblems": {
+					"scope": "resource",
+					"type": "number",
+					"default": 100,
+					"description": "Controls the maximum number of problems produced by the server."
+				},
+				"languageServerExample.trace.server": {
+					"scope": "window",
+					"type": "string",
+					"enum": [
+						"off",
+						"messages",
+						"verbose"
+					],
+					"default": "off",
+					"description": "Traces the communication between VS Code and the language server."
+				}
+			}
+		},
+		"languages": [
+			{
+				"id": "rpw65",
+				"extensions": [
+					".S"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"themes": [
+			{
+				"label": "RPW",
+				"uiTheme": "vs-dark",
+				"path": "./themes/rpw-color-theme.json"
+			}
+		],
+		"menus": {
+			"editor/context": [
+				{
+					"when": "resourceLangId == rpw65",
+					"command": "rpw65.renumberLocals"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "rpw65.renumberLocals",
+				"title": "Renumber Locals"
+			},
+			{
+				"command": "rpw65.tabIndent",
+				"title": "Tab Indentation"
+			},
+			{
+				"command": "rpw65.delIndent",
+				"title": "Delete Indentation"
+			},
+			{
+				"command": "rpw65.retIndent",
+				"title": "Return Indentation"
+			}
+		],
+		"keybindings":[
+			{
+				"command": "rpw65.tabIndent",
+				"key": "tab",
+				"when": "resourceLangId == rpw65 && editorTextFocus"
+			},
+			{
+				"command": "rpw65.tabOutdent",
+				"key": "shift-tab",
+				"when": "resourceLangId == rpw65 && editorTextFocus"
+			},
+			{
+				"command": "rpw65.delIndent",
+				"key": "backspace",
+				"when": "resourceLangId == rpw65 && editorTextFocus"
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "tsc -b",
+		"watch": "tsc -b -w",
+		"postinstall": "cd client && npm install && cd ../server && npm install && cd .."
+	},
+	"devDependencies": {
+		"@types/node": "^16.18.34",
+		"typescript": "^5.1.3"
+	},
+	"dependencies": {
+		"fs-extra": "^11.1.1"
+	}
+}
