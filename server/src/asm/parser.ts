@@ -1,12 +1,15 @@
 
 // TODO: rename this parser.ts (rpw65 will be higher level)
 
+import * as asm from "./assembler"
 import { Opcodes6502 } from './opcodes'
 import { Keywords } from './keywords'
 import * as exp from "./expressions"
 import * as stm from "./statements"
 import * as sym from "./symbols"
 import { LinkedEditingRangeFeature } from 'vscode-languageserver/lib/common/linkedEditingRange'
+
+// *** "Missing token" to "Missing argument" ? ***
 
 // not supporting /* */ comments (dasm, ca65)
 // . and @ locals have different scoping rules in acme
@@ -38,6 +41,8 @@ export enum TokenType {
   DecNumber,
   Operator,
 
+  FileName,   // TODO: or just use quoted string?
+
   Missing
 }
 
@@ -59,7 +64,8 @@ export class Token {
   public type: TokenType
   public errorType: TokenErrorType
   public errorMessage?: string
-  //*** consider a sub-type ***
+  //*** consider an error sub-type ***
+  public symbol?: sym.Symbol
 
   constructor(start: number, end: number, type: TokenType) {
     this.start = start
@@ -107,8 +113,10 @@ export class Token {
 // *** Parser extends a separate Tokenizer class? ***
 export class Parser {
 
+  public assembler: asm.Assembler
   private symbols: sym.Symbols
 
+  private sourceFile: asm.SourceFile | undefined
   private lineNumber: number = -1
   private sourceLine: string = ""
   private sourceLineUC: string = ""
@@ -118,12 +126,14 @@ export class Parser {
 
   public syntax: string = "MERLIN"			// TODO: make configurable
 
-  constructor(symbols: sym.Symbols) {
-    this.symbols = symbols
+  constructor(assembler: asm.Assembler) {
+    this.assembler = assembler
+    this.symbols = assembler.module.symbols
   }
 
-  private setSourceLine(lineNumber: number, sourceLine: string) {
-    this.lineNumber = lineNumber
+  private setSourceLine(lineRecord: asm.LineRecord, sourceLine: string) {
+    this.sourceFile = lineRecord.sourceFile
+    this.lineNumber = lineRecord.lineNumber
     this.sourceLine = sourceLine
     this.sourceLineUC = sourceLine.toUpperCase()
     this.position = 0
@@ -151,9 +161,9 @@ export class Parser {
     this.macroArgMode = enable
   }
 
-  parseStatement(lineNumber: number, sourceLine: string): stm.Statement {
+  parseStatement(lineRecord: asm.LineRecord, sourceLine: string) {
 
-    this.setSourceLine(lineNumber, sourceLine)
+    this.setSourceLine(lineRecord, sourceLine)
 
     let symbol = this.parseLabel()
 
@@ -170,7 +180,7 @@ export class Parser {
       //   //*** extend if this is a ";" token?
       // } else
       {
-        let statementType = token.getString(this.sourceLineUC)
+        statementType = token.getString(this.sourceLineUC)
         let opcode = (Opcodes6502 as {[key: string]: any})[statementType]
         if (opcode !== undefined) {
           token.type = TokenType.Opcode
@@ -221,7 +231,7 @@ export class Parser {
       token.setError("Unexpected token")
     }
 
-    return statement
+    lineRecord.statement = statement
   }
 
   private parseOpcode(): Token {
@@ -300,16 +310,17 @@ export class Parser {
       //*** label doesn't end until whitespace or end of line
 
     if (token.type == TokenType.Label) {
-      const label = this.getTokenString(token)
-      // *** need file? ***
-      const symbol = new sym.Symbol(this.symbols, label, this.lineNumber, new exp.PcExpression())
-      if (!this.symbols.add(symbol)) {
-        token.setError("Duplicate symbol")
+      if (this.sourceFile) {
+        const label = this.getTokenString(token)
+        const symbol = new sym.Symbol(label, this.sourceFile, this.lineNumber, new exp.PcExpression())
+        if (!this.symbols.add(symbol)) {
+          token.setError("Duplicate symbol")
+        }
+        // *** add label to global scope symbols
+          // *** start new local scope (if Merlin)
+        // *** stop returning symbol? ***
+        return symbol
       }
-      // *** add label to global scope symbols
-        // *** start new local scope (if Merlin)
-      // *** stop returning symbol? ***
-      return symbol
     } else if (token.type == TokenType.LocalLabel) {
       // *** add local label to local scope symbols
       // return symbol
@@ -353,6 +364,29 @@ export class Parser {
     if (token.isEmpty()) {
       token = new Token(start, start, TokenType.Missing)
       token.setError("Missing token, " + expectMsg)
+    }
+    this.tokens.push(token)
+    return token
+  }
+
+  // TODO: fold this with mustPushNextToken somehow
+  mustPushNextFileName(): Token {
+    let start = this.position
+    if (!this.macroArgMode) {
+      // NOTE: for now, assume file name never in macro args
+      let comment = this.stripComment()
+      if (comment) {
+        let token = new Token(start, start, TokenType.Missing)
+        token.setError("Missing argument, expecting file path")
+        this.tokens.push(token)
+        this.tokens.push(comment)
+        return token
+      }
+    }
+    let token = this.veryNextFileName()
+    if (token.isEmpty()) {
+      token = new Token(start, start, TokenType.Missing)
+      token.setError("Missing argument, expecting file path")
     }
     this.tokens.push(token)
     return token
@@ -481,6 +515,39 @@ export class Parser {
       }
       this.position += 1
     }
+  }
+
+  private veryNextFileName(): Token {
+
+    const token = new Token(this.position, this.position, TokenType.Null)
+    if (this.position < this.sourceLine.length) {
+      let quoted = false
+      if (this.sourceLine[this.position] == '"') {
+        quoted = true
+        this.position += 1
+      }
+
+      while (this.position < this.sourceLine.length) {
+        const code = this.sourceLine.charCodeAt(this.position)
+        if ((code >= 0x30 && code <= 0x39) ||			// 0-9
+          (code >= 0x41 && code <= 0x5A) ||		    // A-Z
+          (code >= 0x61 && code <= 0x7A) ||		    // a-z
+          code == 0x5F || code == 0x2E || code == 0x2F) { // "_" or "." or "/"
+          this.position += 1
+          continue
+        }
+        if (quoted && code == 0x22) {
+          this.position += 1
+        }
+        break
+      }
+    }
+
+    token.end = this.position
+    if (token.length > 0) {
+      token.type = TokenType.FileName
+    }
+    return token
   }
 
   // *** consider creating a missing expression class ***

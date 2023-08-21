@@ -278,48 +278,24 @@ export class DataStatement extends Statement {
 
 //-----------------------------------------------------------------------------
 
-export class StorageStatement extends Statement {
-
-  private sizeArg: exp.Expression | undefined
-  private patternArg: exp.Expression | undefined
+export class EquStatement extends Statement {
 
   parse(parser: Parser) {
-
-    let token = parser.mustPushNextToken("expecting storage size expression")
-    if (token.isEmpty()) {
+    let expression = parser.parseExpression()
+    if (!expression) {
+      // *** error
+      return
+    }
+    if (!this.symbol) {
+      // *** error
       return
     }
 
-    //*** push token?
-    if (parser.getTokenString(token) == "\\") {				//*** MERLIN-only
-      this.sizeArg = new exp.AlignExpression(new exp.NumberExpression(256, false))
-    } else {
-      this.sizeArg = parser.mustParseExpression(token)
-      // *** not needed if empty expression returned ***
-      if (this.sizeArg === undefined) {
-        // *** need to force "missing expression" error ***
-        return
-      }
-      //*** error if resolved value is out of range
-    }
-
-    token = parser.pushNextToken()
-    if (parser.getTokenString(token) == ",") {
-      this.patternArg = parser.mustParseExpression()
-      // *** not needed if empty expression returned ***
-      if (!this.patternArg) {
-        return
-      }
-    } else if (token.isEmpty()) {
-      // default to filling with zero
-      this.patternArg = new exp.NumberExpression(0, false)
-    } else {
-      token.setError("Unexpected token, expecting ','")
-    }
+    this.symbol.expression = expression
   }
 
   getSize(): number | undefined {
-    return this.sizeArg?.resolve()
+    return this.symbol?.expression?.getSize()
   }
 }
 
@@ -394,24 +370,14 @@ export class HexStatement extends Statement {
 
 //-----------------------------------------------------------------------------
 
-export class EquStatement extends Statement {
+export class IncludeStatement extends Statement {
 
   parse(parser: Parser) {
-    let expression = parser.parseExpression()
-    if (!expression) {
-      // *** error
-      return
+    const token = parser.mustPushNextFileName()
+    const fileName = parser.getTokenString(token)
+    if (!parser.assembler.includeFile(fileName)) {
+      token.setError("File not found")
     }
-    if (!this.symbol) {
-      // *** error
-      return
-    }
-
-    this.symbol.expression = expression
-  }
-
-  getSize(): number | undefined {
-    return this.symbol?.expression?.getSize()
   }
 }
 
@@ -524,6 +490,53 @@ export class MacroStatement extends Statement {
 
   getSize(): number | undefined {
     return undefined
+  }
+}
+
+//-----------------------------------------------------------------------------
+
+export class StorageStatement extends Statement {
+
+  private sizeArg: exp.Expression | undefined
+  private patternArg: exp.Expression | undefined
+
+  parse(parser: Parser) {
+
+    let token = parser.mustPushNextToken("expecting storage size expression")
+    if (token.isEmpty()) {
+      return
+    }
+
+    //*** push token?
+    if (parser.getTokenString(token) == "\\") {				//*** MERLIN-only
+      this.sizeArg = new exp.AlignExpression(new exp.NumberExpression(256, false))
+    } else {
+      this.sizeArg = parser.mustParseExpression(token)
+      // *** not needed if empty expression returned ***
+      if (this.sizeArg === undefined) {
+        // *** need to force "missing expression" error ***
+        return
+      }
+      //*** error if resolved value is out of range
+    }
+
+    token = parser.pushNextToken()
+    if (parser.getTokenString(token) == ",") {
+      this.patternArg = parser.mustParseExpression()
+      // *** not needed if empty expression returned ***
+      if (!this.patternArg) {
+        return
+      }
+    } else if (token.isEmpty()) {
+      // default to filling with zero
+      this.patternArg = new exp.NumberExpression(0, false)
+    } else {
+      token.setError("Unexpected token, expecting ','")
+    }
+  }
+
+  getSize(): number | undefined {
+    return this.sizeArg?.resolve()
   }
 }
 

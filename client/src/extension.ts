@@ -1,11 +1,6 @@
-/* --------------------------------------------------------------------------------------------
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License. See License.txt in the project root for license information.
- * ------------------------------------------------------------------------------------------ */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { workspace, ExtensionContext } from 'vscode';
 import * as vsclnt from 'vscode-languageclient';
 import * as cmd from "./commands";
 
@@ -18,7 +13,7 @@ import {
 
 let client: LanguageClient;
 
-export function activate(context: ExtensionContext) {
+export function activate(context: vscode.ExtensionContext) {
 	// The server is implemented in node
 	const serverModule = context.asAbsolutePath(
 		path.join('server', 'out', 'server.js')
@@ -42,20 +37,12 @@ export function activate(context: ExtensionContext) {
 		documentSelector: [{ scheme: 'file', language: 'rpw65' }],
 		synchronize: {
 			// Notify the server about file changes to '.clientrc files contained in the workspace
-			fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
+			fileEvents: vscode.workspace.createFileSystemWatcher('**/.clientrc')
 		}
 	};
 
-	// Create the language client and start the client.
-	client = new LanguageClient(
-		'rpw65',
-		'RPW 6502',
-		serverOptions,
-		clientOptions
-	);
-
-	// Start the client. This will also launch the server
-	client.start();
+	client = new LanguageClient('rpw65', 'RPW 6502', serverOptions, clientOptions);
+	client.start();		// also starts server
 
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.renumberLocals", renumberCmd));
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabIndent", () => { cmd.tabIndentCmd(false); }));

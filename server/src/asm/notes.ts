@@ -2,9 +2,9 @@
 // Language Server Ideas
 
 // Features
-// - renumber local labels
-// - detect out of range branches
-// - detect missing locals/labels
+// X renumber local labels
+// * detect out of range branches
+// * detect missing locals/labels
 // - .dsk file as virtual file system
 
 // Parser
@@ -58,8 +58,8 @@
 //  - track/hilite unused labels and zpage vars
 //
 // code completion
-//  - symbols names (labels and/or constants, depending on context)
-//      - be smart and handle missing letters, spelling mistakes
+//  * symbols names (labels and/or constants, depending on context)
+//  * show full function header information (onCompletionResolve?)
 //
 // snippets
 //  - auto complete '(' as '(xxx),Y'
@@ -87,9 +87,10 @@
 // auto-complete
 //  - smart auto-complete based on instruction type
 //      - constant (LDA #), zpage (LDA), or label (LDA, JSR)
+//  - smart editing of auto-completes/snippets (more research)
 //
 // other
-//  - jump to definition for functions and data storage
+//  * jump to definition for functions and data storage
 //  ? use deprecated names to show renames for legacy functions
 //  - upper/lower case setting
 //

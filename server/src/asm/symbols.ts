@@ -1,6 +1,7 @@
 
 // *** does this need its own file? ***
 
+import * as asm from "./assembler"
 import * as exp from "./expressions"
 
 // *** what do generated addresses look like?
@@ -38,12 +39,11 @@ export class Symbols {
 
 export class Symbol {
   public name: string
+  public sourceFile: asm.SourceFile
   // *** fullName (including scope?)
   public lineNumber: number           // *** Statement instead?
   public expression?: exp.Expression
-
-  // *** is this really needed?
-  private symbols: Symbols
+  // *** is entry point ***
 
   // definition source file
   // definition line number
@@ -52,16 +52,16 @@ export class Symbol {
   // import-link?
   // symbol type?
 
-  constructor(symbols: Symbols, name: string, lineNumber: number, expression?: exp.Expression) {
-    this.symbols = symbols
+  constructor(name: string, file: asm.SourceFile, lineNumber: number, expression?: exp.Expression) {
     this.name = name
+    this.sourceFile = file
     this.lineNumber = lineNumber
     this.expression = expression
   }
 }
 
 export class PcSymbol extends Symbol {
-  constructor(symbols: Symbols, name: string, lineNumber: number) {
-    super(symbols, name, lineNumber, new exp.PcExpression())
+  constructor(name: string, file: asm.SourceFile, lineNumber: number) {
+    super(name, file, lineNumber, new exp.PcExpression())
   }
 }

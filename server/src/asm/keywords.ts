@@ -8,9 +8,9 @@ export const Keywords = {
   "=":          { syntax: [ "MERL", "DASM", "LISA" ], create: () => { return new stm.EquStatement() }},
   "ERR":        { syntax: [ "MERL", "DASM"         ] },
 
-  "PUT":        { syntax: [ "MERL"                 ] },
-  "USE":        { syntax: [ "MERL"                 ] },
-  "INCLUDE":    { syntax: [         "DASM"         ] },
+  "PUT":        { syntax: [ "MERL"                 ], create: () => { return new stm.IncludeStatement() }},
+  "USE":        { syntax: [ "MERL"                 ], create: () => { return new stm.IncludeStatement() }},
+  "INCLUDE":    { syntax: [         "DASM"         ], create: () => { return new stm.IncludeStatement() }},
   "SAV":        { syntax: [ "MERL",         "LISA" ] },
   "DSK":        { syntax: [ "MERL"                 ] },
 
@@ -67,7 +67,7 @@ export const Keywords = {
   "OBJ":        { syntax: [ "MERL",         "LISA" ] },
   "END":        { syntax: [ "MERL",         "LISA" ] },
   "DCM":        { syntax: [                 "LISA" ] },
-  "ICL":        { syntax: [                 "LISA" ] },
+  "ICL":        { syntax: [                 "LISA" ], create: () => { return new stm.IncludeStatement() }},
   "NLS":        { syntax: [                 "LISA" ] },
   "EPZ":        { syntax: [                 "LISA" ] },
   "ADR":        { syntax: [                 "LISA" ] },

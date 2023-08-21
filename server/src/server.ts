@@ -1,7 +1,4 @@
-/* --------------------------------------------------------------------------------------------
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License. See License.txt in the project root for license information.
- * ------------------------------------------------------------------------------------------ */
+
 import {
 	createConnection,
 	// TextDocuments,
@@ -17,7 +14,6 @@ import {
 	InitializeResult,
 } from 'vscode-languageserver/node';
 
-import * as fs from 'fs';
 import { URI } from 'vscode-uri';
 
 import {
@@ -38,39 +34,10 @@ let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 let hasDiagnosticRelatedInformationCapability = false;
 
-// *** share this ***
-export function pathFromUriString(stringUri: string): string | undefined {
-	const uri = URI.parse(stringUri);
-	if (uri.scheme == 'file') {
-		const fsPath = URI.file(uri.fsPath).fsPath;
-		const RE_PATHSEP_WINDOWS = /\\/g;
-		return fsPath.replace(RE_PATHSEP_WINDOWS, '/');
-	}
-}
-
 connection.onInitialize((params: InitializeParams) => {
 
-	// const n = 1;
-	// while (n) {
-	// 	console.log();
-	// }
-
-	let project: any;
-	if (params.workspaceFolders) {
-		const workspaceFolder = params.workspaceFolders[0];
-		const workspaceFolderPath = pathFromUriString(workspaceFolder.uri) || "";
-		if (fs.existsSync(workspaceFolderPath)) {
-			const files = fs.readdirSync(workspaceFolderPath);
-			for (let i = 0; i < files.length; i += 1) {
-				if (files[i].toLowerCase().indexOf(".rpw-project") == -1) {
-					continue;
-				}
-				const data = fs.readFileSync(files[i], 'utf8');
-				project = JSON.parse(data);
-				break;
-			}
-		}
-	}
+	// TODO: switch to an override once rest of this stuff is removed
+	server.onInitialize(params)
 
 	const capabilities = params.capabilities;
 
@@ -96,6 +63,7 @@ connection.onInitialize((params: InitializeParams) => {
 				// triggerCharacters: ['.', '"', '\'', '/', '@', '<'],
 				resolveProvider: true
 			},
+			definitionProvider: true,
 			hoverProvider: true
 			// ,
 			// executeCommandProvider: {
@@ -224,53 +192,6 @@ function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
 // documents.onDidChangeContent(change => {
 // 	validateTextDocument(change.document);
 // });
-
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-	// In this simple example we get the settings for every validate run.
-	const settings = await getDocumentSettings(textDocument.uri);
-
-	// The validator creates diagnostics for all uppercase words length 2 and more
-	const text = textDocument.getText();
-	const pattern = /\b[A-Z]{2,}\b/g;
-	let m: RegExpExecArray | null;
-
-	let problems = 0;
-	const diagnostics: Diagnostic[] = [];
-	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
-		problems++;
-		const diagnostic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(m.index),
-				end: textDocument.positionAt(m.index + m[0].length)
-			},
-			message: `${m[0]} is all uppercase.`,
-			source: 'ex'
-		};
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnostic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
-		}
-		diagnostics.push(diagnostic);
-	}
-
-	// Send the computed diagnostics to VSCode.
-	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-}
 
 connection.onDidChangeWatchedFiles(_change => {
 	// Monitored files have change in VSCode
