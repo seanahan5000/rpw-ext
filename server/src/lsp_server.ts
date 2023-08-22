@@ -5,6 +5,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { TokenType, TokenErrorType } from "./asm/parser";
 import { LabelScanner } from "./asm/labels";
 import * as asm from "./asm/assembler";
+import * as stm from "./asm/statements";
 import * as fs from 'fs';
 
 //-----------------------------------------------------------------------------
@@ -19,6 +20,8 @@ export function pathFromUriString(stringUri: string): string | undefined {
 }
 
 //-----------------------------------------------------------------------------
+
+// *** still needed? ***
 
 export class LspDocument implements TextDocument {
   protected document: TextDocument;
@@ -98,6 +101,8 @@ export class LspDocument implements TextDocument {
 
 //-----------------------------------------------------------------------------
 
+// *** still needed? ***
+
 export class LspDocuments {
   private readonly documents = new Map<string, LspDocument>();
 
@@ -124,6 +129,8 @@ export class LspDocuments {
 }
 
 //-----------------------------------------------------------------------------
+
+// *** fold some of this into asm.Project ***
 
 class LspProject extends asm.Project {
 
@@ -162,17 +169,18 @@ export class LspServer {
 	  // TODO: switch to an override once server.ts cleaned up
     // connection.onInitialize(this.onInitialize.bind(this));
 
-    connection.onDidOpenTextDocument(this.onDidOpenTextDocument.bind(this));
-    connection.onDidCloseTextDocument(this.onDidCloseTextDocument.bind(this));
-    connection.onDidChangeTextDocument(this.onDidChangeTextDocument.bind(this));
+    connection.onDidOpenTextDocument(this.onDidOpenTextDocument.bind(this))
+    connection.onDidCloseTextDocument(this.onDidCloseTextDocument.bind(this))
+    connection.onDidChangeTextDocument(this.onDidChangeTextDocument.bind(this))
 
-    connection.onCompletion(this.onCompletion.bind(this));
-    connection.onCompletionResolve(this.onCompletionResolve.bind(this));
-    connection.onDefinition(this.onDefinition.bind(this));
-    connection.onExecuteCommand(this.onExecuteCommand.bind(this));
-    connection.onHover(this.onHover.bind(this));
-    connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this));
-    connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this));
+    connection.onCompletion(this.onCompletion.bind(this))
+    connection.onCompletionResolve(this.onCompletionResolve.bind(this))
+    connection.onDefinition(this.onDefinition.bind(this))
+    connection.onExecuteCommand(this.onExecuteCommand.bind(this))
+    connection.onHover(this.onHover.bind(this))
+    connection.onReferences(this.onReferences.bind(this))
+    connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
+    connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
   }
 
   private findSourceFile(filePath: string): asm.SourceFile | undefined {
@@ -186,10 +194,10 @@ export class LspServer {
 
   onInitialize(params: lsp.InitializeParams): void {
 
-    const n = 1;
-    while (n) {
-      console.log();
-    }
+    // const n = 1;
+    // while (n) {
+    //   console.log();  // ***
+    // }
 
     if (params.workspaceFolders) {
       // *** walk each folder -- or don't support multiple folders ***
@@ -334,10 +342,135 @@ export class LspServer {
     }
   }
 
+  onDidChangeTextDocument(params: lsp.DidChangeTextDocumentParams): void {
+    const { textDocument } = params;
+    const filePath = pathFromUriString(params.textDocument.uri);
+    if (!filePath) {
+      return;
+    }
+
+    const document = this.documents.get(filePath);
+    if (!document) {
+      return;
+    }
+
+    for (const change of params.contentChanges) {
+      document.applyEdit(textDocument.version, change);
+    }
+
+    // *** mark as dirty the file/projects that changed ***
+    this.updateProjects()   // ***
+
+    const sourceFile = this.findSourceFile(filePath)
+    if (sourceFile) {
+      this.updateDiagnostics(sourceFile, params.textDocument.uri);
+    }
+
+  //   this.cancelDiagnostics();
+  //   this.requestDiagnostics();
+  }
+
+  async onCompletion(params: lsp.CompletionParams, token?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
+    const completions: lsp.CompletionItem[] = []
+    const isIncomplete = false
+
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      const sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
+        // *** exclude constants if in non-immediate opcode
+        // *** watch out for errors and warnings?
+        sourceFile.module.symbols.map.forEach((value, key: string) => {
+          // *** WHY IS THIS HERE? ***
+          if (key == "") {
+            return
+          }
+          const item = lsp.CompletionItem.create(key)
+          // *** consider adding source file name where found, in details ***
+          // *** scan for comment header and show that too, maybe in onCompletionResolve ***
+
+          // *** choose this based on symbol type ***
+          item.kind = lsp.CompletionItemKind.Function
+          // item.detail = "detail text"
+          // item.labelDetails = { detail: " label det", description: "label det desc" }
+          item.data = { filePath: value.sourceFile.path, line: value.lineNumber }
+          completions.push(item)
+        })
+      }
+    }
+
+    // figure out where in the line we are
+      // if operation/keyword known, choose possible symbols
+        // if JMP/JSR, list globals
+        // if Bcc, list locals, nearby globals
+        // if opcode is immediate (#), list constants
+        // if #> or #<, list globals, large constants
+
+    return lsp.CompletionList.create(completions, isIncomplete)
+  }
+
+  async onCompletionResolve(item: lsp.CompletionItem, token?: lsp.CancellationToken): Promise<lsp.CompletionItem> {
+    if (item.data.filePath) {
+      const sourceFile = this.findSourceFile(item.data.filePath)
+      if (sourceFile) {
+        const header = this.getCommentHeader(sourceFile, item.data.line)
+        if (header) {
+          item.documentation = { kind: "markdown", value: header }
+        }
+      }
+    }
+    return item
+  }
+
+  private getCommentHeader(atFile: asm.SourceFile, atLine: number): string | undefined {
+
+    // scan up from hover line looking for comment blocks
+    let startLine = atLine;
+    while (startLine > 0) {
+      startLine -= 1;
+      const statement = atFile.statements[startLine];
+      // include empty statements
+      if (statement.tokens.length == 0) {
+        continue;
+      }
+      // stop when first non-comment statement found
+      if (statement.tokens[0].type != TokenType.Comment) {
+        startLine += 1;
+        break;
+      }
+    }
+
+    while (startLine < atLine) {
+      const sourceLine = atFile.statements[startLine].sourceLine;
+      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
+        break;
+      }
+      startLine += 1;
+    }
+
+    while (atLine > startLine) {
+      const sourceLine = atFile.statements[atLine - 1].sourceLine;
+      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
+        break;
+      }
+      atLine -= 1;
+    }
+
+    if (startLine != atLine) {
+      let header = "```  \n"
+      for (let i = startLine; i < atLine; i += 1) {
+        const statement = atFile.statements[i]
+        header += statement.sourceLine + "  \n"
+      }
+      header += "```"
+      return header
+    }
+  }
+
   async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
     const filePath = pathFromUriString(params.textDocument.uri)
     if (filePath) {
-      // *** to handle entry points, scan entire project, skip duplicates ***
+      // TODO: if symbol is entry point, scan entire project, skip duplicates
       let sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
         const statement = sourceFile.statements[params.position.line]
@@ -350,6 +483,7 @@ export class LspServer {
               start: { line: token.symbol.lineNumber, character: dstToken.start },
               end: { line: token.symbol.lineNumber, character: dstToken.end }
             }
+            // *** just use lsp.Definition instead? ***
             let targetLink: lsp.DefinitionLink = {
               targetUri: URI.file(token.symbol.sourceFile.path).toString(),
               targetRange: range,
@@ -362,8 +496,7 @@ export class LspServer {
     }
   }
 
-  // *** async? ***
-  onExecuteCommand(params: lsp.ExecuteCommandParams): lsp.TextDocumentEdit | undefined {
+  async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
     if (params.command == "rpw65.renumberLocals") {
       if (params.arguments === undefined || params.arguments.length < 2) {
         return;
@@ -412,47 +545,12 @@ export class LspServer {
     }
   }
 
-  onDidChangeTextDocument(params: lsp.DidChangeTextDocumentParams): void {
-    const { textDocument } = params;
-    const filePath = pathFromUriString(params.textDocument.uri);
-    if (!filePath) {
-      return;
-    }
-
-    const document = this.documents.get(filePath);
-    if (!document) {
-      return;
-    }
-
-    for (const change of params.contentChanges) {
-      document.applyEdit(textDocument.version, change);
-    }
-
-    // *** dirty up file/projects that changed ***
-    this.updateProjects()   // ***
-
-    // document.parseContents();
-    // this.updateDiagnostics(document, params.textDocument.uri);
-
-    const sourceFile = this.findSourceFile(filePath)
-    if (sourceFile) {
-      this.updateDiagnostics(sourceFile, params.textDocument.uri);
-    }
-
-  //   this.cancelDiagnostics();
-  //   this.requestDiagnostics();
-  }
-
+  // TODO: if symbol is an entry point, walk all modules of project
   async onHover(params: lsp.TextDocumentPositionParams, token?: lsp.CancellationToken): Promise<lsp.Hover> {
     const filePath = pathFromUriString(params.textDocument.uri);
     if (!filePath) {
       return { contents: [] };
     }
-
-    // const document = this.documents.get(filePath);
-    // if (!document) {
-    //   return { contents: [] };
-    // }
 
     const sourceFile = this.findSourceFile(filePath)
     if (!sourceFile) {
@@ -460,7 +558,7 @@ export class LspServer {
     }
 
     const statement = sourceFile.statements[params.position.line];
-    if (statement != undefined) {
+    if (statement !== undefined) {
       const token = statement.getTokenAt(params.position.character);
       if (token) {
 
@@ -472,56 +570,10 @@ export class LspServer {
           // (will eventually require walk across projects/ENT files)
           const symbol = sourceFile.module.symbols.find(str);
           if (symbol !== undefined) {
-            let atFile = symbol.sourceFile
-            let atLine = symbol.lineNumber
-
-            // scan up from hover line looking for comment blocks
-            let startLine = atLine;
-            while (startLine > 0) {
-              startLine -= 1;
-              const statement = atFile.statements[startLine];
-              // include empty statements
-              if (statement.tokens.length == 0) {
-                continue;
-              }
-              // stop when first non-comment statement found
-              if (statement.tokens[0].type != TokenType.Comment) {
-                startLine += 1;
-                break;
-              }
+            let header = this.getCommentHeader(symbol.sourceFile, symbol.lineNumber)
+            if (header) {
+              return { contents: header };
             }
-
-            while (startLine < atLine) {
-              const sourceLine = atFile.statements[startLine].sourceLine;
-              if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-                break;
-              }
-              startLine += 1;
-            }
-
-            while (atLine > startLine) {
-              const sourceLine = atFile.statements[atLine - 1].sourceLine;
-              if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-                break;
-              }
-              atLine -= 1;
-            }
-
-            if (startLine == atLine) {
-              return { contents: [] };
-            }
-
-            let contents = "```  \n";
-            for (let i = startLine; i < atLine; i += 1) {
-              const statement = atFile.statements[i];
-              contents += statement.sourceLine + "  \n";
-            }
-            contents += "```";
-
-            return { contents: contents };
-
-            // scan for comment header above that symbol
-            // (look at dbug for cases)
           }
         }
       }
@@ -540,64 +592,40 @@ export class LspServer {
     // };
   }
 
-  // *** async? ***
-  private onCompletion(params: lsp.TextDocumentPositionParams): lsp.CompletionItem[] {
-    const completions: lsp.CompletionItem[] = [];
-    const filePath = pathFromUriString(params.textDocument.uri);
+  // TODO: if symbol is an entry point, walk all modules of project
+  async onReferences(params: lsp.ReferenceParams, token?: lsp.CancellationToken): Promise<lsp.Location[]> {
+    const locations: lsp.Location[] = []
+    const filePath = pathFromUriString(params.textDocument.uri)
     if (filePath) {
       const sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
-        sourceFile.module.symbols.map.forEach((value, key: string) => {
-          // *** consider adding source file name where found, in details ***
-          completions.push({
-            label: key,
-            // kind: lsp.CompletionItemKind.Text,
-            kind: lsp.CompletionItemKind.Function,
-            // detail: "detail text",
-            labelDetails: { detail: " label detail", description: "label detail description"},
-            data: 1   // ***
-          });
-        });
+        const statement = sourceFile.statements[params.position.line]
+        if (statement !== undefined) {
+          const token = statement.getTokenAt(params.position.character)
+          if (token && token.symbol) {
+            const module = sourceFile.module
+            module.sourceFiles.forEach((sourceFile: asm.SourceFile) => {
+              sourceFile.statements.forEach((refStatement: stm.Statement, refIndex: number) => {
+                for (let i = 0; i < refStatement.tokens.length; i += 1) {
+                  const refToken = refStatement.tokens[i]
+                  if (refToken.symbol == token.symbol) {
+                    let location: lsp.Location = {
+                      uri: URI.file(sourceFile.path).toString(),
+                      range: {
+                        start: { line: refIndex, character: refToken.start },
+                        end: { line: refIndex, character: refToken.end }
+                      }
+                    }
+                    locations.push(location)
+                  }
+                }
+              })
+            })
+          }
+        }
       }
     }
-
-    // get line of text
-    // parse line into tokens, if not already parsed
-    // figure out where in the line we are
-      // if operation/keyword known, choose possible symbols
-        // if JMP/JSR, list globals
-        // if Bcc, list locals, nearby globals
-        // if opcode is immediate (#), list constants
-        // if #> or #<, list globals, large constants
-
-    // return [
-		// 	{
-		// 		label: 'TypeScript',
-		// 		kind: lsp.CompletionItemKind.Text,
-		// 		data: 1
-		// 	}
-    //   // ,
-		// 	// {
-		// 	// 	label: 'JavaScript',
-		// 	// 	kind: lsp.CompletionItemKind.Text,
-		// 	// 	data: 2
-		// 	// }
-		// ];
-
-    return completions;
-  }
-
-  // *** async? ***
-  private onCompletionResolve(item: lsp.CompletionItem): lsp.CompletionItem {
-		// ***
-    // if (item.data === 1) {
-    //   item.detail = 'TypeScript details';
-    //   item.documentation = 'TypeScript documentation';
-    // } else if (item.data === 2) {
-    //   item.detail = 'JavaScript details';
-    //   item.documentation = 'JavaScript documentation';
-    // }
-    return item;
+    return locations
   }
 
   private updateDiagnostics(sourceFile: asm.SourceFile, uri: string) {
@@ -685,18 +713,24 @@ export class LspServer {
           index = 7;
         } else if (token.type == TokenType.DecNumber ||
             token.type == TokenType.HexNumber) {
-          if (token.length <= 4) {
-            index = 8;
-          } else {
+          if ((statement as stm.OpStatement) && statement.type == "HEX") {
             // TODO: maybe a different color for long HEX AAAAAAAA statements?
-            index = -1;
+            index = -1
+          } else {
+            index = 8
           }
         } else if (token.type == TokenType.Variable) {
           index = 2;    // TODO: change this
         } else if (token.type == TokenType.Symbol) {
-          index = -1;
+          if (token.symbol !== undefined) {
+            index = 4
+          } else {
+            index = -1;
+          }
         } else if (token.type == TokenType.FileName) {    // TODO: something else
-          index = -1;
+          index = 9;
+        } else if (token.type == TokenType.String) {      // TODO: something else
+          index = 9;
         } else {
           index = 10;
         }

@@ -174,6 +174,27 @@ export class PcExpression implements Expression {
 
 //------------------------------------------------------------------------------
 
+export class VarExpression implements Expression {
+
+  private varName: string
+
+  constructor(varName: string) {
+    this.varName = varName
+  }
+
+  resolve(): number | undefined {
+    // TODO: what should this method do?
+    return
+  }
+
+  getSize() {
+    // TODO: what should this method do?
+    return 0
+  }
+}
+
+//------------------------------------------------------------------------------
+
 export class ParenExpression implements Expression {
 
   private arg: Expression

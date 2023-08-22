@@ -42,6 +42,7 @@ export enum TokenType {
   Operator,
 
   FileName,   // TODO: or just use quoted string?
+  String,
 
   Missing
 }
@@ -67,6 +68,7 @@ export class Token {
   //*** consider an error sub-type ***
   public symbol?: sym.Symbol
 
+  // *** consider putting string in token ***
   constructor(start: number, end: number, type: TokenType) {
     this.start = start
     this.end = end
@@ -91,18 +93,25 @@ export class Token {
   }
 
   setError(message: string) {
-    this.errorType = TokenErrorType.Error
-    this.errorMessage = message
+    if (this.errorType != TokenErrorType.Error) {
+      this.errorType = TokenErrorType.Error
+      this.errorMessage = message
+    }
   }
 
   setWarning(message: string) {
-    this.errorType = TokenErrorType.Warning
-    this.errorMessage = message
+    if (this.errorType != TokenErrorType.Error &&
+        this.errorType != TokenErrorType.Warning) {
+      this.errorType = TokenErrorType.Warning
+      this.errorMessage = message
+    }
   }
 
   setInfo(message: string) {
-    this.errorType = TokenErrorType.Info
-    this.errorMessage = message
+    if (this.errorType == TokenErrorType.None) {
+      this.errorType = TokenErrorType.Info
+      this.errorMessage = message
+    }
   }
 
   static Null: Token = new Token(0, 0, TokenType.Null)
@@ -141,6 +150,7 @@ export class Parser {
     this.macroArgMode = false
   }
 
+  // *** consider putting string in token ***
   getTokenString(token: Token): string {
     return token.getString(this.sourceLine)
   }
@@ -550,6 +560,23 @@ export class Parser {
     return token
   }
 
+  veryNextMappedText(): Token {
+    const najaText = "0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ!\"%\'*+,-./:<=>?"
+    const token = new Token(this.position, this.position, TokenType.Null)
+    while (this.position < this.sourceLine.length) {
+      const index = najaText.indexOf(this.sourceLine[this.position])
+      if (index == -1) {
+        break
+      }
+      this.position += 1
+    }
+    token.end = this.position
+    if (token.length > 0) {
+      token.type = TokenType.String     // TODO: unique type?
+    }
+    return token
+  }
+
   // *** consider creating a missing expression class ***
   mustParseExpression(token?: Token, recurse: boolean = true): exp.Expression | undefined {
     if (!token) {
@@ -605,8 +632,6 @@ export class Parser {
         (str == "." && this.syntax == "DASM") ||
         ((str == ">" || str == "<") && this.syntax == "LISA") ||
         str == "@") {		// TODO: scope this to a particular syntax
-        let start = token.start
-        
         let token2 = this.veryNextToken()
         //*** bad if null, what then? ***
         // if (token2.isEmpty()) {
@@ -614,6 +639,11 @@ export class Parser {
         // }
         token.end = token2.end
         token.type = TokenType.LocalLabel
+        str = this.getTokenString(token)
+        //*** convert local to global name ***
+        expression = new exp.SymbolExpression(str, token.type)
+      } else if (str == "]" && this.syntax == "MERLIN") {
+        expression = this.parseVarExpression(token)
       } else if (str == "<" || str == ">" || str == "-"
         || (str == "/" && this.syntax == "LISA" && recurse)) {
         let arg = this.mustParseExpression(undefined, recurse)
@@ -641,11 +671,26 @@ export class Parser {
           // *** error
         }
       } else if (str == '"' || str == "'") {
-        // *** parse string
+        const highFlip = str == '"' ? 0x80 : 0x00
+        const charStr = this.peekVeryNextChar()
+        if (charStr == "") {
+          // *** error
+        }
+        this.position += 1
+        token.end += 1
+        const endStr = this.peekVeryNextChar()
+        // Merlin allows omission of closing quote on character literal
+        // bool mustFindTerm = !assembler->IsMerlin() || assembler->IsStrict();
+        if (endStr == "" || endStr != str) {
+          // *** error
+        }
+        this.position += 1
+        token.end += 1
+        token.type = TokenType.String
+        const value = charStr.charCodeAt(0) ^ highFlip
+        expression = new exp.NumberExpression(value, false)
       } else {
         // *** mark token as invalid?
-        // *** what about ";" of macro args?
-        // *** what about "," of arg list?
         this.popToken()   // *** also undo skipWhiteSpace?
       }
     } else if (token.type == TokenType.DecNumber) {
@@ -694,6 +739,18 @@ export class Parser {
 
     // expression.setTokenRange(startTokenIndex, this.tokens.length)
     return expression
+  }
+
+  // caller has already checked for Merlin and that token == "]"
+  parseVarExpression(token: Token) {
+    let token2 = this.veryNextToken()
+    // //*** bad if null, what then? ***
+    // if (token2.isEmpty()) {
+    //   return
+    // }
+    token.end = token2.end
+    token.type = TokenType.Variable
+    return new exp.VarExpression(this.getTokenString(token))
   }
 }
 

@@ -64,7 +64,8 @@ connection.onInitialize((params: InitializeParams) => {
 				resolveProvider: true
 			},
 			definitionProvider: true,
-			hoverProvider: true
+			hoverProvider: true,
+			referencesProvider: true
 			// ,
 			// executeCommandProvider: {
 			// 	commands: ["rpw65.renumberLocals"]

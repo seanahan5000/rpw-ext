@@ -59,18 +59,19 @@
 //
 // code completion
 //  * symbols names (labels and/or constants, depending on context)
-//  * show full function header information (onCompletionResolve?)
+//  X show full function header information (onCompletionResolve?)
 //
 // snippets
 //  - auto complete '(' as '(xxx),Y'
 //  - On entry/exit header
 //
 // hover
-//  * show comment block for function name
+//  X show comment block for function name
 //  - parse "On entry:" and "On exit:" for more specific intellisense
 //  - show other constants in same set as current
 //  - show values constants actual values
 //  - show ZPAGE variable addresses
+//  - show "DUM 0" defined structure/offsets
 //
 // syntax hiliting
 //  - general hilite dimming of unused lables/constants/vars/etc.
@@ -90,7 +91,8 @@
 //  - smart editing of auto-completes/snippets (more research)
 //
 // other
-//  * jump to definition for functions and data storage
+//  X jump to definition for functions and data storage
+//  - jump to defitition (open file) on PUT file paths
 //  ? use deprecated names to show renames for legacy functions
 //  - upper/lower case setting
 //
@@ -107,17 +109,3 @@
 //  - rename a single local
 
 //  - generate real > groupings and turn off defaults
-
-// project
-    // assembly (corresponds to top ASM.S file)
-        // Symbol[]
-        // Equate[]
-        // EntryPoints[]
-        // SourceFile/SourceDoc[]
-            // ErrorFlag
-            // Symbol[]
-            // Equate[]
-            // Statement/SourceLine[]
-                // ErrorFlag
-                // Symbol/Equate
-                // Token[]

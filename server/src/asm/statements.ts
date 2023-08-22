@@ -6,7 +6,7 @@ import * as sym from "./symbols"
 //-----------------------------------------------------------------------------
 
 export class Statement {
-  protected type: string = "NONE"
+  public type: string = "NONE"
   public sourceLine: string = ""
   public tokens: Token[] = []
   protected symbol?: sym.Symbol     // only if statement has label
@@ -31,6 +31,7 @@ export class Statement {
     }
   }
 
+  // *** consider putting string in token ***
   getTokenString(token: Token): string {
     return token.getString(this.sourceLine)
   }
@@ -67,7 +68,7 @@ export class OpStatement extends Statement {
 
   private opcode: any
   private target: OpTarget = OpTarget.NONE
-  private expression: exp.Expression | undefined
+  private expression?: exp.Expression
 
   constructor(opcode: any) {
     super()
@@ -213,6 +214,36 @@ export class OpStatement extends Statement {
 
 //-----------------------------------------------------------------------------
 
+export class ConditionalStatement extends Statement {
+
+  private expression?: exp.Expression
+
+  parse(parser: Parser) {
+
+    //*** check for label on everything but DO ***
+
+    if (this.type == "IF" || this.type == "DO" || this.type == "ELIF") {
+
+      this.expression = parser.mustParseExpression()
+
+      // *** test IF/THEN and ELIF/THEN syntax
+      if (this.type != "DO") {
+        const token = parser.mustPushNextToken('expecting THEN')
+        if (parser.getTokenStringUC(token) != "THEN") {
+          token.setError("Unexpected token, expecting THEN")
+        } else {
+          token.type = TokenType.Keyword
+        }
+      }
+
+    } else if (this.type == "ELSE" || this.type == "ENDIF" || this.type == "FIN") {
+      // nothing else
+    }
+  }
+}
+
+//-----------------------------------------------------------------------------
+
 export class DataStatement extends Statement {
 
   private expressions: exp.Expression[] = []
@@ -278,6 +309,23 @@ export class DataStatement extends Statement {
 
 //-----------------------------------------------------------------------------
 
+export class ErrorStatement extends Statement {
+
+  private expression?: exp.Expression
+
+  parse(parser: Parser) {
+
+    // TODO: If currently inside a macro expansion, capture the invoker
+    //	of the macro so a better error message can be provided.
+
+    // *** confirm no label ***
+
+    this.expression = parser.mustParseExpression()
+  }
+}
+
+//-----------------------------------------------------------------------------
+
 export class EquStatement extends Statement {
 
   parse(parser: Parser) {
@@ -328,7 +376,6 @@ export class HexStatement extends Statement {
           //*** error if no token
           break
         }
-        //*** force type to hex?
       }
 
       if (token.type != TokenType.DecNumber
@@ -337,7 +384,7 @@ export class HexStatement extends Statement {
         break
       }
 
-      //*** force type to hex?
+      token.type = TokenType.HexNumber
 
       let hexString = parser.getTokenStringUC(token)
       if (hexString.length & 1) {
@@ -537,6 +584,57 @@ export class StorageStatement extends Statement {
 
   getSize(): number | undefined {
     return this.sizeArg?.resolve()
+  }
+}
+
+//-----------------------------------------------------------------------------
+
+// *** TODO: share this with macro parser ***
+// *** TODO: think about a way to make this an isolated extension of syntax
+
+// (TEXT)	  T,E,X,T,$8D
+// (TEXT)+	T,E,X,T,$8D,$FF
+// (TEXT)-	T,E,X,T
+// (TEXT)=	T,E,X,T^$80
+
+// NOTE: this specifically implements the Naja mapped text user extension
+export class UsrStatement extends Statement {
+
+  private expression?: exp.Expression
+
+  parse(parser: Parser) {
+
+    let token = parser.mustPushNextToken("expecting '('")
+    let str = parser.getTokenString(token)
+
+    if (str == "]") {
+      this.expression = parser.parseVarExpression(token)
+      return
+    } else if (str == "(") {
+      // *** mapped text expression
+    } else {
+      token.setError("Unexpected token, expecting '('")
+      return
+    }
+
+    token = parser.veryNextMappedText()
+    if (!token.isEmpty()) {
+      this.tokens.push(token)
+    }
+
+    // *** simplify ***
+    token = parser.mustPushNextToken("expecting ')'")
+    str = parser.getTokenString(token)
+    if (str != ")") {
+      token.setError("Unexpected token, expecting ')' or valid mapped text character")
+      return
+    }
+
+    token = parser.pushNextToken()
+    str = parser.getTokenString(token)
+    if (str != "" && str != "+" && str != "=" && str != "-") {
+      token.setError("Unexpected token, expecting '-', '=', '+', or nothing")
+    }
   }
 }
 

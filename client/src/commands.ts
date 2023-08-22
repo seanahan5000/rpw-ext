@@ -124,6 +124,7 @@ export async function tabIndentCmd(shift: boolean) {
 					}
 					let indent = "".padEnd(end - ch, " ");
 					// if tabbing to comment column, also add "; "
+					// *** keep this? ***
 					if (end == tabColumns[tabColumns.length - 1]) {
 						if (ch + 1 == lineText.length) {
 							indent += "; ";

@@ -22,6 +22,9 @@ export type LineRecord = {
 
 
 
+// *** where are vscode column markers?
+// *** check my keyboard shortcuts
+
 
 // *** Project class should hold all Modules for entire project, in build order
   // also tracks ENT linkage between them
@@ -40,21 +43,19 @@ export class Project {
       return false
     }
     for (let i = 0; i < rpwProject.modules.length; i += 1) {
-      const rpwModule = rpwProject.modules[i]
-      // *** call below ***
-      if (!rpwModule.start) {
-        // *** error handling ***
+      if (!this.loadModule(rpwProject.modules[i])) {
         return false
       }
-      this.modules.push(new Module(this, rpwModule))
-      // *** error handling ***
     }
     return true
   }
 
   loadModule(rpwModule: RpwModule): boolean {
+    if (!rpwModule.start) {
+      // *** error handling ***
+      return false
+    }
     this.modules.push(new Module(this, rpwModule))
-    // *** error handling ***
     return true
   }
 
@@ -91,9 +92,6 @@ export class Project {
 
 // *** Module class should hold all files and symbols for one ASM.* module
 
-// *** where are vscode column markers?
-// *** check my keyboard shortcuts
-
 export class Module {
 
   public project: Project
@@ -104,7 +102,7 @@ export class Module {
 
   // list of files used to assemble this module, in include order,
   //  possibly containing multiple SourceFiles that reference the same text document
-  private sourceFiles: SourceFile[] = []
+  public sourceFiles: SourceFile[] = []
 
   // list of all statements for the module, in assembly order, including macro expansions
   public lineRecords: LineRecord[] = []

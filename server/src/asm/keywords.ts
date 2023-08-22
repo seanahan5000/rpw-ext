@@ -6,7 +6,7 @@ export const Keywords = {
   // TODO: EQU and "=" for all syntaxes?
   "EQU":        { syntax: [ "MERL", "DASM", "LISA" ], create: () => { return new stm.EquStatement() }},
   "=":          { syntax: [ "MERL", "DASM", "LISA" ], create: () => { return new stm.EquStatement() }},
-  "ERR":        { syntax: [ "MERL", "DASM"         ] },
+  "ERR":        { syntax: [ "MERL", "DASM"         ], create: () => { return new stm.ErrorStatement() }},
 
   "PUT":        { syntax: [ "MERL"                 ], create: () => { return new stm.IncludeStatement() }},
   "USE":        { syntax: [ "MERL"                 ], create: () => { return new stm.IncludeStatement() }},
@@ -21,7 +21,7 @@ export const Keywords = {
   "DUM":        { syntax: [ "MERL"                 ] },
   "DUMMY":      { syntax: [ "MERL"                 ] },
   "DEND":       { syntax: [ "MERL"                 ] },
-  "USR":        { syntax: [ "MERL"                 ] },
+  "USR":        { syntax: [ "MERL"                 ], create: () => { return new stm.UsrStatement() }},
 
   "LUP":        { syntax: [ "MERL"                 ] },
   "REPEAT":     { syntax: [         "DASM"         ] },
@@ -44,13 +44,13 @@ export const Keywords = {
   "REV":        { syntax: [ "MERL"                 ] },
   "STR":        { syntax: [ "MERL",         "LISA" ] },
 
-  "DO":         { syntax: [ "MERL"                 ] },
-  "ELSE":       { syntax: [ "MERL", "DASM"         ] },
-  "FIN":        { syntax: [ "MERL"                 ] },
-  "IF":         { syntax: [         "DASM"         ] },
+  "DO":         { syntax: [ "MERL"                 ], create: () => { return new stm.ConditionalStatement() }},
+  "ELSE":       { syntax: [ "MERL", "DASM"         ], create: () => { return new stm.ConditionalStatement() }},
+  "FIN":        { syntax: [ "MERL"                 ], create: () => { return new stm.ConditionalStatement() }},
+  "IF":         { syntax: [         "DASM"         ], create: () => { return new stm.ConditionalStatement() }},
   "THEN":       { syntax: [         "DASM"         ] },
-  "ELIF":       { syntax: [         "DASM"         ] },
-  "ENDIF":      { syntax: [         "DASM"         ] },
+  "ELIF":       { syntax: [         "DASM"         ], create: () => { return new stm.ConditionalStatement() }},
+  "ENDIF":      { syntax: [         "DASM"         ], create: () => { return new stm.ConditionalStatement() }},
 
   "TR":         { syntax: [ "MERL"                 ] },
   "LST":        { syntax: [ "MERL",         "LISA" ] },

@@ -37,8 +37,16 @@ export class Symbols {
   }
 }
 
+export enum SymbolType {
+  Constant,     // 8-bit only? automatic in DUMMY 0?
+  ZPage
+  //Absolute/Address?
+  //EntryPoint?
+}
+
 export class Symbol {
   public name: string
+  public type?: SymbolType
   public sourceFile: asm.SourceFile
   // *** fullName (including scope?)
   public lineNumber: number           // *** Statement instead?
