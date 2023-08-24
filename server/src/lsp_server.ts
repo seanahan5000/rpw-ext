@@ -7,8 +7,9 @@ import { LabelScanner } from "./asm/labels";
 import * as asm from "./asm/assembler";
 import * as stm from "./asm/statements";
 import * as fs from 'fs';
+import { SymbolType } from "./asm/symbols";
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export function pathFromUriString(stringUri: string): string | undefined {
   const uri = URI.parse(stringUri);
@@ -19,7 +20,7 @@ export function pathFromUriString(stringUri: string): string | undefined {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 // *** still needed? ***
 
@@ -99,7 +100,7 @@ export class LspDocument implements TextDocument {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 // *** still needed? ***
 
@@ -128,7 +129,7 @@ export class LspDocuments {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 // *** fold some of this into asm.Project ***
 
@@ -152,9 +153,19 @@ class LspProject extends asm.Project {
     // if no open document, got look in file system
     return super.getFileContents(path)
   }
+
+  // updateDiagnostics() {
+  //   this.modules.forEach(module => {
+  //     module.sourceFiles.forEach(sourceFile => {
+  //       this.server.updateDiagnostics(sourceFile)
+  //     })
+  //   })
+  // }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+//*** think about factoring this so some of the code could be used in SublimeText, for example
 
 export class LspServer {
 
@@ -240,9 +251,14 @@ export class LspServer {
     }
 
     this.updateProjects()
+
+    // *** send diagnostics on all updated files (just once) ***
+    // for (let i = 0; i < this.projects.length; i += 1) {
+    //   this.projects[i].updateDiagnostics()
+    // }
   }
 
-  private updateProjects() {
+  private updateProjects(diagnostics = false) {
     for (let i = 0; i < this.projects.length; i += 1) {
       this.projects[i].update()
       // TODO: something else?
@@ -279,51 +295,27 @@ export class LspServer {
 
   onDidOpenTextDocument(params: lsp.DidOpenTextDocumentParams): void {
     const filePath = pathFromUriString(params.textDocument.uri);
-    if (!filePath) {
-      return;
-    }
-
-    if (this.documents.open(filePath, params.textDocument)) {
-      const document = this.documents.get(filePath);
-      if (document) {
-        let sourceFile = this.findSourceFile(filePath)
-        if (!sourceFile) {
-          const project = this.addFileProject(filePath, true)
-          if (!project) {
-            // *** error handling ***
-            return
-          }
-          project.update()
-          sourceFile = this.findSourceFile(filePath)
+    if (filePath) {
+      if (this.documents.open(filePath, params.textDocument)) {
+        const document = this.documents.get(filePath)
+        if (document) {
+          let sourceFile = this.findSourceFile(filePath)
           if (!sourceFile) {
-            // *** error handling ***
-            return
+            const project = this.addFileProject(filePath, true)
+            if (!project) {
+              // *** error handling ***
+              return
+            }
+            project.update()
+            sourceFile = this.findSourceFile(filePath)
+            if (!sourceFile) {
+              // *** error handling ***
+              return
+            }
           }
+          this.updateDiagnostics(sourceFile)
         }
-        this.updateDiagnostics(sourceFile, params.textDocument.uri);
-
-        // document.parseContents();
-        // this.updateDiagnostics(document, params.textDocument.uri);
       }
-
-    //     this.tspClient.notify(CommandTypes.Open, {
-    //         file,
-    //         fileContent: params.textDocument.text,
-    //         scriptKindName: this.getScriptKindName(params.textDocument.languageId),
-    //         projectRootPath: this.workspaceRoot,
-    //     });
-    //     this.cancelDiagnostics();
-    //     this.requestDiagnostics();
-    // } else {
-    //     this.logger.log(`Cannot open already opened doc '${params.textDocument.uri}'.`);
-    //     this.didChangeTextDocument({
-    //         textDocument: params.textDocument,
-    //         contentChanges: [
-    //             {
-    //                 text: params.textDocument.text,
-    //             },
-    //         ],
-    //     });
     }
   }
 
@@ -343,61 +335,31 @@ export class LspServer {
   }
 
   onDidChangeTextDocument(params: lsp.DidChangeTextDocumentParams): void {
-    const { textDocument } = params;
-    const filePath = pathFromUriString(params.textDocument.uri);
-    if (!filePath) {
-      return;
+    const { textDocument } = params
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      const document = this.documents.get(filePath)
+      if (document) {
+        for (const change of params.contentChanges) {
+          document.applyEdit(textDocument.version, change)
+        }
+
+        // *** mark as dirty the file/projects that changed ***
+        this.updateProjects()   // ***
+
+        const sourceFile = this.findSourceFile(filePath)
+        if (sourceFile) {
+          this.updateDiagnostics(sourceFile)
+        }
+      }
     }
-
-    const document = this.documents.get(filePath);
-    if (!document) {
-      return;
-    }
-
-    for (const change of params.contentChanges) {
-      document.applyEdit(textDocument.version, change);
-    }
-
-    // *** mark as dirty the file/projects that changed ***
-    this.updateProjects()   // ***
-
-    const sourceFile = this.findSourceFile(filePath)
-    if (sourceFile) {
-      this.updateDiagnostics(sourceFile, params.textDocument.uri);
-    }
-
-  //   this.cancelDiagnostics();
-  //   this.requestDiagnostics();
   }
+
+  // *** how to suppress default completion values from file? ***
 
   async onCompletion(params: lsp.CompletionParams, token?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
     const completions: lsp.CompletionItem[] = []
     const isIncomplete = false
-
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      const sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        // *** exclude constants if in non-immediate opcode
-        // *** watch out for errors and warnings?
-        sourceFile.module.symbols.map.forEach((value, key: string) => {
-          // *** WHY IS THIS HERE? ***
-          if (key == "") {
-            return
-          }
-          const item = lsp.CompletionItem.create(key)
-          // *** consider adding source file name where found, in details ***
-          // *** scan for comment header and show that too, maybe in onCompletionResolve ***
-
-          // *** choose this based on symbol type ***
-          item.kind = lsp.CompletionItemKind.Function
-          // item.detail = "detail text"
-          // item.labelDetails = { detail: " label det", description: "label det desc" }
-          item.data = { filePath: value.sourceFile.path, line: value.lineNumber }
-          completions.push(item)
-        })
-      }
-    }
 
     // figure out where in the line we are
       // if operation/keyword known, choose possible symbols
@@ -406,6 +368,77 @@ export class LspServer {
         // if opcode is immediate (#), list constants
         // if #> or #<, list globals, large constants
 
+    let includedTypes = 7 //0
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      const sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
+        const statement = sourceFile.statements[params.position.line]
+        if (statement) {
+
+          // *** if token missed, look for token just before/after it ***
+
+          const token = statement.getTokenAt(params.position.character)
+          if (token) {
+            // no completions if in comments
+            if (token.type != TokenType.Comment) {
+
+              // if after opcode, allow items by op type
+              // const hitIndex = statement.tokens.indexOf(token)
+              // for (let i = 0; i < statement.tokens.length; i += 1) {
+              //   const t = statement.tokens[i]
+              // }
+
+              // *** do something with position too? ***
+                // before/after opcode
+                // inside comment
+              // *** filter zpage/const/address ***
+            }
+          }
+        } else {
+          // ***
+        }
+
+        if (includedTypes) {
+          // *** exclude constants if in non-immediate opcode
+          // *** watch out for errors and warnings?
+          sourceFile.module.symbols.map.forEach((value, key: string) => {
+
+            // *** consider adding source file name where found, in details ***
+
+            // TODO: more here
+
+            let item: lsp.CompletionItem
+            if (value.type == SymbolType.Constant) {
+              if (!(includedTypes & 1)) {
+                return
+              }
+              item = lsp.CompletionItem.create(key)
+              item.kind = lsp.CompletionItemKind.Constant
+            } else if (value.type == SymbolType.ZPage) {
+              if (!(includedTypes & 2)) {
+                return
+              }
+              item = lsp.CompletionItem.create(key)
+              item.kind = lsp.CompletionItemKind.Variable
+            } else {
+              if (!(includedTypes & 4)) {
+                return
+              }
+              item = lsp.CompletionItem.create(key)
+              item.kind = lsp.CompletionItemKind.Function
+            }
+
+            // *** item.detail = "detail text"
+            // *** item.labelDetails = { detail: " label det", description: "label det desc" }
+
+            item.data = { filePath: value.sourceFile.path, line: value.lineNumber }
+            completions.push(item)
+          })
+        }
+      }
+    }
+
     return lsp.CompletionList.create(completions, isIncomplete)
   }
 
@@ -413,58 +446,17 @@ export class LspServer {
     if (item.data.filePath) {
       const sourceFile = this.findSourceFile(item.data.filePath)
       if (sourceFile) {
-        const header = this.getCommentHeader(sourceFile, item.data.line)
-        if (header) {
-          item.documentation = { kind: "markdown", value: header }
+        if (item.kind == lsp.CompletionItemKind.Function) {
+          const header = this.getCommentHeader(sourceFile, item.data.line)
+          if (header) {
+            item.documentation = { kind: "markdown", value: header }
+          }
+        } else {
+          // *** something for constants and vars ***
         }
       }
     }
     return item
-  }
-
-  private getCommentHeader(atFile: asm.SourceFile, atLine: number): string | undefined {
-
-    // scan up from hover line looking for comment blocks
-    let startLine = atLine;
-    while (startLine > 0) {
-      startLine -= 1;
-      const statement = atFile.statements[startLine];
-      // include empty statements
-      if (statement.tokens.length == 0) {
-        continue;
-      }
-      // stop when first non-comment statement found
-      if (statement.tokens[0].type != TokenType.Comment) {
-        startLine += 1;
-        break;
-      }
-    }
-
-    while (startLine < atLine) {
-      const sourceLine = atFile.statements[startLine].sourceLine;
-      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-        break;
-      }
-      startLine += 1;
-    }
-
-    while (atLine > startLine) {
-      const sourceLine = atFile.statements[atLine - 1].sourceLine;
-      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-        break;
-      }
-      atLine -= 1;
-    }
-
-    if (startLine != atLine) {
-      let header = "```  \n"
-      for (let i = startLine; i < atLine; i += 1) {
-        const statement = atFile.statements[i]
-        header += statement.sourceLine + "  \n"
-      }
-      header += "```"
-      return header
-    }
   }
 
   async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
@@ -502,46 +494,46 @@ export class LspServer {
         return;
       }
 
-      const filePath = pathFromUriString(params.arguments[0]);
+      const filePath = pathFromUriString(params.arguments[0])
       if (!filePath) {
-        return;
+        return
       }
 
       // *** fold this into something else? ***
-      const textDocument = this.documents.get(filePath);
+      const textDocument = this.documents.get(filePath)
       if (textDocument === undefined) {
-        return;
+        return
       }
 
       const sourceFile = this.findSourceFile(filePath)
       if (!sourceFile) {
-        return;
+        return
       }
 
-      const range = params.arguments[1] as lsp.Range;
+      const range = params.arguments[1] as lsp.Range
       if (!range) {
-        return;
+        return
       }
 
-      const scanner = new LabelScanner();
-      const lineEdits = scanner.renumberLocals(sourceFile.statements, range.start.line, range.end.line);
+      const scanner = new LabelScanner()
+      const lineEdits = scanner.renumberLocals(sourceFile.statements, range.start.line, range.end.line)
       if (!lineEdits) {
-        return;
+        return
       }
 
-      const edits: lsp.TextEdit[] = [];
+      const edits: lsp.TextEdit[] = []
       for (let i = 0; i < lineEdits.length; i += 1) {
-        const lineEdit = lineEdits[i];
+        const lineEdit = lineEdits[i]
         const edit: lsp.TextEdit = {
           range: {
             start: { line: lineEdit.line, character: lineEdit.start },
             end: { line: lineEdit.line, character: lineEdit.end }
           },
           newText: lineEdit.text
-        };
-        edits.push(edit);
+        }
+        edits.push(edit)
       }
-      return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits };
+      return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits }
     }
   }
 
@@ -558,7 +550,7 @@ export class LspServer {
     }
 
     const statement = sourceFile.statements[params.position.line];
-    if (statement !== undefined) {
+    if (statement) {
       const token = statement.getTokenAt(params.position.character);
       if (token) {
 
@@ -579,17 +571,7 @@ export class LspServer {
       }
     }
 
-    return { contents: [] };
-
-    // const contents = new MarkdownString();
-    // const { displayString, documentation, tags } = result.body;
-    // if (displayString) {
-    //     contents.appendCodeblock('typescript', displayString);
-    // }
-    // return {
-    //     contents: contents.toMarkupContent(),
-    //     range: Range.fromTextSpan(result.body),
-    // };
+    return { contents: [] }
   }
 
   // TODO: if symbol is an entry point, walk all modules of project
@@ -628,7 +610,7 @@ export class LspServer {
     return locations
   }
 
-  private updateDiagnostics(sourceFile: asm.SourceFile, uri: string) {
+  public updateDiagnostics(sourceFile: asm.SourceFile) {
 
     const scanner = new LabelScanner();
     scanner.scanStatements(sourceFile.statements);
@@ -673,7 +655,9 @@ export class LspServer {
       }
     }
 
-    this.connection.sendDiagnostics({ uri: uri, diagnostics: diagnostics });
+    this.connection.sendDiagnostics({
+      uri: URI.file(sourceFile.path).toString(),
+      diagnostics: diagnostics });
   }
 
   async onSemanticTokensFull(params: lsp.SemanticTokensParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
@@ -703,8 +687,20 @@ export class LspServer {
           index = 2;
         } else if (token.type == TokenType.Opcode) {
           index = 3;
-        } else if (token.type == TokenType.Label) {
-          index = 4;
+        } else if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
+          if (token.symbol !== undefined) {
+            if (token.symbol.type === undefined) {
+              index = 4
+            } else if (token.symbol.type == SymbolType.Constant) {
+              index = 2   // TODO: change
+            } else if (token.symbol.type == SymbolType.ZPage) {
+              index = -1
+            } else {
+              index = -1
+            }
+          } else {
+            index = -1
+          }
         } else if (token.type == TokenType.LocalLabel) {
           index = 5;
         } else if (token.type == TokenType.Operator) {
@@ -721,12 +717,6 @@ export class LspServer {
           }
         } else if (token.type == TokenType.Variable) {
           index = 2;    // TODO: change this
-        } else if (token.type == TokenType.Symbol) {
-          if (token.symbol !== undefined) {
-            index = 4
-          } else {
-            index = -1;
-          }
         } else if (token.type == TokenType.FileName) {    // TODO: something else
           index = 9;
         } else if (token.type == TokenType.String) {      // TODO: something else
@@ -736,53 +726,66 @@ export class LspServer {
         }
 
         if (index >= 0) {
-          data.push(i - prevLine, token.start - prevStart, token.length, index, 0);
-          prevStart = token.start;
-          prevLine = i;
+          data.push(i - prevLine, token.start - prevStart, token.length, index, 0)
+          prevStart = token.start
+          prevLine = i
         }
       }
     }
 
-    // return this.getSemanticTokens(doc, file, start, end, token);
-    return { data: data };
+    return { data: data }
   }
 
+  // TODO: bother supporting this?
   async onSemanticTokensRange(params: lsp.SemanticTokensRangeParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
-    // const file = uriToPath(params.textDocument.uri);
-    // this.logger.log('semanticTokensRange', params, file);
-    // if (!file) {
-    //     return { data: [] };
-    // }
-
-    // const document = this.documents.get(file);
-    // if (!document) {
-    //     return { data: [] };
-    // }
-
-    // const start = doc.offsetAt(params.range.start);
-    // const end = doc.offsetAt(params.range.end);
-
-    // return this.getSemanticTokens(doc, file, start, end, token);
     return { data: [] };
   }
 
-  // async getSemanticTokens(doc: LspDocument, file: string, startOffset: number, endOffset: number, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
-    // const response = await this.tspClient.request(
-    //     CommandTypes.EncodedSemanticClassificationsFull,
-    //     {
-    //         file,
-    //         start: startOffset,
-    //         length: endOffset - startOffset,
-    //         format: '2020',
-    //     },
-    //     token,
-    // );
+  // TODO: move some of this into sourceFile?
+  private getCommentHeader(atFile: asm.SourceFile, atLine: number): string | undefined {
 
-    // if (response.type !== 'response' || !response.body?.spans) {
-    //     return { data: [] };
-    // }
-    // return { data: SemanticTokens.transformSpans(doc, response.body.spans) };
-  // }
+    // scan up from hover line looking for comment blocks
+    let startLine = atLine;
+    while (startLine > 0) {
+      startLine -= 1;
+      const statement = atFile.statements[startLine];
+      // include empty statements
+      if (statement.tokens.length == 0) {
+        continue;
+      }
+      // stop when first non-comment statement found
+      if (statement.tokens[0].type != TokenType.Comment) {
+        startLine += 1;
+        break;
+      }
+    }
+
+    while (startLine < atLine) {
+      const sourceLine = atFile.statements[startLine].sourceLine;
+      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
+        break;
+      }
+      startLine += 1;
+    }
+
+    while (atLine > startLine) {
+      const sourceLine = atFile.statements[atLine - 1].sourceLine;
+      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
+        break;
+      }
+      atLine -= 1;
+    }
+
+    if (startLine != atLine) {
+      let header = "```  \n"
+      for (let i = startLine; i < atLine; i += 1) {
+        const statement = atFile.statements[i]
+        header += statement.sourceLine + "  \n"
+      }
+      header += "```"
+      return header
+    }
+  }
 }
 
 /* based on SublimeText Mariana */
@@ -799,4 +802,4 @@ export class LspServer {
 // .cm-s-dbug span.cm-operator { color: #845dc4; }    /*** CHANGE THIS ***/
 // .cm-s-dbug span.cm-number { color: #ff80e1; }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 
-import { TokenType } from "./parser"
+import { Token } from "./parser"
 
 //------------------------------------------------------------------------------
 
@@ -129,23 +129,25 @@ export class BinaryExpression implements Expression {
 //------------------------------------------------------------------------------
 
 export class SymbolExpression implements Expression {
-  private symbol: string
-  private type: TokenType
 
-  // TODO: passing symbol table object
-  constructor(symbol: string, type: TokenType) {
-    this.symbol = symbol
-    this.type = type
+  private fullName: string    //*** is this useful for anything?
+  private token: Token
+
+  constructor(fullName: string, token: Token) {
+    this.fullName = fullName
+    this.token = token
   }
 
   resolve(): number | undefined {
-    // TODO: attempt to look up symbol
-    return undefined
+    if (this.token.symbol) {
+      return this.token.symbol.resolve()
+    }
   }
 
   getSize(): number | undefined {
-    // TODO: attempt to look up symbol size
-    return undefined
+    if (this.token.symbol) {
+      return this.token.symbol.getSize()
+    }
   }
 }
 
@@ -187,9 +189,9 @@ export class VarExpression implements Expression {
     return
   }
 
-  getSize() {
+  getSize(): number | undefined {
     // TODO: what should this method do?
-    return 0
+    return
   }
 }
 

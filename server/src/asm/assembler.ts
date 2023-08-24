@@ -32,7 +32,7 @@ export type LineRecord = {
 export class Project {
 
   public rootDir: string
-  private modules: Module[] = []
+  protected modules: Module[] = []
 
   constructor(rootDir: string) {
     this.rootDir = rootDir
@@ -128,7 +128,7 @@ export class Module {
       if (statement && statement.tokens) {
         for (let j = 0; j < statement.tokens.length; j += 1) {
           const token = statement.tokens[j]
-          if (token.type == par.TokenType.Symbol) {
+          if (token.type == par.TokenType.Symbol && !token.symbol) {
             const str = statement.getTokenString(token)
             const symbol = this.symbols.find(str)
             if (symbol) {
@@ -138,6 +138,10 @@ export class Module {
           }
         }
       }
+    }
+    // give OpStatement a chance to infer symbol types
+    for (let i = 0; i < this.lineRecords.length; i += 1) {
+      this.lineRecords[i].statement?.postParse()
     }
   }
 

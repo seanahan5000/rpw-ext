@@ -3,7 +3,7 @@ import { Parser, Token, TokenType } from "./parser"
 import * as exp from "./expressions"
 import * as sym from "./symbols"
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export class Statement {
   public type: string = "NONE"
@@ -31,6 +31,9 @@ export class Statement {
     }
   }
 
+  postParse() {
+  }
+
   // *** consider putting string in token ***
   getTokenString(token: Token): string {
     return token.getString(this.sourceLine)
@@ -46,9 +49,9 @@ export class Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
-enum OpTarget {
+enum OpMode {
   NONE,
   A,
   IMM,
@@ -67,7 +70,7 @@ enum OpTarget {
 export class OpStatement extends Statement {
 
   private opcode: any
-  private target: OpTarget = OpTarget.NONE
+  private mode: OpMode = OpMode.NONE
   private expression?: exp.Expression
 
   constructor(opcode: any) {
@@ -87,19 +90,19 @@ export class OpStatement extends Statement {
     // *** check all of these against opcode addressing modes ***
 
     if (token.isEmpty()) {
-      this.target = OpTarget.NONE
+      this.mode = OpMode.NONE
     } else if (str == "A") {
       if (this.opcode.A === undefined) {
         token.setError("Accumulator mode not allowed for this opcode")
       }
       token.type = TokenType.Opcode
-      this.target = OpTarget.A
+      this.mode = OpMode.A
     } else if (str == "#") {
       if (this.opcode.IMM === undefined) {
         token.setError("Immediate mode not allowed for this opcode")
       }
       token.type = TokenType.Opcode
-      this.target = OpTarget.IMM
+      this.mode = OpMode.IMM
       this.expression = parser.mustParseExpression()
     } else if (str == "/") {			// same as "#>"
       if (this.opcode.IMM === undefined) {
@@ -108,7 +111,7 @@ export class OpStatement extends Statement {
         token.setWarning("Syntax specific to LISA assembler")
         // TODO: would be clear to extend warning to entire expression
       }
-      this.target = OpTarget.IMM
+      this.mode = OpMode.IMM
       this.expression = parser.mustParseExpression()
     } else if (str == "(") {
       // *** check opcode ***
@@ -126,7 +129,7 @@ export class OpStatement extends Statement {
           if (this.opcode.IND === undefined) {
             token.setError("Indirect mode not allowed for this opcode")
           }
-          this.target = OpTarget.IND
+          this.mode = OpMode.IND
         } if (str == ",") {
           token.type = TokenType.Opcode
 
@@ -137,7 +140,7 @@ export class OpStatement extends Statement {
             if (this.opcode.INDY === undefined) {
               token.setError("Indirect mode not allowed for this opcode")
             }
-            this.target = OpTarget.INDY
+            this.mode = OpMode.INDY
             token.type = TokenType.Opcode
           } else if (str == "X") {
             token.setError("Invalid mode, expecting 'Y'")
@@ -165,7 +168,7 @@ export class OpStatement extends Statement {
           token.setError("Indirect mode not allowed for this opcode")
         }
 
-        this.target = OpTarget.INDX
+        this.mode = OpMode.INDX
         token.type = TokenType.Opcode
 
         token = parser.mustPushNextToken("expecting ')'")
@@ -184,10 +187,11 @@ export class OpStatement extends Statement {
         return
       }
 
+      // *** seems premature to assign ZP when expression size isn't known ***
       token = parser.pushNextToken()
       str = parser.getTokenStringUC(token)
       if (str == "") {
-        this.target = OpTarget.ZP
+        this.mode = OpMode.ZP
       } else if (str == ",") {
         token.type = TokenType.Opcode
 
@@ -195,10 +199,10 @@ export class OpStatement extends Statement {
         str = parser.getTokenStringUC(token)
 
         if (str == "X") {
-          this.target = OpTarget.ZPX
+          this.mode = OpMode.ZPX
           token.type = TokenType.Opcode
         } else if (str == "Y") {
-          this.target = OpTarget.ZPY
+          this.mode = OpMode.ZPY
           token.type = TokenType.Opcode
         } else if (str != "") {
           token.setError("Unexpected token, expecting 'X' or 'Y'")
@@ -210,9 +214,36 @@ export class OpStatement extends Statement {
 
     //*** choose address mode ***
   }
+
+  postParse() {
+    // use opocde information to infer symbol type
+    if (this.expression) {
+      // *** reorder for efficiency ***
+
+      // for now, only look at simple SymbolExpressions
+      let token = (this.expression as any).token
+      if (token && token.symbol) {
+        const size = this.expression.getSize()
+        if (size == 1) {
+          // *** watch out for error conditions ***
+          if (this.mode == OpMode.IMM) {
+            token.symbol.type = sym.SymbolType.Constant
+          } else if (this.mode == OpMode.INDX
+              || this.mode == OpMode.INDY
+              || this.mode == OpMode.ZP
+              || this.mode == OpMode.ZPX
+              || this.mode == OpMode.ZPY) {
+            token.symbol.type = sym.SymbolType.ZPage
+          }
+        }
+      }
+    }
+  }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+// *** how to handle this while in macro definition?
 
 export class ConditionalStatement extends Statement {
 
@@ -225,6 +256,17 @@ export class ConditionalStatement extends Statement {
     if (this.type == "IF" || this.type == "DO" || this.type == "ELIF") {
 
       this.expression = parser.mustParseExpression()
+      if (!this.expression) {
+        //*** error
+        return
+      }
+
+      let value = this.expression.resolve()
+      if (value === undefined) {
+        value = 1     // ***
+      //   //*** error
+      //   return
+      }
 
       // *** test IF/THEN and ELIF/THEN syntax
       if (this.type != "DO") {
@@ -236,13 +278,70 @@ export class ConditionalStatement extends Statement {
         }
       }
 
-    } else if (this.type == "ELSE" || this.type == "ENDIF" || this.type == "FIN") {
-      // nothing else
+      if (this.type == "IF" || this.type == "DO") {
+        if (!parser.conditional.push()) {
+          // *** assembler->SetError("Exceeded nested conditionals maximum");
+          return
+        }
+        if (value != 0) {
+          parser.conditional.setSatisfied(true)
+          parser.conditional.enable()
+        }
+      } else /* if (this.type == "ELIF")*/ {
+
+        // if (p->ConditionalsComplete())
+        // {
+        //   assembler->SetError("Unexpected ELIF without IF");
+        //   return;
+        // }
+
+        if (parser.conditional.isSatisfied() && value != 0) {
+          parser.conditional.setSatisfied(true)
+          parser.conditional.enable()
+        } else {
+          parser.conditional.disable()
+        }
+      }
+
+    } else if (this.type == "ELSE") {
+
+      // if (p->Next() != 0)
+      // {
+      //   assembler->SetError("Unexpected token after ELSE");
+      //   return;
+      // }
+
+      // if (p->ConditionalsComplete())
+      // {
+      //   assembler->SetError("Unexpected ELSE without IF");
+      //   return;
+      // }
+
+      if (!parser.conditional.isSatisfied()) {
+        parser.conditional.setSatisfied(true)
+        parser.conditional.enable()
+      } else {
+        parser.conditional.disable()
+      }
+    } else /*if (this.type == "ENDIF" || this.type == "FIN")*/ {
+      // if (p->Next() != 0)
+      // {
+      //   assembler->SetError("Unexpected token after FIN/ENDIF");
+      //   return;
+      // }
+
+      if (!parser.conditional.pull()) {
+        // Merlin ignores unused FIN
+        // if (!assembler->SetMerlinWarning("Unexpected FIN/ENDIF"))
+        // {
+        //   return;
+        // }
+      }
     }
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export class DataStatement extends Statement {
 
@@ -307,7 +406,7 @@ export class DataStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export class ErrorStatement extends Statement {
 
@@ -324,7 +423,7 @@ export class ErrorStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export class EquStatement extends Statement {
 
@@ -347,7 +446,7 @@ export class EquStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 // NOTE: caller has checked for odd nibbles
 function scanHex(hexString: string, buffer: number[]) {
@@ -415,7 +514,7 @@ export class HexStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export class IncludeStatement extends Statement {
 
@@ -428,7 +527,7 @@ export class IncludeStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 // *** should this be using expressions at all? ***
   // *** numbers, symbols, ??? ***
@@ -453,20 +552,22 @@ export class MacroStatement extends Statement {
       }
       // special case parens expressions to support opcode addressing modes and USR syntax
       if (str == "(") {
-        // consume expressions until ")"
-        let expression = parser.parseExpression()
-        while (expression) {
-          token = parser.pushNextToken()
-          str = parser.getTokenString(token)
-          if (str == ")") {
-            break
-          } else if (str == "") {
-            // *** error ***
-          } else if (str == ",") {
-            continue
-          } else {
-            expression = parser.mustParseExpression(token)
-          }
+
+        //*** completely redo this once USR text format changed ***
+
+        token = parser.veryNextString(")")
+        if (!token.isEmpty()) {
+          //*** wrap token in some kind of expression?
+          scanAndPushMappedText(this.sourceLine, token, this.tokens)
+        }
+
+        token = parser.mustPushNextToken("expecting ')'")
+        str = parser.getTokenString(token)
+        if (str == "") {
+          break
+        }
+        if (str != ")") {
+          token.setError("Unexpected token, expecting ')'")
         }
 
         token = parser.pushNextToken()
@@ -490,10 +591,6 @@ export class MacroStatement extends Statement {
           // ***
         }
 
-        // *** if USR or macro args, allow "+", "=", "-"
-        // *** if macro args, allow ","
-          // *** look for "X" or "Y" ***
-
       } else if (str == ";") {
         // *** error, missing expression ***
       } else if (str == ",") {
@@ -501,7 +598,6 @@ export class MacroStatement extends Statement {
       } else {
         // *** consume expressions until "" or ";" ***
         let expression = parser.mustParseExpression(token)
-
       }
     }
 
@@ -540,7 +636,7 @@ export class MacroStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export class StorageStatement extends Statement {
 
@@ -587,7 +683,7 @@ export class StorageStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 // *** TODO: share this with macro parser ***
 // *** TODO: think about a way to make this an isolated extension of syntax
@@ -617,17 +713,19 @@ export class UsrStatement extends Statement {
       return
     }
 
-    token = parser.veryNextMappedText()
+    token = parser.veryNextString(")")
     if (!token.isEmpty()) {
-      this.tokens.push(token)
+      scanAndPushMappedText(this.sourceLine, token, this.tokens)
     }
 
-    // *** simplify ***
     token = parser.mustPushNextToken("expecting ')'")
-    str = parser.getTokenString(token)
-    if (str != ")") {
-      token.setError("Unexpected token, expecting ')' or valid mapped text character")
+    if (token.isEmpty()) {
       return
+    }
+
+    str = this.getTokenString(token)
+    if (str != ")") {
+      token.setError("Unexpected token, expecting ')'")
     }
 
     token = parser.pushNextToken()
@@ -638,4 +736,61 @@ export class UsrStatement extends Statement {
   }
 }
 
-//-----------------------------------------------------------------------------
+const mappedText = "0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ!\"%\'*+,-./:<=>?"
+
+// Split a string token into multiple tokens if any characters
+//  are not part of mapped set.
+//
+// TODO: maybe hilite escaped characters differently?
+
+function scanAndPushMappedText(sourceLine: string, token: Token, tokens: Token[]) {
+  let start = token.start
+  let pos = token.start
+  let nextChar = ""
+  let escape = false
+  while (true) {
+    let index = -1
+    if (pos < token.end) {
+      nextChar = sourceLine[pos]
+      if (nextChar == "\\") {
+        escape = true
+        index = 0
+      } else if (escape) {
+        escape = false
+        // TODO: support other escapes later
+        if (nextChar == "n") {
+          index = 0
+        }
+      } else {
+        index = mappedText.indexOf(nextChar)
+      }
+    }
+    if (index == -1) {
+      // flush previous valid characters
+      if (start < pos) {
+        const t = new Token(start, pos, TokenType.String)
+        tokens.push(t)
+        start = pos
+      }
+      if (pos < token.end) {
+        // push invalid character token
+        const t = new Token(pos, pos + 1, TokenType.String)
+        // TODO: space check not needed after USR text format update
+        if (nextChar == " ") {
+          t.setError("Unexpected whitespace, expecting '_'")
+        } else {
+          t.setError("Unexpected token, expecting valid mapped text characters")
+        }
+        tokens.push(t)
+        start = ++pos
+      }
+      if (pos == token.end) {
+        break
+      }
+    } else {
+      pos += 1
+    }
+  }
+}
+
+//------------------------------------------------------------------------------

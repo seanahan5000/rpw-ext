@@ -122,6 +122,7 @@ connection.onInitialize((params: InitializeParams) => {
 			],
 		},
 		full: true,
+		// TODO: bother supporting this?
 		range: false
 	};
 

@@ -109,3 +109,18 @@
 //  - rename a single local
 
 //  - generate real > groupings and turn off defaults
+
+//  - when using shared VARS.S file, show references across project
+//  - add structure concept when parsing DUMMY <non-zero>
+
+//  - track file shared across project as special (VAR.S)
+    // - infer symbol types across project
+
+//  - make syntax hiliting work on .lst files?
+
+//  - logic to maintain columns while typing (comment-only?)
+
+// *** don't hilite macros until macro has been seen
+    // *** only "light up" and colorize known information
+
+// *** don't show error on file-not-found for single files

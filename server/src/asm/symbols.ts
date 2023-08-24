@@ -66,6 +66,14 @@ export class Symbol {
     this.lineNumber = lineNumber
     this.expression = expression
   }
+
+  resolve(): number | undefined {
+    return this.expression?.resolve()
+  }
+
+  getSize(): number | undefined {
+    return this.expression?.getSize()
+  }
 }
 
 export class PcSymbol extends Symbol {

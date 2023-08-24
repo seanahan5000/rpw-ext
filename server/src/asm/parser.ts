@@ -22,7 +22,7 @@ import { LinkedEditingRangeFeature } from 'vscode-languageserver/lib/common/link
 //*** how will this be reused in dbug when parsing text ***
 //*** how will this be reused for smart completion
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 
 export enum TokenType {
   Null,   // *** unused?
@@ -117,12 +117,69 @@ export class Token {
   static Null: Token = new Token(0, 0, TokenType.Null)
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+type ConditionalState = {
+  enableCount: number,
+  satisfied: boolean
+}
+
+export class Conditional {
+  private enableCount = 1
+  private satisfied = true
+  private stack: ConditionalState[] = []
+
+  public push(): boolean {
+    // set an arbitrary limit on stack size to catch infinite recursion
+    if (this.stack.length > 255) {
+      return false
+    }
+    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied})
+    this.enableCount -= 1
+    this.satisfied = false
+    return true
+  }
+
+  public pull(): boolean {
+    if (this.stack.length == 0) {
+      return false
+    }
+    const state = this.stack.pop()
+    if (state) {
+      this.enableCount = state.enableCount
+      this.satisfied = state.satisfied
+    }
+    return true
+  }
+
+  public setSatisfied(satisfied: boolean) {
+    this.satisfied = satisfied
+  }
+
+  public isSatisfied(): boolean {
+    return this.satisfied
+  }
+
+  public enable() {
+    this.enableCount += 1
+  }
+
+  public disable() {
+    this.enableCount -= 1
+  }
+
+  public isEnabled(): boolean {
+    return this.enableCount > 0
+  }
+}
+
+//------------------------------------------------------------------------------
 
 // *** Parser extends a separate Tokenizer class? ***
 export class Parser {
 
   public assembler: asm.Assembler
+  public conditional = new Conditional()
   private symbols: sym.Symbols
 
   private sourceFile: asm.SourceFile | undefined
@@ -163,6 +220,10 @@ export class Parser {
     return this.position
   }
 
+  setPosition(position: number) {
+    this.position = position
+  }
+
   setMacroArgMode(enable: boolean) {
     if (enable) {
       // skip initialize whitespace before args
@@ -173,11 +234,46 @@ export class Parser {
 
   parseStatement(lineRecord: asm.LineRecord, sourceLine: string) {
 
+    let statement: stm.Statement | undefined
+
     this.setSourceLine(lineRecord, sourceLine)
 
-    let symbol = this.parseLabel()
+    if (!this.conditional.isEnabled()) {
+      let token = this.pushNextToken()
+      const str = this.getTokenStringUC(token)
+      let keyword = (Keywords as {[key: string]: any})[str]
+      if (keyword !== undefined) {
+        //*** check for assembler-specific keywords ***
+        //*** add error on wrong syntax ***
+        if (str == "IF" || str == "DO" || str == "ELIF" ||
+            str == "ELSE" || str == "ENDIF" || str == "FIN") {
+          // *** check if hasLabel
+          token.type = TokenType.Keyword
+          statement = new stm.ConditionalStatement()
 
-    let statement: stm.Statement | undefined
+          //*** share with below ***
+          statement.init(str, sourceLine, this.tokens)
+          statement.parse(this)
+          lineRecord.statement = statement
+          if (!this.conditional.isEnabled()) {
+            statement.tokens = []
+          } else {
+            // NOTE: this also flushes out any endline comment
+            token = this.pushNextToken()
+            if (!token.isEmpty()) {
+              token.setError("Unexpected token")
+            }
+          }
+        }
+      }
+      if (!statement) {
+        statement = new stm.Statement()
+        lineRecord.statement = statement
+      }
+      return
+    }
+
+    let symbol = this.parseLabel()
     let statementType = "NONE"
 
     let token = this.parseOpcode()
@@ -276,6 +372,10 @@ export class Parser {
     }
 
     let token = this.pushNextToken()
+    if (token.isEmpty()) {
+      return
+    }
+
     const start = token.start
     const value = token.getString(this.sourceLine)
 
@@ -325,6 +425,9 @@ export class Parser {
         const symbol = new sym.Symbol(label, this.sourceFile, this.lineNumber, new exp.PcExpression())
         if (!this.symbols.add(symbol)) {
           token.setError("Duplicate symbol")
+          // *** somehow link this symbol to the previous definition?
+        } else {
+          token.symbol = symbol
         }
         // *** add label to global scope symbols
           // *** start new local scope (if Merlin)
@@ -337,7 +440,7 @@ export class Parser {
     }
   }
 
-  private peekVeryNextChar(): string {
+  peekVeryNextChar(): string {
     if (this.position < this.sourceLine.length) {
       return this.sourceLine[this.position]
     }
@@ -473,6 +576,14 @@ export class Parser {
         continue
       }
 
+      // TODO: for now allow backslashes in symbols, but fix this once
+      //  mapped text has been coverted to using quotes instead of parens
+      if (code == 0x5C) {   // \
+        sawSymbol = true
+        this.position += 1
+        continue
+      }
+
       const c = this.sourceLine[this.position]
       if (c == " " || c == "\t") {
         break
@@ -560,15 +671,21 @@ export class Parser {
     return token
   }
 
-  veryNextMappedText(): Token {
-    const najaText = "0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ!\"%\'*+,-./:<=>?"
+  veryNextString(terminator: string): Token {
     const token = new Token(this.position, this.position, TokenType.Null)
     while (this.position < this.sourceLine.length) {
-      const index = najaText.indexOf(this.sourceLine[this.position])
-      if (index == -1) {
+      const nextChar = this.sourceLine[this.position]
+      if (nextChar == terminator) {
         break
       }
       this.position += 1
+      if (nextChar == "\\") {
+        if (this.position < this.sourceLine.length) {
+          this.position += 1
+        } else {
+          // *** error if string ends with escape ***
+        }
+      }
     }
     token.end = this.position
     if (token.length > 0) {
@@ -634,14 +751,14 @@ export class Parser {
         str == "@") {		// TODO: scope this to a particular syntax
         let token2 = this.veryNextToken()
         //*** bad if null, what then? ***
-        // if (token2.isEmpty()) {
-        // 	return
-        // }
+        if (token2.isEmpty() || token2.type == TokenType.Operator) {
+        	return  // ***
+        }
         token.end = token2.end
         token.type = TokenType.LocalLabel
         str = this.getTokenString(token)
         //*** convert local to global name ***
-        expression = new exp.SymbolExpression(str, token.type)
+        expression = new exp.SymbolExpression(str, token)
       } else if (str == "]" && this.syntax == "MERLIN") {
         expression = this.parseVarExpression(token)
       } else if (str == "<" || str == ">" || str == "-"
@@ -689,18 +806,26 @@ export class Parser {
         token.type = TokenType.String
         const value = charStr.charCodeAt(0) ^ highFlip
         expression = new exp.NumberExpression(value, false)
-      } else {
-        // *** mark token as invalid?
+      } else if (str == ",") {
         this.popToken()   // *** also undo skipWhiteSpace?
+      } else {
+        token.setError("Unexpected token")
+        return
       }
     } else if (token.type == TokenType.DecNumber) {
       let value = parseInt(str, 10)
       expression = new exp.NumberExpression(value, false)
     } else if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
       token.type = TokenType.Symbol
-      // *** is token.type correct here?
-      // *** upper or lower case symbol?
-      expression = new exp.SymbolExpression(this.getTokenString(token), token.type)
+      str = this.getTokenString(token)
+      // attempt to immediately link to a previously defined symbol
+      //  (allows conditional statements to find symbols in this pass)
+      const symbol = this.symbols.find(str)
+      if (symbol) {
+        token.symbol = symbol
+        // *** add reference in symbol to statement/token? ***
+      }
+      expression = new exp.SymbolExpression(str, token)
     } else {
       token.setError("Invalid expression")
       return
@@ -754,4 +879,4 @@ export class Parser {
   }
 }
 
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
