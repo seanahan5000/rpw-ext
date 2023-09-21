@@ -65,7 +65,8 @@ connection.onInitialize((params: InitializeParams) => {
 			},
 			definitionProvider: true,
 			hoverProvider: true,
-			referencesProvider: true
+			referencesProvider: true,
+			foldingRangeProvider: true
 			// ,
 			// executeCommandProvider: {
 			// 	commands: ["rpw65.renumberLocals"]
@@ -86,17 +87,17 @@ connection.onInitialize((params: InitializeParams) => {
 		documentSelector: ['rpw65'],
 		legend: {
 			tokenTypes: [
-				"comment",	// 0
-				"string",	// 1
-				"keyword",	// 2
-				"opcode",	// 3
-				"label",	// 4
-				"local",	// 5
-				"operator",	// 6
-				"macro",	// 7
-				"number",	// 8
-				"unused2",	// 9
-				"invalid" 	// 10
+				"comment",		// 0
+				"string",			// 1
+				"keyword",		// 2
+				"opcode",			// 3
+				"label",			// 4
+				"local",			// 5
+				"operator",		// 6
+				"macro",			// 7
+				"number",			// 8
+				"unused2",		// 9
+				"invalid" 		// 10
 
 				// 'operator',
 				// 'class',

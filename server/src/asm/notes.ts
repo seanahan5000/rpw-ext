@@ -124,3 +124,7 @@
     // *** only "light up" and colorize known information
 
 // *** don't show error on file-not-found for single files
+
+
+// TODO (low-priority)
+//  - add folding ranges for all non-local symbol scopes

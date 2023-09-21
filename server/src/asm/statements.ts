@@ -216,7 +216,7 @@ export class OpStatement extends Statement {
   }
 
   postParse() {
-    // use opocde information to infer symbol type
+    // use opcode information to infer symbol type
     if (this.expression) {
       // *** reorder for efficiency ***
 
@@ -248,6 +248,7 @@ export class OpStatement extends Statement {
 export class ConditionalStatement extends Statement {
 
   private expression?: exp.Expression
+  private nextConditional?: ConditionalStatement
 
   parse(parser: Parser) {
 
@@ -263,7 +264,7 @@ export class ConditionalStatement extends Statement {
 
       let value = this.expression.resolve()
       if (value === undefined) {
-        value = 1     // ***
+        value = 0     // ***
       //   //*** error
       //   return
       }
@@ -279,14 +280,19 @@ export class ConditionalStatement extends Statement {
       }
 
       if (this.type == "IF" || this.type == "DO") {
+
         if (!parser.conditional.push()) {
           // *** assembler->SetError("Exceeded nested conditionals maximum");
           return
         }
+
+        parser.conditional.statement = this
+
         if (value != 0) {
           parser.conditional.setSatisfied(true)
           parser.conditional.enable()
         }
+
       } else /* if (this.type == "ELIF")*/ {
 
         // if (p->ConditionalsComplete())
@@ -294,6 +300,13 @@ export class ConditionalStatement extends Statement {
         //   assembler->SetError("Unexpected ELIF without IF");
         //   return;
         // }
+
+        if (parser.conditional.statement) {
+          parser.conditional.statement.nextConditional = this
+        } else {
+          // *** error if no matching IF/DO/ELIF statement
+        }
+        parser.conditional.statement = this
 
         if (parser.conditional.isSatisfied() && value != 0) {
           parser.conditional.setSatisfied(true)
@@ -317,6 +330,13 @@ export class ConditionalStatement extends Statement {
       //   return;
       // }
 
+      if (parser.conditional.statement) {
+        parser.conditional.statement.nextConditional = this
+      } else {
+        // *** error if no matching IF/DO/ELIF statement
+      }
+      parser.conditional.statement = this
+
       if (!parser.conditional.isSatisfied()) {
         parser.conditional.setSatisfied(true)
         parser.conditional.enable()
@@ -324,11 +344,18 @@ export class ConditionalStatement extends Statement {
         parser.conditional.disable()
       }
     } else /*if (this.type == "ENDIF" || this.type == "FIN")*/ {
+
       // if (p->Next() != 0)
       // {
       //   assembler->SetError("Unexpected token after FIN/ENDIF");
       //   return;
       // }
+
+      if (parser.conditional.statement) {
+        parser.conditional.statement.nextConditional = this
+      } else {
+        // *** error if no matching IF/DO/ELIF statement
+      }
 
       if (!parser.conditional.pull()) {
         // Merlin ignores unused FIN
@@ -601,27 +628,6 @@ export class MacroStatement extends Statement {
       }
     }
 
-    // let token = parser.pushNextToken()
-    // if (!token.isEmpty()) {
-    //   let str = parser.getTokenString(token)
-    //   if (str == "(") {
-    //     // *** special case parens expressions here ***
-    //   } else {
-    //     let expression = parser.parseExpression(token)
-    //     while (expression) {
-    //       token = parser.pushNextToken()
-    //       str = parser.getTokenString(token)
-    //       if (str == "") {
-    //         break
-    //       }
-    //       if (str == ";") {
-    //         // *** flush token ***
-    //         start = parser.getPosition()
-    //       }
-    //       expression = parser.mustParseExpression()
-    //     }
-    //   }
-    // }
     parser.setMacroArgMode(false)
 
     if (parser.getPosition() != start) {
@@ -633,6 +639,18 @@ export class MacroStatement extends Statement {
 
   getSize(): number | undefined {
     return undefined
+  }
+}
+
+//------------------------------------------------------------------------------
+
+export class SaveStatement extends Statement {
+
+  private fileName?: string
+
+  parse(parser: Parser) {
+    const token = parser.mustPushNextFileName()
+    this.fileName = parser.getTokenString(token)
   }
 }
 
@@ -650,7 +668,6 @@ export class StorageStatement extends Statement {
       return
     }
 
-    //*** push token?
     if (parser.getTokenString(token) == "\\") {				//*** MERLIN-only
       this.sizeArg = new exp.AlignExpression(new exp.NumberExpression(256, false))
     } else {

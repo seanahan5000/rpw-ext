@@ -121,12 +121,14 @@ export class Token {
 
 type ConditionalState = {
   enableCount: number,
-  satisfied: boolean
+  satisfied: boolean,
+  statement?: stm.ConditionalStatement
 }
 
 export class Conditional {
   private enableCount = 1
   private satisfied = true
+  public statement?: stm.ConditionalStatement
   private stack: ConditionalState[] = []
 
   public push(): boolean {
@@ -134,9 +136,10 @@ export class Conditional {
     if (this.stack.length > 255) {
       return false
     }
-    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied})
+    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied, statement: this.statement})
     this.enableCount -= 1
     this.satisfied = false
+    this.statement = undefined
     return true
   }
 
@@ -148,6 +151,7 @@ export class Conditional {
     if (state) {
       this.enableCount = state.enableCount
       this.satisfied = state.satisfied
+      this.statement = state.statement
     }
     return true
   }

@@ -153,7 +153,11 @@ export class Module {
         fullPath += "/" + this.sourceDir
       }
     }
-    fullPath += "/" + fileName
+    if (fileName[0] != "\\" && fileName[0] != "/") {
+      fullPath += "/"
+    }
+
+    fullPath += fileName
     // TODO: normalize slashes?
     return fullPath
   }

@@ -188,6 +188,7 @@ export class LspServer {
     connection.onCompletionResolve(this.onCompletionResolve.bind(this))
     connection.onDefinition(this.onDefinition.bind(this))
     connection.onExecuteCommand(this.onExecuteCommand.bind(this))
+    connection.onFoldingRanges(this.onFoldingRanges.bind(this))
     connection.onHover(this.onHover.bind(this))
     connection.onReferences(this.onReferences.bind(this))
     connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
@@ -535,6 +536,30 @@ export class LspServer {
       }
       return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits }
     }
+  }
+
+  async onFoldingRanges(params: lsp.FoldingRangeParams, token?: lsp.CancellationToken): Promise<lsp.FoldingRange[] | undefined> {
+    const foldingRanges: lsp.FoldingRange[] = []
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      let sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
+        sourceFile.statements.forEach(statement => {
+          const nextConditional = (statement as any).nextConditional
+          if (nextConditional && sourceFile) {
+            const startLine = sourceFile.statements.indexOf(statement)
+            const endLine = sourceFile.statements.indexOf(nextConditional) - 1
+            if (startLine < endLine) {
+              const range: lsp.FoldingRange = {
+                startLine, endLine
+              }
+              foldingRanges.push(range)
+            }
+          }
+        })
+      }
+    }
+    return foldingRanges
   }
 
   // TODO: if symbol is an entry point, walk all modules of project

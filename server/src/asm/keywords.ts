@@ -11,7 +11,7 @@ export const Keywords = {
   "PUT":        { syntax: [ "MERL"                 ], create: () => { return new stm.IncludeStatement() }},
   "USE":        { syntax: [ "MERL"                 ], create: () => { return new stm.IncludeStatement() }},
   "INCLUDE":    { syntax: [         "DASM"         ], create: () => { return new stm.IncludeStatement() }},
-  "SAV":        { syntax: [ "MERL",         "LISA" ] },
+  "SAV":        { syntax: [ "MERL",         "LISA" ], create: () => { return new stm.SaveStatement() }},
   "DSK":        { syntax: [ "MERL"                 ] },
 
   "MAC":        { syntax: [ "MERL", "DASM"         ] },
