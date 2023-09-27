@@ -2,7 +2,8 @@
 // *** does this need its own file? ***
 
 import * as asm from "./assembler"
-import * as exp from "./expressions"
+// import * as exp from "./expressions"
+import * as xxx from "./x_expressions"
 
 // *** what do generated addresses look like?
   // *** PcExpression?
@@ -46,25 +47,21 @@ export enum SymbolType {
 
 export class Symbol {
   public name: string
+  // *** fullName (including scope?)
   public type?: SymbolType
   public sourceFile: asm.SourceFile
-  // *** fullName (including scope?)
-  public lineNumber: number           // *** Statement instead?
-  public expression?: exp.Expression
-  // *** is entry point ***
+  public lineNumber: number           // *** Statement instead/also?
+  public expression?: xxx.Expression
+  public isLocal: boolean
+  public isEntry: boolean
 
-  // definition source file
-  // definition line number
-  // or, Statement which has file and line?
-
-  // import-link?
-  // symbol type?
-
-  constructor(name: string, file: asm.SourceFile, lineNumber: number, expression?: exp.Expression) {
+  constructor(name: string, file: asm.SourceFile, lineNumber: number, expression?: xxx.Expression) {
     this.name = name
     this.sourceFile = file
     this.lineNumber = lineNumber
     this.expression = expression
+    this.isLocal = false
+    this.isEntry = false
   }
 
   resolve(): number | undefined {
@@ -78,6 +75,6 @@ export class Symbol {
 
 export class PcSymbol extends Symbol {
   constructor(name: string, file: asm.SourceFile, lineNumber: number) {
-    super(name, file, lineNumber, new exp.PcExpression())
+    super(name, file, lineNumber, new xxx.PcExpression())
   }
 }

@@ -8,30 +8,69 @@
 	},
 	"semanticHighlighting": true,
 	"semanticTokenColors": {
-		"comment": "#4e8547",
-		"string": "#f9ae58",
-		"keyword": "#d685d6",
-		"opcode": "#6699cc",
-		"label": "#f9ae58",
-		"local": "#9effff",
-		"operator": "#845dc4",
-		"macro": "#80b080",			// TODO: change this
-		"number": "#ff80e1",
-		"invalid": "#ff0000"
+		"comment": {
+			"foreground": "#4e8547", //"#4e8547",
+			"fontStyle": "bold"
+		},
+		"string": 		"#ce9178",	//"#f9ae58",
+		"keyword":		"#d685d6",
+		"opcode": {
+			"foreground": "#6699cc",
+			"fontStyle": ""
+		},
+		"label": {
+			"foreground": "#f9ae58",
+			"fontStyle": "bold"
+		},
+		"label.local": {
+			"foreground": "#9effff",
+			"fontStyle": ""
+		},
+		"zpage": 				"#A0C4BC",			// TODO: change this
+		"zpage.unused":	"#808080",
+		"operator": 	"#845dc4",
+		"macro": 			"#80b080",			// TODO: change this
+		"number": 		"#ff80e1",
+		"constant":		"#ff80e1",			// TODO: change this
+		"invalid": 		"#ff0000",
+
+		"var": {
+			"foreground": "#ff80e1",		// TODO: change this
+			"fontStyle": ""
+		},
+
+		"test":				"#646695"
+
+		// vscode colors
+		//	yellow: "#DCDCAA"
+
+		// separate color for "; always" comment?
+		// KEYBRD, UNSTROB, etc should be different color
+		// different between local definition and reference to it?
 	},
 
 	"tokenColors": [
+
+		{
+			"name": "External Label",
+			"scope": [
+				"label"
+			],
+			"settings": {
+				"fontStyle": "bold"
+			}
+		},
+
 		{
 			"name": "Comment",
 			"scope": [
 				"comment"
 			],
 			"settings": {
-				"foreground": "#4e8547"
+				"foreground": "#4e8547",
+				"fontStyle": "bold"
 			}
 		},
-
-
 		{
 			"name": "Variables",
 			"scope": [

@@ -1,6 +1,6 @@
 
-import { Token, TokenErrorType, TokenType } from "./parser";
-import { Statement } from "./statements"
+import { Token, TokenErrorType, TokenType } from "./tokenizer";
+import { Statement } from "./x_statements"
 
 type LabelInfo = {
   line: number,
@@ -30,8 +30,9 @@ export class LabelScanner {
       //*** TODO: also support DASM subroutine scoping ***
       while (++endLine < statements.length) {
         const statement = statements[endLine]
-        if (statement.tokens.length > 0) {
-          if (statement.tokens[0].type == TokenType.Label) {
+        const tokens = statement.getTokens()
+        if (tokens.length > 0) {
+          if (tokens[0].type == TokenType.Label) {
             break
           }
         }
@@ -46,8 +47,9 @@ export class LabelScanner {
     // TODO: what about DASM subroutine?
     while (startLine > 0) {
       const statement = statements[startLine]
-      if (statement.tokens.length > 0) {
-        if (statement.tokens[0].type == TokenType.Label) {
+      const tokens = statement.getTokens()
+      if (tokens.length > 0) {
+        if (tokens[0].type == TokenType.Label) {
           break
         }
       }
@@ -55,8 +57,9 @@ export class LabelScanner {
     }
     while (endLine < statements.length) {
       const statement = statements[endLine]
-      if (statement.tokens.length > 0) {
-        if (statement.tokens[0].type == TokenType.Label) {
+      const tokens = statement.getTokens()
+      if (tokens.length > 0) {
+        if (tokens[0].type == TokenType.Label) {
           break
         }
       }
@@ -176,10 +179,11 @@ export class LabelScanner {
     // build list of local label definitions and used of those labels
     for (let i = startLine; i < endLine; i += 1) {
       const statement = statements[i]
-      for (let j = 0; j < statement.tokens.length; j += 1) {
-        const token = statement.tokens[j]
+      const tokens = statement.getTokens()
+      for (let j = 0; j < tokens.length; j += 1) {
+        const token = tokens[j]
         if (token.type == TokenType.LocalLabel) {
-          let str = statement.getTokenString(token)
+          let str = token.getString()
           let info = { line: i, token: token, label: str }
           if (j == 0) {
             this.defList.push(info)

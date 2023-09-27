@@ -2,12 +2,41 @@
 import * as lsp from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { TokenType, TokenErrorType } from "./asm/parser";
+import { TokenType, TokenErrorType } from "./asm/tokenizer"
 import { LabelScanner } from "./asm/labels";
 import * as asm from "./asm/assembler";
-import * as stm from "./asm/statements";
+import * as stm from "./asm/x_statements";
 import * as fs from 'fs';
 import { SymbolType } from "./asm/symbols";
+
+//------------------------------------------------------------------------------
+
+// indexes used to map from TokenTypes to semantic tokens
+// NOTE: if this changes, semanticTokensProvider.tokenTypes must also change
+// TODO: find a better way to build it all as one table (maybe a map?)
+
+export enum SemanticToken {
+  invalid   = 0,
+  comment   = 1,
+  string    = 2,
+  number    = 3,
+  operator  = 4,
+  keyword   = 5,
+  label     = 6,
+  macro     = 7,
+
+  opcode    = 8,
+  constant  = 9,
+  zpage     = 10,
+  var       = 11
+}
+
+export enum SemanticModifier {
+  local     = 0,
+  global    = 1,
+  external  = 2,
+  unused    = 3
+}
 
 //------------------------------------------------------------------------------
 
@@ -206,10 +235,10 @@ export class LspServer {
 
   onInitialize(params: lsp.InitializeParams): void {
 
-    // const n = 1;
-    // while (n) {
-    //   console.log();  // ***
-    // }
+    const n = 1;
+    while (n) {
+      console.log();  // ***
+    }
 
     if (params.workspaceFolders) {
       // *** walk each folder -- or don't support multiple folders ***
@@ -259,11 +288,15 @@ export class LspServer {
     // }
   }
 
+  // *** think about cancellation token support ***
   private updateProjects(diagnostics = false) {
     for (let i = 0; i < this.projects.length; i += 1) {
       this.projects[i].update()
       // TODO: something else?
     }
+
+    // *** send message that semantic tokens need refresh ***
+    // this.connection.sendNotification("workspace/semanticTokens/refresh")
   }
 
   private addFileProject(path: string, temporary: boolean): LspProject | undefined {
@@ -471,7 +504,8 @@ export class LspServer {
           const token = statement.getTokenAt(params.position.character)
           if (token && token.symbol) {
             const dstStatement = token.symbol.sourceFile.statements[token.symbol.lineNumber]
-            const dstToken = dstStatement.tokens[0]
+            const dstTokens = dstStatement.getTokens()
+            const dstToken = dstTokens[0]
             let range: lsp.Range = {
               start: { line: token.symbol.lineNumber, character: dstToken.start },
               end: { line: token.symbol.lineNumber, character: dstToken.end }
@@ -583,7 +617,7 @@ export class LspServer {
 
         if (token.type == TokenType.Symbol) {
           // if local, may need to build and find full name
-          const str = statement.getTokenString(token);
+          const str = token.getString()
           // (will eventually require walk across projects/ENT files)
           const symbol = sourceFile.module.symbols.find(str);
           if (symbol !== undefined) {
@@ -613,8 +647,9 @@ export class LspServer {
             const module = sourceFile.module
             module.sourceFiles.forEach((sourceFile: asm.SourceFile) => {
               sourceFile.statements.forEach((refStatement: stm.Statement, refIndex: number) => {
-                for (let i = 0; i < refStatement.tokens.length; i += 1) {
-                  const refToken = refStatement.tokens[i]
+                const refTokens = refStatement.getTokens()
+                for (let i = 0; i < refTokens.length; i += 1) {
+                  const refToken = refTokens[i]
                   if (refToken.symbol == token.symbol) {
                     let location: lsp.Location = {
                       uri: URI.file(sourceFile.path).toString(),
@@ -643,9 +678,10 @@ export class LspServer {
     const diagnostics: lsp.Diagnostic[] = [];
     for (let i = 0; i < sourceFile.statements.length; i += 1) {
       const statement = sourceFile.statements[i];
+      const tokens = statement.getTokens()
       // TODO: mark statement with error and skip token scan here
-      for (let j = 0; j < statement.tokens.length; j += 1) {
-        const token = statement.tokens[j];
+      for (let j = 0; j < tokens.length; j += 1) {
+        const token = tokens[j];
         if (token.errorType != TokenErrorType.None) {
           let severity: lsp.DiagnosticSeverity;
           switch (token.errorType) {
@@ -696,62 +732,87 @@ export class LspServer {
       return { data: [] };
     }
 
+    // export enum SemanticToken {
+    //   invalid   = 0,
+    //   comment   = 1,
+    //   string    = 2,
+    //   number    = 3,
+    //   operator  = 4,
+    //   keyword   = 5,
+    //   label     = 6,
+    //   macro     = 7,
+    
+    //   opcode    = 8,
+    //   constant  = 9,
+    //   zpage     = 10,
+    //   var       = 11
+    // }
+    
+    // export enum SemanticModifier {
+    //   local     = 0,
+    //   global    = 1,
+    //   external  = 2,
+    //   unused    = 3
+    // }
+    
     const data: number[] = [];
     const statements = sourceFile.statements;
     let prevLine = 0;
     for (let i = 0; i < statements.length; i += 1) {
       const statement = statements[i];
+      const tokens = statement.getTokens()
       let prevStart = 0;
-      for (let j = 0; j < statement.tokens.length; j += 1) {
-        const token = statement.tokens[j];
-        let index;
-
+      for (let j = 0; j < tokens.length; j += 1) {
+        let index = -1
+        let bits = 0
+        const token = tokens[j];
         if (token.type == TokenType.Comment) {
-          index = 0;
+          index = SemanticToken.comment
         } else if (token.type == TokenType.Keyword) {
-          index = 2;
+          index = SemanticToken.keyword
         } else if (token.type == TokenType.Opcode) {
-          index = 3;
+          index = SemanticToken.opcode
         } else if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
           if (token.symbol !== undefined) {
             if (token.symbol.type === undefined) {
-              index = 4
+              index = SemanticToken.label
             } else if (token.symbol.type == SymbolType.Constant) {
-              index = 2   // TODO: change
+              index = SemanticToken.constant
             } else if (token.symbol.type == SymbolType.ZPage) {
-              index = -1
-            } else {
-              index = -1
+              index = SemanticToken.zpage
             }
-          } else {
-            index = -1
+            // *** apply unused ***
+            // *** apply global and/or external ***
           }
-        } else if (token.type == TokenType.LocalLabel) {
-          index = 5;
+        } else if (token.type == TokenType.LocalLabel
+          || token.type == TokenType.LocalLabelPrefix) {
+          index = SemanticToken.label
+          bits |= (1 << SemanticModifier.local)
+          // *** apply unused ***
         } else if (token.type == TokenType.Operator) {
-          index = 6;
+          index = SemanticToken.operator
         } else if (token.type == TokenType.Macro) {
-          index = 7;
+          index = SemanticToken.macro
         } else if (token.type == TokenType.DecNumber ||
             token.type == TokenType.HexNumber) {
-          if ((statement as stm.OpStatement) && statement.type == "HEX") {
-            // TODO: maybe a different color for long HEX AAAAAAAA statements?
-            index = -1
-          } else {
-            index = 8
-          }
-        } else if (token.type == TokenType.Variable) {
-          index = 2;    // TODO: change this
-        } else if (token.type == TokenType.FileName) {    // TODO: something else
-          index = 9;
-        } else if (token.type == TokenType.String) {      // TODO: something else
-          index = 9;
+          // if ((statement instanceof xxx.OpStatement) && statement.type == "HEX") {
+          //   // TODO: maybe a different color for long HEX AAAAAAAA statements?
+          // } else {
+            index = SemanticToken.number
+          // }
+        } else if (token.type == TokenType.Variable
+          || token.type == TokenType.VariablePrefix) {
+          index = SemanticToken.var
+        } else if (token.type == TokenType.FileName) {
+          index = SemanticToken.string                  // TODO: something else
+        } else if (token.type == TokenType.String) {
+          index = SemanticToken.string
         } else {
-          index = 10;
+          index = SemanticToken.invalid
         }
 
         if (index >= 0) {
-          data.push(i - prevLine, token.start - prevStart, token.length, index, 0)
+          data.push(i - prevLine, token.start - prevStart, token.length, index, bits)
           prevStart = token.start
           prevLine = i
         }
@@ -761,8 +822,10 @@ export class LspServer {
     return { data: data }
   }
 
-  // TODO: bother supporting this?
   async onSemanticTokensRange(params: lsp.SemanticTokensRangeParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
+    
+    // *** add this (change client setting too) ***
+    
     return { data: [] };
   }
 
@@ -773,13 +836,15 @@ export class LspServer {
     let startLine = atLine;
     while (startLine > 0) {
       startLine -= 1;
-      const statement = atFile.statements[startLine];
+      const statement = atFile.statements[startLine]
+      const tokens = statement.getTokens()
+
       // include empty statements
-      if (statement.tokens.length == 0) {
+      if (tokens.length == 0) {
         continue;
       }
       // stop when first non-comment statement found
-      if (statement.tokens[0].type != TokenType.Comment) {
+      if (tokens[0].type != TokenType.Comment) {
         startLine += 1;
         break;
       }

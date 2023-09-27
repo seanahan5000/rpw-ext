@@ -1,15 +1,9 @@
 
 import {
 	createConnection,
-	// TextDocuments,
-	Diagnostic,
-	DiagnosticSeverity,
 	ProposedFeatures,
 	InitializeParams,
 	DidChangeConfigurationNotification,
-	// CompletionItem,
-	// CompletionItemKind,
-	// TextDocumentPositionParams,
 	TextDocumentSyncKind,
 	InitializeResult,
 } from 'vscode-languageserver/node';
@@ -87,17 +81,22 @@ connection.onInitialize((params: InitializeParams) => {
 		documentSelector: ['rpw65'],
 		legend: {
 			tokenTypes: [
-				"comment",		// 0
-				"string",			// 1
-				"keyword",		// 2
-				"opcode",			// 3
-				"label",			// 4
-				"local",			// 5
-				"operator",		// 6
-				"macro",			// 7
-				"number",			// 8
-				"unused2",		// 9
-				"invalid" 		// 10
+				"invalid",   // 0
+				"comment",   // 1
+				"string",    // 2
+				"number",    // 3
+				"operator",  // 4
+				"keyword",   // 5
+				"label",     // 6
+				"macro",     // 7
+
+				"opcode",    // 8
+				"constant",  // 9
+				"zpage",     // 10
+				"var"        // 11
+
+				// "comment.line.semicolon.rpw65"
+				// "keyword.control.opcode.rpw65"
 
 				// 'operator',
 				// 'class',
@@ -114,16 +113,21 @@ connection.onInitialize((params: InitializeParams) => {
 				// 'member',
 			],
 			tokenModifiers: [
-				'declaration',
-				'static',
-				'async',
-				'readonly',
-				'defaultLibrary',
-				'local',
+				"local",
+				"global",
+				"external",
+				"unused"
+
+				// 'declaration',
+				// 'static',
+				// 'async',
+				// 'readonly',
+				// 'defaultLibrary',
+				// 'local',
 			],
 		},
 		full: true,
-		// TODO: bother supporting this?
+		//*** supporting this
 		range: false
 	};
 

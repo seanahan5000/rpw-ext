@@ -128,3 +128,6 @@
 
 // TODO (low-priority)
 //  - add folding ranges for all non-local symbol scopes
+
+// - hover over a label reference hilites definition?
+//  - particularly for local labels?

@@ -1,8 +1,9 @@
 
 import * as fs from 'fs'
-import * as par from "./parser"
-import * as stm from "./statements"
+import * as par from "./x_parser"
+import * as stm from "./x_statements"
 import * as sym from "./symbols"
+import * as xxx from "./x_expressions"
 
 export type RpwModule = {
   srcbase: string,
@@ -21,9 +22,8 @@ export type LineRecord = {
 }
 
 
-
-// *** where are vscode column markers?
-// *** check my keyboard shortcuts
+// *** where are vscode column markers? ***
+// *** check my keyboard shortcuts ***
 
 
 // *** Project class should hold all Modules for entire project, in build order
@@ -98,10 +98,17 @@ export class Module {
   private sourceDir: string
   private startFile: string
   public symbols = new sym.Symbols()
+
+  //*** separate list of exported symbols (also in this.symbols)
+  //*** when creating xxx = $ffff symbols, search all other module exports and link
+    //*** linked symbol needs file/line information or linkage
+  //*** list of imported symbols, linked to this.symbols from import file
+
   // TODO: vars list?
 
   // list of files used to assemble this module, in include order,
   //  possibly containing multiple SourceFiles that reference the same text document
+  // *** maintain list of unique files ***
   public sourceFiles: SourceFile[] = []
 
   // list of all statements for the module, in assembly order, including macro expansions
@@ -123,26 +130,26 @@ export class Module {
 
     // link up all symbols
     // TODO: move to assembler?
-    for (let i = 0; i < this.lineRecords.length; i += 1) {
-      const statement = this.lineRecords[i].statement
-      if (statement && statement.tokens) {
-        for (let j = 0; j < statement.tokens.length; j += 1) {
-          const token = statement.tokens[j]
-          if (token.type == par.TokenType.Symbol && !token.symbol) {
-            const str = statement.getTokenString(token)
-            const symbol = this.symbols.find(str)
-            if (symbol) {
-              token.symbol = symbol
-              // *** add reference in symbol to statement/token? ***
-            }
-          }
-        }
-      }
-    }
+    // for (let i = 0; i < this.lineRecords.length; i += 1) {
+    //   const statement = this.lineRecords[i].statement
+    //   if (statement && statement.tokens) {
+    //     for (let j = 0; j < statement.tokens.length; j += 1) {
+    //       const token = statement.tokens[j]
+    //       if (token.type == par.TokenType.Symbol && !token.symbol) {
+    //         const str = statement.getTokenString(token)
+    //         const symbol = this.symbols.find(str)
+    //         if (symbol) {
+    //           token.symbol = symbol
+    //           // *** add reference in symbol to statement/token? ***
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
     // give OpStatement a chance to infer symbol types
-    for (let i = 0; i < this.lineRecords.length; i += 1) {
-      this.lineRecords[i].statement?.postParse()
-    }
+    // for (let i = 0; i < this.lineRecords.length; i += 1) {
+    //   this.lineRecords[i].statement?.postParse()
+    // }
   }
 
   private buildFullSourcePath(fileName: string): string {
@@ -175,17 +182,45 @@ export class Module {
       }
     }
     const sourceFile = new SourceFile(this, fullPath, lines)
+    // *** skip duplicates? ***
     this.sourceFiles.push(sourceFile)
     return sourceFile
   }
 
   // NOTE: only returns first match
+  // *** shared? ***
   findSourceFile(path: string): SourceFile | undefined {
     for (let i = 0; i < this.sourceFiles.length; i += 1) {
       if (this.sourceFiles[i].path == path) {
         return this.sourceFiles[i]
       }
     }
+  }
+
+  addSymbol(symbol: sym.Symbol): boolean {
+
+    if (!this.symbols.add(symbol)) {
+      if (!symbol.sourceFile.isShared) {
+    //   token.setError("Duplicate symbol")
+        return false
+      }
+      // *** shared symbol -- should use existing symbol? ***
+      return true
+    }
+
+    // if (!this.symbols.add(symbol)) {
+    //   token.setError("Duplicate symbol")
+    //   *** remove symbol from token? ***
+    //   // *** somehow link this symbol to the previous definition?
+    // } else {
+
+    // ***
+    return true
+  }
+
+  findSymbol(name: string): sym.Symbol | undefined {
+    // ***
+    return
   }
 }
 
@@ -194,6 +229,7 @@ export class SourceFile {
   public module: Module
   public path: string
   public lines: string[]
+  public isShared: boolean
 
   // statements for just this file, one per line
   public statements: stm.Statement[] = []
@@ -202,6 +238,7 @@ export class SourceFile {
     this.module = module
     this.path = path
     this.lines = lines
+    this.isShared = false
   }
 }
 
