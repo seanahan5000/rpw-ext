@@ -1,14 +1,16 @@
 
 import { Token } from "./tokenizer"
+import { OpDef, Op } from "./syntax"
+
+export type TokenExpressionSet = (Token | Expression)[]
 
 //------------------------------------------------------------------------------
 
 export class Expression {
 
-  //*** parent: Expression?
-  public children: (Token | Expression)[] = []
+  public children: TokenExpressionSet = []
 
-  constructor(children?: (Token | Expression)[]) {
+  constructor(children?: TokenExpressionSet) {
     if (children) {
       this.children = children
     }
@@ -17,8 +19,8 @@ export class Expression {
   // return flat list of tokens for this expression and sub-expressions
   getTokens(): Token[] {
     const result: Token[] = []
-    // *** don't use forEach ***
-    this.children?.forEach((child: Token | Expression) => {
+    for (let i = 0; i < this.children.length; i += 1) {
+      const child = this.children[i]
       if (child instanceof Expression) {
         if (child.children) {
           result.push(...child.getTokens())
@@ -26,41 +28,38 @@ export class Expression {
       } else {
         result.push(child)
       }
-    })
+    }
     return result
   }
 
   // return token containing character position
+  // *** needs to return parent expression ***
   getTokenAt(ch: number): Token | undefined {
-    if (this.children) {
-      for (let i = 0; i < this.children.length; i += 1) {
-        const child = this.children[i]
-        if (child instanceof Expression) {
-          const token = child.getTokenAt(ch)
-          if (token) {
-            return token
-          }
-        } else {
-          if (ch < child.start) {
-            return
-          }
-          if (ch < child.end) {
-            return child
-          }
+    for (let i = 0; i < this.children.length; i += 1) {
+      const child = this.children[i]
+      if (child instanceof Expression) {
+        const token = child.getTokenAt(ch)
+        if (token) {
+          return token
+        }
+      } else {
+        if (ch < child.start) {
+          return
+        }
+        if (ch < child.end) {
+          return child
         }
       }
     }
   }
 
-  // TODO: should this return a token?
+  // TODO: should this return a token/expression?
   // TODO: somebody should call this
   hasError(): boolean {
-    if (this.children) {
-      for (let i = 0; i < this.children.length; i += 1) {
-        // NOTE: both Expression and Token have hasError method
-        if (this.children[i].hasError()) {
-          return true
-        }
+    for (let i = 0; i < this.children.length; i += 1) {
+      // NOTE: both Expression and Token have hasError method
+      if (this.children[i].hasError()) {
+        return true
       }
     }
     return false
@@ -104,8 +103,8 @@ export class NumberExpression extends Expression {
   private value: number
   private force16: boolean
 
-  constructor(tokens: Token[], value: number, force16: boolean) {
-    super(tokens)
+  constructor(children: TokenExpressionSet, value: number, force16: boolean) {
+    super(children)
     this.value = value
     this.force16 = force16
   }
@@ -121,13 +120,37 @@ export class NumberExpression extends Expression {
 
 //------------------------------------------------------------------------------
 
+export class ParenExpression extends Expression {
+
+  private arg: Expression | undefined
+
+  // [left paren, expression, right paren]
+  constructor(children: TokenExpressionSet) {
+    super(children)
+
+    if (children[1] instanceof Expression) {
+      this.arg = children[1]
+    }
+  }
+
+  resolve(): number | undefined {
+    return this.arg?.resolve()
+  }
+
+  getSize(): number | undefined {
+    return this.arg?.getSize()
+  }
+}
+
+//------------------------------------------------------------------------------
+
 export class StringExpression extends Expression {
 
-  // Tokens contains all segments of the string,
+  // TokenExpressionSet contains all segments of the string,
   //  including quotes and escape codes.
-  constructor(tokens: Token[]) {
-    super(tokens)
-  }
+  // constructor(children: TokenExpressionSet) {
+  //   super(children)
+  // }
 
   // only resolve if string is a single character (string literal)
   resolve(): number | undefined {
@@ -163,8 +186,15 @@ export class LabelExpression extends Expression {
   // getSize
 }
 
+// *** currently this is a reference to a symbol ***
 export class SymbolExpression extends Expression {
   // *** put symbol here instead of in token
+
+  constructor(fullName: string, token: Token) {
+    super([token])
+    // this.fullName = fullName
+    // this.token = token
+  }
 
   // resolve
   // getSize
@@ -173,34 +203,57 @@ export class SymbolExpression extends Expression {
 //------------------------------------------------------------------------------
 
 export class UnaryExpression extends Expression {
-  private op: string
+  private opType: Op
   private arg: Expression
 
-  constructor(opToken: Token, arg: Expression) {
+  constructor(opToken: Token, opType: Op, arg: Expression) {
     super([opToken, arg])
-
-    // for convenience
-    this.op = opToken.getString()
+    this.opType = opType
     this.arg = arg
   }
 
   resolve(): number | undefined {
     let value = this.arg.resolve()
     if (value !== undefined) {
-      if (this.op == ">" || this.op == "/") {   //*** "/" LISA-only
-        value = (value >> 8) & 255
-      } else if (this.op == "<") {
-        value = value & 255
-      } else if (this.op == "-") {
-        value = -value
+      switch (this.opType) {
+        case Op.Neg:
+          value = -value
+          break
+        case Op.Pos:
+          // TODO: check that this is correct (maybe absolute value?)
+          value = value
+          break
+        case Op.LogNot:
+          value = value ? 1 : 0
+          break
+        case Op.BitNot:
+          value = ~value
+          break
+        case Op.LowByte:
+          value = value & 255
+          break
+        case Op.HighByte:
+          value = (value >> 8) & 255
+          break
+        case Op.BankByte:
+          value = (value >> 16) & 255
+          break
       }
     }
     return value
   }
 
   getSize(): number | undefined {
-    if (this.op == ">" || this.op == "<" || this.op == "/") {
-      return 1
+    switch (this.opType) {
+      case Op.Neg:
+      case Op.Pos:
+      case Op.LogNot:
+      case Op.BitNot:
+        break
+      case Op.LowByte:
+      case Op.HighByte:
+      case Op.BankByte:
+        return 1
     }
     // TODO: use resolved value to determine size (does -value change size?)
     return this.arg.getSize()
@@ -209,44 +262,91 @@ export class UnaryExpression extends Expression {
 
 //------------------------------------------------------------------------------
 
-// TODO: need operator precedence for some syntaxes
-
 export class BinaryExpression extends Expression {
   private arg1: Expression
-  private op: string
+  private opType: Op
   private arg2: Expression
 
-  constructor(arg1: Expression, opToken: Token, arg2: Expression) {
+  constructor(arg1: Expression, opToken: Token, opType: Op, arg2: Expression) {
     super([arg1, opToken, arg2])
-
-    // TODO: needed convenience?
     this.arg1 = arg1
-    this.op = opToken.getString()
+    this.opType = opType
     this.arg2 = arg2
   }
 
   resolve(): number | undefined {
     let value: number | undefined
     let value1 = this.arg1.resolve()
-    let value2 = this.arg1.resolve()
+    let value2 = this.arg2.resolve()
     if (value1 !== undefined && value2 !== undefined) {
-      // TODO: handle these differently based on syntax
-      if (this.op == "+") {
-        value = value1 + value2
-      } else if (this.op == "-") {
-        value = value1 - value2
-      } else if (this.op == "*") {
-        value = value1 * value2
-      } else if (this.op == "/") {
-        value = Math.floor(value1 / value2)
-      } else if (this.op == "!") {
-        value = value1 ^ value2
-      } else if (this.op == ".") {    // *** only merlin (already filtered?) ***
-        value = value1 | value2
-      } else if (this.op == "&") {
-        value = value1 & value2
-      } else if (this.op == "=") {
-        value = value1 == value2 ? 1 : 0
+      switch (this.opType) {
+        case Op.Pow:
+          value = Math.pow(value1, value2)
+          break
+        case Op.Mul:
+          value = value1 * value2
+          break
+        case Op.FDiv:
+          value = value1 / value2
+          break
+        case Op.IDiv:
+          value = Math.floor(value1 / value2)
+          break
+        case Op.Mod:
+          value = value1 % value2
+          break
+        case Op.Add:
+          value = value1 + value2
+          break
+        case Op.Sub:
+          value = value1 - value2
+          break
+        case Op.ASL:
+          value = value1 << value2
+          break
+        case Op.ASR:
+          value = value1 >> value2
+          break
+        case Op.LSR:
+          // TODO: is this the right limit?
+          value = (value1 & 0xFFFF) >> value2
+          break
+        case Op.LT:
+          value = value1 < value2 ? 1 : 0
+          break
+        case Op.LE:
+          value = value1 <= value2 ? 1 : 0
+          break
+        case Op.GT:
+          value = value1 > value2 ? 1 : 0
+          break
+        case Op.GE:
+          value = value1 >= value2 ? 1 : 0
+          break
+        case Op.NE:
+          value = value1 != value2 ? 1 : 0
+          break
+        case Op.EQ:
+          value = value1 == value2 ? 1 : 0
+          break
+        case Op.BitAnd:
+          value = value1 & value2
+          break
+        case Op.BitXor:
+          value = value1 ^ value2
+          break
+        case Op.BitOr:
+          value = value1 | value2
+          break
+        case Op.LogAnd:
+          value = value1 && value2 ? 1 : 0
+          break
+        case Op.LogXor:
+          value = (value1 && value2) || (!value1 && !value2) ? 1 : 0
+          break
+        case Op.LogOr:
+          value = value1 || value2 ? 1 : 0
+          break
       }
     }
     return value
@@ -276,8 +376,8 @@ export class PcExpression extends Expression {
   private value: number | undefined
 
   // TODO: pass in PC address source?
-  constructor(/*token: Token*/) {
-    super([/*token*/])
+  constructor(token?: Token) {
+    super(token ? [token] : undefined)
   }
 
   resolve(): number | undefined {
@@ -296,8 +396,8 @@ export class PcExpression extends Expression {
 
 export class VarExpression extends Expression {
 
-  // first token is bracket, second is name
-  constructor(children: (Token | Expression)[]) {
+  // first token in set is bracket, second is name
+  constructor(children: TokenExpressionSet) {
     super(children)
   }
 
@@ -309,6 +409,39 @@ export class VarExpression extends Expression {
   getSize(): number | undefined {
     // TODO: what should this method do?
     return
+  }
+}
+
+//------------------------------------------------------------------------------
+
+export class AlignExpression extends Expression {
+
+  private value: number | undefined
+  private alignment: Expression
+  private pc: PcExpression
+
+  // TODO: expression might be different based on syntax
+  constructor(alignment: Expression) {
+    super()
+    this.alignment = alignment
+    this.pc = new PcExpression()
+  }
+
+  resolve(): number | undefined {
+    if (this.value === undefined) {
+      let pc = this.pc.resolve()
+      if (pc !== undefined) {
+        let align = this.alignment.resolve()
+        if (align !== undefined) {
+          this.value = pc % align
+        }
+      }
+    }
+    return this.value
+  }
+
+  getSize(): number | undefined {
+    return this.resolve()
   }
 }
 

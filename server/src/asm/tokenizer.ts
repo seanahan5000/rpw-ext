@@ -1,16 +1,7 @@
 
-//------------------------------------------------------------------------------
+import { Syntax } from "./syntax"
 
-// NOTE: must be consistent with ordering in keywords.ts
-export enum Syntax {
-  UNKNOWN = 0,    // must be zero
-  MERLIN  = 1,
-  DASM    = 2,
-  CA65    = 3,
-  ACME    = 4,
-  LISA    = 5,
-  SBASM   = 6,
-}
+//------------------------------------------------------------------------------
 
 export enum TokenType {
   Null,         // *** necessary?
@@ -152,7 +143,7 @@ export class Tokenizer {
   private skipWhitespace() {
     while (this.position < this.sourceLine.length) {
       const c = this.sourceLine[this.position]
-      if (c != " " && c != "\t") {    // *** no tabs? ***
+      if (c != " " && c != "\t") {
         break
       }
       this.position += 1
@@ -168,7 +159,7 @@ export class Tokenizer {
           return
         }
         const prevChar = this.sourceLine[this.position - 1]
-        if (prevChar == " " || prevChar == "\t") {  // *** no tabs?
+        if (prevChar == " " || prevChar == "\t") {
           return
         }
       }
@@ -176,7 +167,7 @@ export class Tokenizer {
     }
   }
 
-  private getVeryNextToken(): Token | undefined {
+  getVeryNextToken(): Token | undefined {
     let sawDigit = false
     let sawHex = false
     let sawSymbol = false
@@ -185,22 +176,24 @@ export class Tokenizer {
 
     while (this.position < this.sourceLine.length) {
 
+      const char = this.sourceLine[this.position]
       const code = this.sourceLine.charCodeAt(this.position)
 
       // For tokenizing purposes, the start of a comment is treated as the
       //  end of the line.  Statement parsing will trim off the comment later.
-      if (code == 0x3B) { // ';'
+      // TODO: check for C-style "/*" comment start?
+      if (char == ";") {
         if (this.position == 0) {
           break
         }
-        // TODO: checking for space may be syntax-specific
+        // TODO: checking for space may be syntax-specific (Merlin-only?)
         const prevChar = this.sourceLine[this.position - 1]
-        if (prevChar == " " || prevChar == "\t") {    // *** no tabs?
+        if (prevChar == " " || prevChar == "\t") {
           break
         }
       }
 
-      if (code == 0x20 || code == 0x09) { // <space> or <tab>
+      if (char == " " || char == "\t") {
         break
       }
 
@@ -219,7 +212,7 @@ export class Tokenizer {
 
       if ((code >= 0x47 && code <= 0x5A) ||		// G-Z
           (code >= 0x67 && code <= 0x7A) ||		// g-z
-           code == 0x5F) {										// _
+           char == "_") {
         sawSymbol = true
         this.position += 1
         continue
@@ -227,7 +220,7 @@ export class Tokenizer {
 
       // TODO: Merlin allows symbols to contain any character > ':'
       //	Specifically, "?" is used in some assembly code.
-      if (code == 0x3F) { // '?'
+      if (char == "?") {
         if (!this.syntax || this.syntax == Syntax.MERLIN) {
           sawSymbol = true
           this.position += 1
@@ -236,7 +229,7 @@ export class Tokenizer {
       }
 
       // several non-Merlin assemblers support '.' in symbols
-      if (code == 0x2E) { // '.'
+      if (char == ".") {
         // TODO: constrain this to the specific subset of assemblers
         if (!this.syntax || this.syntax != Syntax.MERLIN) {
           sawSymbol = true
@@ -250,27 +243,31 @@ export class Tokenizer {
         this.position += 1
 
         // collect repeats of same operator into single token
-        //  (<<<, >>>, <<, >>, ++, +++, --, ---, etc.)
-        while (this.position < this.sourceLine.length) {
-          const nextCode = this.sourceLine.charCodeAt(this.position + 1)
-          if (nextCode != code) {
-            break
+        const repeatIndex = "=&|><+-".indexOf(char)
+        if (repeatIndex != -1) {
+          while (this.position < this.sourceLine.length) {
+            if (this.sourceLine[this.position] != char) {
+              break
+            }
+            this.position += 1
+            if (repeatIndex < 3) {
+              break
+            }
           }
-          this.position += 1
         }
 
-        // combine some comparison operators (>=, <=, !=, <>)
+        // combine some comparison operators (!=, >=, <=, <>, ><)
         if (this.position < this.sourceLine.length) {
           if (this.position - start == 1) {
-            const nextCode = this.sourceLine.charCodeAt(this.position + 1)
-            if (nextCode == 0x3D) { // '='
-              if (code == 0x21 || code == 0x3C || code == 0x3D) { // '!', '<', '>'
+            const nextChar = this.sourceLine[this.position + 1]
+            if (nextChar == "=") {
+              if ("!><".indexOf(char) != -1) {
                 this.position += 1
               }
-            } else if (nextCode == 0x3E) { // '>'
-              if (code == 0x3C) { // '<'
-                this.position += 1
-              }
+            } else if (char == ">" && nextChar == "<") {
+              this.position += 1
+            } else if (char == "<" && nextChar == ">") {
+              this.position += 1
             }
           }
         }

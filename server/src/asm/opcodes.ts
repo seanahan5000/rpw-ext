@@ -1,6 +1,6 @@
 
 export const Opcodes6502 = {
-	"ADC": {
+	"adc": {
 		"IMM" : 0x69,
 		"ZP"  : 0x65,
 		"ZPX" : 0x75,
@@ -10,7 +10,7 @@ export const Opcodes6502 = {
 		"INDX": 0x61,
 		"INDY": 0x71
 	},
-	"AND": {
+	"and": {
 		"IMM" : 0x29,
 		"ZP"  : 0x25,
 		"ZPX" : 0x35,
@@ -20,7 +20,7 @@ export const Opcodes6502 = {
 		"INDX": 0x21,
 		"INDY": 0x31
 	},
-	"ASL": {
+	"asl": {
 		"NONE": 0x0A,
 		"A"   : 0x0A,
 		"ZP"  : 0x06,
@@ -28,59 +28,59 @@ export const Opcodes6502 = {
 		"ABS" : 0x0E,
 		"ABSX": 0x1E
 	},
-	"BCC": {
+	"bcc": {
 		"BRAN": 0x90
 	},
-	"BCS": {
+	"bcs": {
 		"BRAN": 0xB0
 	},
-	"BEQ": {
+	"beq": {
 		"BRAN": 0xF0
 	},
-	"BGE": {				// alias of BCS
+	"bge": {				// alias of BCS
 		"BRAN": 0xB0
 	},
-	"BIT": {
+	"bit": {
 		"ZP"  : 0x24,
 		"ABS" : 0x2C
 	},
-	"BLT": {				// alias of BCC
+	"blt": {				// alias of BCC
 		"BRAN": 0x90
 	},
-	"BMI": {
+	"bmi": {
 		"BRAN": 0x30
 	},
-	"BNE": {
+	"bne": {
 		"BRAN": 0xD0
 	},
-	"BPL": {
+	"bpl": {
 		"BRAN": 0x10
 	},
-	// "BRA": {
+	// "bra": {
 	// 	OPC(BRAN: 0x80)		// 65C02
 	// },
-	"BRK": {
+	"brk": {
 		"NONE": 0x00
 	},
-	"BVC": {
+	"bvc": {
 		"BRAN": 0x50
 	},
-	"BVS": {
+	"bvs": {
 		"BRAN": 0x70
 	},
-	"CLC": {
+	"clc": {
 		"NONE": 0x18
 	},
-	"CLD": {
+	"cld": {
 		"NONE": 0xD8
 	},
-	"CLI": {
+	"cli": {
 		"NONE": 0x58
 	},
-	"CLV": {
+	"clv": {
 		"NONE": 0xB8
 	},
-	"CMP": {
+	"cmp": {
 		"IMM" : 0xC9,
 		"ZP"  : 0xC5,
 		"ZPX" : 0xD5,
@@ -90,17 +90,17 @@ export const Opcodes6502 = {
 		"INDX": 0xC1,
 		"INDY": 0xD1
 	},
-	"CPX": {
+	"cpx": {
 		"IMM" : 0xE0,
 		"ZP"  : 0xE4,
 		"ABS" : 0xEC
 	},
-	"CPY": {
+	"cpy": {
 		"IMM" : 0xC0,
 		"ZP"  : 0xC4,
 		"ABS" : 0xCC
 	},
-	"DEC": {
+	"dec": {
 		// OPC(NONE: 0x3A)		// 65C02
 		// OPC(A   : 0x3A)		// 65C02
 		"ZP"  : 0xC6,
@@ -108,13 +108,13 @@ export const Opcodes6502 = {
 		"ABS" : 0xCE,
 		"ABSX": 0xDE
 	},
-	"DEX": {
+	"dex": {
 		"NONE": 0xCA
 	},
-	"DEY": {
+	"dey": {
 		"NONE": 0x88
 	},
-	"EOR": {
+	"eor": {
 		"IMM" : 0x49,
 		"ZP"  : 0x45,
 		"ZPX" : 0x55,
@@ -124,7 +124,7 @@ export const Opcodes6502 = {
 		"INDX": 0x41,
 		"INDY": 0x51
 	},
-	"INC": {
+	"inc": {
 		// OPC(NONE: 0x1A)		// 65C02
 		// OPC(A   : 0x1A)		// 65C02
 		"ZP"  : 0xE6,
@@ -132,20 +132,20 @@ export const Opcodes6502 = {
 		"ABS" : 0xEE,
 		"ABSX": 0xFE
 	},
-	"INX": {
+	"inx": {
 		"NONE": 0xE8
 	},
-	"INY": {
+	"iny": {
 		"NONE": 0xC8
 	},
-	"JMP": {
+	"jmp": {
 		"ABS" : 0x4C,
 		"IND" : 0x6C
 	},
-	"JSR": {
+	"jsr": {
 		"ABS" : 0x20
 	},
-	"LDA": {
+	"lda": {
 		"IMM" : 0xA9,
 		"ZP"  : 0xA5,
 		"ZPX" : 0xB5,
@@ -155,21 +155,21 @@ export const Opcodes6502 = {
 		"INDX": 0xA1,
 		"INDY": 0xB1
 	},
-	"LDX": {
+	"ldx": {
 		"IMM" : 0xA2,
 		"ZP"  : 0xA6,
 		"ZPY" : 0xB6,
 		"ABS" : 0xAE,
 		"ABSY": 0xBE
 	},
-	"LDY": {
+	"ldy": {
 		"IMM" : 0xA0,
 		"ZP"  : 0xA4,
 		"ZPX" : 0xB4,
 		"ABS" : 0xAC,
 		"ABSX": 0xBC
 	},
-	"LSR": {
+	"lsr": {
 		"NONE": 0x4A,
 		"A"   : 0x4A,
 		"ZP"  : 0x46,
@@ -177,10 +177,10 @@ export const Opcodes6502 = {
 		"ABS" : 0x4E,
 		"ABSX": 0x5E
 	},
-	"NOP": {
+	"nop": {
 		"NONE": 0xEA
 	},
-	"ORA": {
+	"ora": {
 		"IMM" : 0x09,
 		"ZP"  : 0x05,
 		"ZPX" : 0x15,
@@ -190,34 +190,34 @@ export const Opcodes6502 = {
 		"INDX": 0x01,
 		"INDY": 0x11
 	},
-	"PHA": {
+	"pha": {
 		"NONE": 0x48
 	},
-	"PHP": {
+	"php": {
 		"NONE": 0x08
 	},
-	// "PHX": {
+	// "phx": {
 	// 	OPC(NONE: 0xDA)		// 65C02
 	// },
-	// "PHY": {
+	// "phy": {
 	// 	OPC(NONE: 0x5A)		// 65C02
 	// },
-	"PLA": {
+	"pla": {
 		"NONE": 0x68
 	},
-	"PLP": {
+	"plp": {
 		"NONE": 0x28
 	},
-	// "PLX": {
+	// "plx": {
 	// 	OPC(NONE: 0xFA)		// 65C02
 	// },
-	// "PLY": {
+	// "ply": {
 	// 	OPC(NONE: 0x7A)		// 65C02
 	// },
-	// "REP": {
+	// "rep": {
 	// 	OPG(IMM,  0xC2)		// 65816
 	// },
-	"ROL": {
+	"rol": {
 		"NONE": 0x2A,
 		"A"   : 0x2A,
 		"ZP"  : 0x26,
@@ -225,7 +225,7 @@ export const Opcodes6502 = {
 		"ABS" : 0x2E,
 		"ABSX": 0x3E
 	},
-	"ROR": {
+	"ror": {
 		"NONE": 0x6A,
 		"A"   : 0x6A,
 		"ZP"  : 0x66,
@@ -233,13 +233,13 @@ export const Opcodes6502 = {
 		"ABS" : 0x6E,
 		"ABSX": 0x7E
 	},
-	"RTI": {
+	"rti": {
 		"NONE": 0x40
 	},
-	"RTS": {
+	"rts": {
 		"NONE": 0x60
 	},
-	"SBC": {
+	"sbc": {
 		"IMM" : 0xE9,
 		"ZP"  : 0xE5,
 		"ZPX" : 0xF5,
@@ -249,19 +249,19 @@ export const Opcodes6502 = {
 		"INDX": 0xE1,
 		"INDY": 0xF1
 	},
-	"SEC": {
+	"sec": {
 		"NONE": 0x38
 	},
-	"SED": {
+	"sed": {
 		"NONE": 0xF8
 	},
-	"SEI": {
+	"sei": {
 		"NONE": 0x78
 	},
-	// "SEP": {
+	// "sep": {
 	// 	OPG(IMM,  0xE2)		// 65816
 	// },
-	"STA": {
+	"sta": {
 		"ZP"  : 0x85,
 		"ZPX" : 0x95,
 		"ABS" : 0x8D,
@@ -270,49 +270,49 @@ export const Opcodes6502 = {
 		"INDX": 0x81,
 		"INDY": 0x91
 	},
-	"STX": {
+	"stx": {
 		"ZP"  : 0x86,
 		"ZPY" : 0x96,
 		"ABS" : 0x8E
 	},
-	"STY": {
+	"sty": {
 		"ZP"  : 0x84,
 		"ZPX" : 0x94,
 		"ABS" : 0x8C
 	},
-	// "STZ": {
+	// "stz": {
 	// 	OPC(ZP  : 0x64)		// 65C02
 	// 	OPC(ZPX : 0x74)		// 65C02
 	// 	OPC(ABS : 0x9C)		// 65C02
 	// 	OPC(ABSX: 0x9E)		// 65C02
 	// },
-	"TAX": {
+	"tax": {
 		"NONE": 0xAA
 	},
-	"TAY": {
+	"tay": {
 		"NONE": 0xA8
 	},
-	// "TRB": {
+	// "trb": {
 	// 	OPC(ZP  : 0x14)		// 65C02
 	// 	OPC(ABS : 0x1C)		// 65C02
 	// },
-	// "TSB": {
+	// "tsb": {
 	// 	OPC(ZP  : 0x04)		// 65C02
 	// 	OPC(ABS : 0x0C)		// 65C02
 	// },
-	"TSX": {
+	"tsx": {
 		"NONE": 0xBA
 	},
-	"TXA": {
+	"txa": {
 		"NONE": 0x8A
 	},
-	"TXS": {
+	"txs": {
 		"NONE": 0x9A
 	},
-	"TYA": {
+	"tya": {
 		"NONE": 0x98
 	},
-	// "XCE": {
+	// "xce": {
 	// 	OPG(NONE: 0xFB)		// 65816
 	// }
 }
