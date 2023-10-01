@@ -48,10 +48,6 @@ export class Token {
   public errorType: TokenErrorType
   public errorMessage?: string
 
-  // *** move to expression
-  // public symbol?: sym.Symbol    // *** do something with this
-  public symbol?: any   //***
-
   constructor(sourceLine: string, start: number, end: number, type: TokenType) {
     this.sourceLine = sourceLine
     this.start = start
@@ -107,9 +103,23 @@ export class Tokenizer {
     this.position = 0
   }
 
+  getPosition(): number {
+    return this.position
+  }
+
+  setPosition(position: number) {
+    this.position = position
+  }
+
   getNextToken(): Token | undefined {
+    // let start = this.position
     this.skipWhitespace()
-    return this.getVeryNextToken()
+    let token = this.getVeryNextToken()
+    // if (!token) {
+    //   // back up to before skipWhitespace
+    //   this.position = start
+    // }
+    return token
   }
 
   peekNextToken(): Token | undefined {
@@ -140,7 +150,7 @@ export class Tokenizer {
     return token
   }
 
-  private skipWhitespace() {
+  skipWhitespace() {
     while (this.position < this.sourceLine.length) {
       const c = this.sourceLine[this.position]
       if (c != " " && c != "\t") {
@@ -243,14 +253,15 @@ export class Tokenizer {
         this.position += 1
 
         // collect repeats of same operator into single token
-        const repeatIndex = "=&|><+-".indexOf(char)
+        const repeatIndex = "=&|:><+-".indexOf(char)
         if (repeatIndex != -1) {
           while (this.position < this.sourceLine.length) {
             if (this.sourceLine[this.position] != char) {
               break
             }
             this.position += 1
-            if (repeatIndex < 3) {
+            // limit "=&|:" to doubles only
+            if (repeatIndex < 4) {
               break
             }
           }
@@ -259,7 +270,7 @@ export class Tokenizer {
         // combine some comparison operators (!=, >=, <=, <>, ><)
         if (this.position < this.sourceLine.length) {
           if (this.position - start == 1) {
-            const nextChar = this.sourceLine[this.position + 1]
+            const nextChar = this.sourceLine[this.position]
             if (nextChar == "=") {
               if ("!><".indexOf(char) != -1) {
                 this.position += 1

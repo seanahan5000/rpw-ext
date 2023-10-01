@@ -41,7 +41,10 @@ export enum Op {
   BitOr,
   LogAnd,
   LogXor,
-  LogOr
+  LogOr,
+
+  // parens, brackets, braces
+  Group
 
   // TODO: maybe support Ternary for DASM?
 }
@@ -50,6 +53,7 @@ export type OpDef = {
   pre: number     // precedence
   op: Op
   ra?: boolean    // right associative
+  end?: string    // match to opening paren, etc.
 }
 
 export type KeywordDef = {
@@ -95,6 +99,10 @@ class UnknownSyntax extends SyntaxDef {
       [ ".HIBYTE",   { pre: 18, op: Op.HighByte }], // CA65-only
       [ "^",         { pre: 18, op: Op.BankByte }],
       [ ".BANKBYTE", { pre: 18, op: Op.BankByte }], // CA65-only
+
+      [ "(",         { pre: 0,  op: Op.Group, end: ")" }],
+      [ "[",         { pre: 0,  op: Op.Group, end: "]" }],
+      // [ "{",         { pre: 0,  op: Op.Group, end: "}" }],
     ])
 
     this.binaryOpMap = new Map<string, OpDef>([
@@ -184,6 +192,7 @@ class MerlinSyntax extends SyntaxDef {
 
       [ "mac",    {}],
       [ "eom",    {}],
+      [ "<<<",    {}],
       [ "dum",    {}],
       [ "dummy",  {}],
       [ "dend",   {}],

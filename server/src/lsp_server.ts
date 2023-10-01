@@ -5,9 +5,10 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { TokenType, TokenErrorType } from "./asm/tokenizer"
 import { LabelScanner } from "./asm/labels";
 import * as asm from "./asm/assembler";
+import * as exp from "./asm/x_expressions";
 import * as stm from "./asm/x_statements";
 import * as fs from 'fs';
-import { SymbolType } from "./asm/symbols";
+import { SymbolIs } from "./asm/symbols";
 
 //------------------------------------------------------------------------------
 
@@ -412,10 +413,10 @@ export class LspServer {
 
           // *** if token missed, look for token just before/after it ***
 
-          const token = statement.getTokenAt(params.position.character)
-          if (token) {
+          const res = statement.getExpressionAt(params.position.character)
+          if (res) {
             // no completions if in comments
-            if (token.type != TokenType.Comment) {
+            if (res.token.type != TokenType.Comment) {
 
               // if after opcode, allow items by op type
               // const hitIndex = statement.tokens.indexOf(token)
@@ -436,20 +437,20 @@ export class LspServer {
         if (includedTypes) {
           // *** exclude constants if in non-immediate opcode
           // *** watch out for errors and warnings?
-          sourceFile.module.symbols.map.forEach((value, key: string) => {
+          sourceFile.module.symbols.map.forEach((symbol, key: string) => {
 
             // *** consider adding source file name where found, in details ***
 
             // TODO: more here
 
             let item: lsp.CompletionItem
-            if (value.type == SymbolType.Constant) {
+            if (symbol.is == SymbolIs.Constant) {
               if (!(includedTypes & 1)) {
                 return
               }
               item = lsp.CompletionItem.create(key)
               item.kind = lsp.CompletionItemKind.Constant
-            } else if (value.type == SymbolType.ZPage) {
+            } else if (symbol.is == SymbolIs.ZPage) {
               if (!(includedTypes & 2)) {
                 return
               }
@@ -466,7 +467,7 @@ export class LspServer {
             // *** item.detail = "detail text"
             // *** item.labelDetails = { detail: " label det", description: "label det desc" }
 
-            item.data = { filePath: value.sourceFile.path, line: value.lineNumber }
+            item.data = { filePath: symbol.sourceFile.path, line: symbol.lineNumber }
             completions.push(item)
           })
         }
@@ -501,22 +502,29 @@ export class LspServer {
       if (sourceFile) {
         const statement = sourceFile.statements[params.position.line]
         if (statement) {
-          const token = statement.getTokenAt(params.position.character)
-          if (token && token.symbol) {
-            const dstStatement = token.symbol.sourceFile.statements[token.symbol.lineNumber]
-            const dstTokens = dstStatement.getTokens()
-            const dstToken = dstTokens[0]
-            let range: lsp.Range = {
-              start: { line: token.symbol.lineNumber, character: dstToken.start },
-              end: { line: token.symbol.lineNumber, character: dstToken.end }
+          const res = statement.getExpressionAt(params.position.character)
+          if (res && res.expression instanceof exp.SymbolExpression) {
+            const symbol = res.expression.symbol
+            if (symbol) {
+              // *** need sourceFile, lineNumber, expression (or range of characters) ***
+          //**********
+              const dstStatement = symbol.sourceFile.statements[symbol.lineNumber]
+              // *** don't just use flag tokens ***
+              const dstTokens = dstStatement.getTokens()
+              const dstToken = dstTokens[0]
+              let range: lsp.Range = {
+                start: { line: symbol.lineNumber, character: dstToken.start },
+                end: { line: symbol.lineNumber, character: dstToken.end }
+              }
+              // *** just use lsp.Definition instead? ***
+              let targetLink: lsp.DefinitionLink = {
+                targetUri: URI.file(symbol.sourceFile.path).toString(),
+                targetRange: range,
+                targetSelectionRange: range
+              }
+          //**********
+              return [ targetLink ]
             }
-            // *** just use lsp.Definition instead? ***
-            let targetLink: lsp.DefinitionLink = {
-              targetUri: URI.file(token.symbol.sourceFile.path).toString(),
-              targetRange: range,
-              targetSelectionRange: range
-            }
-            return [ targetLink ]
           }
         }
       }
@@ -610,23 +618,34 @@ export class LspServer {
 
     const statement = sourceFile.statements[params.position.line];
     if (statement) {
-      const token = statement.getTokenAt(params.position.character);
-      if (token) {
+      const hoverExp = statement.getExpressionAt(params.position.character);
+      if (hoverExp) {
 
         // *** TODO: if hovering over macro invocation, show macro contents ***
 
-        if (token.type == TokenType.Symbol) {
-          // if local, may need to build and find full name
-          const str = token.getString()
-          // (will eventually require walk across projects/ENT files)
-          const symbol = sourceFile.module.symbols.find(str);
-          if (symbol !== undefined) {
-            let header = this.getCommentHeader(symbol.sourceFile, symbol.lineNumber)
-            if (header) {
-              return { contents: header };
-            }
+        if (hoverExp instanceof exp.SymbolExpression) {
+
+          if (hoverExp.isDefinition) {
+            // *** show value of symbol, if resolved
+          } else {
+            // *** also show value, if resolved
+            // *** show header comments for symbol being referenced
           }
         }
+
+        // if (res.token.type == TokenType.Symbol) {
+        //   //*** if local, may need to build and find full name
+        //   const str = res.token.getString()
+        //   // (will eventually require walk across projects/ENT files)
+        //   // *** for now, just search global scope ***
+        //   const symbol = sourceFile.module.symbols.find(str)
+        //   if (symbol !== undefined) {
+        //     let header = this.getCommentHeader(symbol.sourceFile, symbol.lineNumber)
+        //     if (header) {
+        //       return { contents: header };
+        //     }
+        //   }
+        // }
       }
     }
 
@@ -634,6 +653,7 @@ export class LspServer {
   }
 
   // TODO: if symbol is an entry point, walk all modules of project
+  // *** fix this ***
   async onReferences(params: lsp.ReferenceParams, token?: lsp.CancellationToken): Promise<lsp.Location[]> {
     const locations: lsp.Location[] = []
     const filePath = pathFromUriString(params.textDocument.uri)
@@ -641,29 +661,39 @@ export class LspServer {
       const sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
         const statement = sourceFile.statements[params.position.line]
-        if (statement !== undefined) {
-          const token = statement.getTokenAt(params.position.character)
-          if (token && token.symbol) {
-            const module = sourceFile.module
-            module.sourceFiles.forEach((sourceFile: asm.SourceFile) => {
-              sourceFile.statements.forEach((refStatement: stm.Statement, refIndex: number) => {
-                const refTokens = refStatement.getTokens()
-                for (let i = 0; i < refTokens.length; i += 1) {
-                  const refToken = refTokens[i]
-                  if (refToken.symbol == token.symbol) {
-                    let location: lsp.Location = {
-                      uri: URI.file(sourceFile.path).toString(),
-                      range: {
-                        start: { line: refIndex, character: refToken.start },
-                        end: { line: refIndex, character: refToken.end }
-                      }
-                    }
-                    locations.push(location)
-                  }
-                }
-              })
-            })
-          }
+
+        // *** if MacroExpression
+        // *** if MacroName
+
+        // *** if SymbolExpression
+        const symbol = statement?.labelExp?.symbol
+        if (symbol) {
+          // *** walk symbol.references.forEach ***
+            // *** need souceFile, lineNumber, expression (or character range) ***
+
+          // const token = undefined //statement.getTokenAt(params.position.character)
+          // if (token /*&& token.symbol*/) {
+          //   const module = sourceFile.module
+          //   module.sourceFiles.forEach((sourceFile: asm.SourceFile) => {
+          //     sourceFile.statements.forEach((refStatement: stm.Statement, refIndex: number) => {
+          //       // *** don't just use flattened tokens ***
+          //       const refTokens = refStatement.getTokens()
+          //       for (let i = 0; i < refTokens.length; i += 1) {
+          //         const refToken = refTokens[i]
+          //         // if (refToken.symbol == token.symbol) {
+          //           let location: lsp.Location = {
+          //             uri: URI.file(sourceFile.path).toString(),
+          //             range: {
+          //               start: { line: refIndex, character: refToken.start },
+          //               end: { line: refIndex, character: refToken.end }
+          //             }
+          //           }
+          //           locations.push(location)
+          //         // }
+          //       }
+          //     })
+          //   })
+          // }
         }
       }
     }
@@ -773,17 +803,17 @@ export class LspServer {
         } else if (token.type == TokenType.Opcode) {
           index = SemanticToken.opcode
         } else if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
-          if (token.symbol !== undefined) {
-            if (token.symbol.type === undefined) {
+          // if (token.symbol !== undefined) {
+          //   if (token.symbol.type === undefined) {
               index = SemanticToken.label
-            } else if (token.symbol.type == SymbolType.Constant) {
-              index = SemanticToken.constant
-            } else if (token.symbol.type == SymbolType.ZPage) {
-              index = SemanticToken.zpage
-            }
-            // *** apply unused ***
-            // *** apply global and/or external ***
-          }
+          //   } else if (token.symbol.type == SymbolType.Constant) {
+          //     index = SemanticToken.constant
+          //   } else if (token.symbol.type == SymbolType.ZPage) {
+          //     index = SemanticToken.zpage
+          //   }
+          //   // *** apply unused ***
+          //   // *** apply global and/or external ***
+          // }
         } else if (token.type == TokenType.LocalLabel
           || token.type == TokenType.LocalLabelPrefix) {
           index = SemanticToken.label
@@ -805,7 +835,8 @@ export class LspServer {
           index = SemanticToken.var
         } else if (token.type == TokenType.FileName) {
           index = SemanticToken.string                  // TODO: something else
-        } else if (token.type == TokenType.String) {
+        } else if (token.type == TokenType.String
+          || token.type == TokenType.Quote) {
           index = SemanticToken.string
         } else {
           index = SemanticToken.invalid

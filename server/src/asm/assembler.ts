@@ -1,9 +1,9 @@
 
 import * as fs from 'fs'
+import * as sym from "./symbols"
 import * as par from "./x_parser"
 import * as stm from "./x_statements"
-import * as sym from "./symbols"
-import * as xxx from "./x_expressions"
+import * as exp from "./x_expressions"
 
 export type RpwModule = {
   srcbase: string,
@@ -218,7 +218,7 @@ export class Module {
     return true
   }
 
-  findSymbol(name: string): sym.Symbol | undefined {
+  findSymbol(name: string, scope: string): sym.Symbol | undefined {
     // ***
     return
   }
@@ -291,16 +291,20 @@ class FileReader {
 export class Assembler {
 
   public module: Module
+  private scopeState: sym.ScopeState
+
   //*** more default file handling behavior ***
   private fileReader: FileReader = new FileReader()
 
   constructor(module: Module) {
     this.module = module
+    this.scopeState = new sym.ScopeState()
   }
 
   // pass 0: parse all source files
 
   parse(fileName: string) {
+
     if (!this.includeFile(fileName)) {
       // *** handle error ***
     }
@@ -324,6 +328,12 @@ export class Assembler {
 
           const sourceLine = this.fileReader.state.file.lines[lineRecord.lineNumber]
           parser.parseStatement(lineRecord, sourceLine)
+
+          // process all possible symbols immediately
+          if (lineRecord.statement) {
+            this.processSymbols(lineRecord.statement)
+          }
+
           // *** error handling ***
           if (lineRecord.sourceFile.statements.length == lineRecord.lineNumber) {
             if (lineRecord.statement) {
@@ -342,7 +352,40 @@ export class Assembler {
 
     // *** parser and fileReader no longer needed ***
 
-    // *** link up all symbols ***
+    // process all remaining symbols
+    for (let i = 0; i < this.module.lineRecords.length; i += 1) {
+      const statement = this.module.lineRecords[i].statement
+      if (statement) {
+        this.processSymbols(statement)
+      }
+    }
+  }
+
+  // *** put in module instead? ***
+  private processSymbols(statement: stm.Statement) {
+    // *** maybe just stop on error while walking instead of walking twice
+    if (!statement.hasError()) {
+      statement.forEachExpression((expression) => {
+        if (expression instanceof exp.SymbolExpression) {
+          const symExp = expression
+          if (!symExp.fullName) {
+            symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+            const foundSym = this.module.symbols.find(symExp.fullName)
+            if (symExp.isDefinition && symExp.symbol) {
+              if (foundSym) {
+                // *** mark as duplicate
+                return
+              }
+              symExp.symbol.fullName = symExp.fullName
+              this.module.symbols.add(symExp.symbol)
+            } else if (foundSym) {
+              // *** add reference to symbol
+              symExp.symbol = foundSym
+            }
+          }
+        }
+      })
+    }
   }
 
   // *** should file reader be part of parser instead? ***

@@ -4,6 +4,7 @@ import { Token, TokenType } from "./tokenizer"
 // import { Expression, TokenExpressionSet } from "./x_expressions"
 import * as exp from "./x_expressions"
 import { Parser } from "./x_parser"
+import { SymbolType, SymbolFrom } from "./symbols"
 
 //------------------------------------------------------------------------------
 
@@ -11,9 +12,14 @@ export class Statement extends exp.Expression {
 
   public sourceLine: string = ""
 
-  init(sourceLine: string, children: exp.TokenExpressionSet) {
+  public labelExp?: exp.SymbolExpression
+  public opToken?: Token
+
+  init(sourceLine: string, opToken: Token | undefined, children: exp.TokenExpressionSet, labelExp?: exp.SymbolExpression) {
     this.sourceLine = sourceLine
+    this.opToken = opToken
     this.children = children
+    this.labelExp = labelExp
   }
 
   parse(parser: Parser) {
@@ -23,24 +29,16 @@ export class Statement extends exp.Expression {
     if (token) {
       const expression = parser.parseExpression(token)
       if (expression) {
-        this.children?.push(expression)
+        this.children.push(expression)
       }
     }
   }
 
-  // in children array: label, op, args, comment
-  // getLabel: Expression | undefined -- or just string?
-  // getOp: Expression | undefined -- or just string?
-  // getArgs: Expression | undefined
-
-  // *** resolve to array of bytes?
-
-  // resolve (?)
-  // getSize
-
-  // *** add getExpressionAt()?
+  // TODO: should any statement need resolve() or getSize()?
 }
 
+//------------------------------------------------------------------------------
+// Opcodes
 //------------------------------------------------------------------------------
 
 enum OpMode {
@@ -68,6 +66,8 @@ export class OpStatement extends Statement {
     super()
     this.opcode = opcode
   }
+
+  // *** maybe split this out into a separate callable/shareable function? ***
 
   parse(parser: Parser) {
     let token: Token | undefined
@@ -104,6 +104,7 @@ export class OpStatement extends Statement {
         if (this.opcode.IMM === undefined) {
           token.setError("Immediate mode not allowed for this opcode")
         } else if (parser.syntax && parser.syntax != Syntax.LISA) {
+          // *** don't bother with this message ***
           token.setError("Syntax specific to LISA assembler")
           // TODO: would be clearer to extend warning to entire expression
         }
@@ -164,6 +165,37 @@ export class OpStatement extends Statement {
           return
         }
       } else {
+
+        // handle special case branch/jump labels
+
+        const nameUC = this.opToken?.getString().toUpperCase() ?? ""
+
+        if (this.opcode.BRAN || (this.opcode.ABS &&
+            (nameUC == "JMP" || nameUC == "JSR"))) {
+
+          // *** move to parser ***
+
+          const isDefinition = false
+          if (str == ">" || str == "<") {
+            if (!parser.syntax || parser.syntax == Syntax.LISA) {
+              parser.pushExpression(parser.parseLisaLocal(token, isDefinition))
+              return
+            }
+          } else if ((str[0] == "-" || str[0] == "+")
+              && (str[0] == str[str.length - 1])) {
+            if (!parser.syntax || parser.syntax == Syntax.ACME) {
+              if (str.length > 9) {
+                token.setError("Anonymous local is too long")
+                parser.pushExpression(new exp.BadExpression([token]))
+                return
+              }
+              token.type = TokenType.LocalLabelPrefix
+              parser.pushExpression(parser.buildSymbolExp([token], SymbolType.AnonLocal, isDefinition))
+              return
+            }
+          }
+        }
+
         parser.mustPushNextExpression(token)
         token = parser.pushNextToken()
         // *** premature to assign ZP when expression size isn't known ***
@@ -195,6 +227,8 @@ export class OpStatement extends Statement {
   }
 }
 
+//------------------------------------------------------------------------------
+// Conditionals
 //------------------------------------------------------------------------------
 
 class ConditionalStatement extends Statement {
@@ -229,6 +263,8 @@ export class EndIfStatement extends ConditionalStatement {
   // ***
 }
 
+//------------------------------------------------------------------------------
+// Storage
 //------------------------------------------------------------------------------
 
 class DataStatement extends Statement {
@@ -322,7 +358,7 @@ export class StorageStatement extends Statement {
         return
       }
     } else {
-      this.sizeArg = parser.mustParseExpression(token)
+      this.sizeArg = parser.mustPushNextExpression(token)
       if (!this.sizeArg) {
         return
       }
@@ -334,31 +370,140 @@ export class StorageStatement extends Statement {
       return
     }
 
-    this.patternArg = parser.mustParseExpression()
+    this.patternArg = parser.mustPushNextExpression()
   }
 }
 
-export class ByteStorageStatement extends DataStatement {
+export class ByteStorageStatement extends StorageStatement {
   constructor() {
     super(1)
   }
 }
 
-export class WordStorageStatement extends DataStatement {
+export class WordStorageStatement extends StorageStatement {
   constructor(swapEndian = false) {
     super(2, swapEndian)
+  }
+}
+
+// NOTE: caller has checked for odd nibbles
+function scanHex(hexString: string, buffer: number[]) {
+  while (hexString.length > 0) {
+    let byteStr = hexString.substring(0, 2)
+    buffer.push(parseInt(byteStr, 16))
+    hexString = hexString.substring(2)
+  }
+}
+
+export class HexStatement extends Statement {
+  private dataBytes: number[] = []
+
+  parse(parser: Parser) {
+    while (true) {
+      let token = parser.pushNextToken()
+      if (!token) {
+        parser.addMissingToken("Hex value expected")
+        break
+      }
+
+      let hexString = token.getString().toUpperCase()
+      // *** TODO: which syntaxes is the true for? ***
+      if (hexString == "$") {
+        token.setError("$ prefix not allowed on HEX statements")
+        token = parser.pushNextToken()
+        if (!token) {
+          break
+        }
+        hexString = token.getString().toUpperCase()
+      }
+
+      token.type = TokenType.HexNumber
+      if (hexString.length & 1) {
+        token.setError("Odd number of nibbles")
+      } else {
+        scanHex(hexString, this.dataBytes)
+      }
+
+      token = parser.pushNextToken()
+      if (!token) {
+        break
+      }
+
+      if (token.getString() != ",") {
+        token.setError("Unexpected token, expecting ','")
+        break
+      }
+    }
+  }
+
+  getSize(): number | undefined {
+    return this.dataBytes.length
+  }
+}
+
+//------------------------------------------------------------------------------
+// Disk
+//------------------------------------------------------------------------------
+
+export class IncludeStatement extends Statement {
+  parse(parser: Parser) {
+    const token = parser.mustPushNextFileName()
+    const fileName = token.getString()
+    if (fileName != "" && !parser.assembler.includeFile(fileName)) {
+      token.setError("File not found")
+    }
+  }
+}
+
+export class SaveStatement extends Statement {
+
+  private fileName?: string
+
+  parse(parser: Parser) {
+    const token = parser.mustPushNextFileName()
+    this.fileName = token.getString()
+  }
+}
+
+//------------------------------------------------------------------------------
+
+// *** watch for assigning a value to a local label
+//  *** LISA, for example, doesn't allow that
+// *** SBASM requires resolvable value with no forward references
+// *** mark symbol as being assigned rather than just a label?
+export class EquStatement extends Statement {
+
+  private value?: exp.Expression
+
+  parse(parser: Parser) {
+    if (!this.labelExp) {
+      this.opToken?.setError("Missing label")
+      return
+    }
+
+    this.value = parser.mustPushNextExpression()
+    this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
+  }
+}
+
+export class VarStatement extends Statement {
+
+  private value?: exp.Expression
+
+  parse(parser: Parser) {
+
+    if (this.opToken?.getString() != "=") {
+      this.opToken?.setError("Expecting '='")
+      return
+    }
+
+    this.value = parser.mustPushNextExpression()
   }
 }
 
 //------------------------------------------------------------------------------
 
 export class EntryStatement extends Statement {
-  // ***
-}
-
-// *** watch for assigning a value to a local label
-//  *** LISA, for example, doesn't allow that
-export class EquStatement extends Statement {
   // ***
 }
 
@@ -369,20 +514,11 @@ export class ErrorStatement extends Statement {
   parse(parser: Parser) {
     // *** maybe use a different variation like parseControlExpression?
     this.errExpression = parser.parseExpression()
+    if (this.errExpression) {
+      parser.pushExpression(this.errExpression)
+    }
   }
 
-  // ***
-}
-
-export class HexStatement extends Statement {
-  // ***
-}
-
-export class IncludeStatement extends Statement {
-  // ***
-}
-
-export class SaveStatement extends Statement {
   // ***
 }
 
@@ -403,6 +539,15 @@ export class UsrStatement extends Statement {
       if (str == ",") {
         parser.pushToken(token)
         continue
+      }
+
+      if (str == "(") {
+        const strExpression = parser.parseStringExpression(token, true, false)
+        parser.pushExpression(strExpression)
+        continue
+
+        // *** attempt NajaText
+        // *** attempt 6502 addressing
       }
 
       const expression = parser.pushNextExpression(token)
@@ -436,6 +581,16 @@ export class MacroStatement extends Statement {
       if (str == ";") {
         parser.pushToken(token)
         continue
+      }
+
+      if (str == "(") {
+        // *** must at least one ";" before doing this??? ***
+        const strExpression = parser.parseStringExpression(token, true, false)
+        parser.pushExpression(strExpression)
+        continue
+
+        // *** attempt NajaText
+        // *** attempt 6502 addressing
       }
 
       const expression = parser.pushNextExpression(token)

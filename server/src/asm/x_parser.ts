@@ -6,15 +6,13 @@
 // DASM
   // scoped with SUBROUTINE
   // locals start with '.'
-// CA65
-  // keywords start with '.'
-  // label starts in first column, ends with ':'
-  // locals start with '@'
-  // has named scopes, using ':', '::' for global scope
 // ACME
   // keywords start with '!'
-  // locals start with '.'
-  // scoped with !zone
+  // locals scoped with !zone
+  // locals start with '.' or '@'
+    // '.' scoped to !zone, '@' scoped to previous global
+  // locals of '+++' and '---'
+  // symbol names are case sensitive
   // {} groups
   // does not allow "LSR A" -- just "LSR"
   // has operator precendence
@@ -23,11 +21,31 @@
   // '.' and '#' in binary values
   // indented everything (labels)
   // *=$9999 to set org (any column)
+// CA65
+  // keywords start with '.'
+  // label starts in first column, ends with ':'
+  // locals scoped with .PROC
+  // locals start with '@'
+    // scoped to previous non-local
+    // changable using .LOCALCHAR
+  // locals of ':+++' and ':---' -> ':' label
+  // has named scopes, using ':', '::' for global scope
+    // .SCOPE applies to non-local labels
+    // .PROC is an implicit scope
 // LISA
+  // locals start with '^' followed by 0-9
+    // scoped globally and repeatedly
+    // <# and ># to reference
 // SBASM
+  // label always at position 0
   // keywords start with '.'
   // trailing ':' on labels is optional
   // label name should be followed by a white space or EOL
+  // equates must resolve without forward references
+  // local labels start with '.' and scoped to previous global
+  // macro label start with ':'
+  // global labels can contain '.'
+  // scope other locals using GLOBAL:LOCAL name
 
 //               MERLIN  DASM  CA65  ACME  LISA  SBASM
 //  --------     ------  ----  ----  ----  ----  -----
@@ -42,80 +60,58 @@
 //  ^#,<#,>#                               LISA
 //  +macro                           ACME
 
-import { Assembler, LineRecord } from "./assembler"
+import { Assembler, LineRecord, SourceFile } from "./assembler"
 import { Tokenizer, Token, TokenType } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
 import { Syntax, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
+import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import * as exp from "./x_expressions"
 import * as stm from "./x_statements"
 
 //------------------------------------------------------------------------------
 
-class OpEntry {
-  public token: Token
-  public op: Op
-  public precedence: number
-  public rightAssoc: boolean
-  public isUnary: boolean
-
-  constructor(token: Token, opDef: OpDef, unary: boolean) {
-    this.token = token
-    this.op = opDef.op
-    this.precedence = opDef.pre
-    this.rightAssoc = opDef.ra ?? false
-    this.isUnary = unary
-  }
-}
-
-class EvalState {
-  public opStack: OpEntry[] = []          // Infix to Postfix conversion
-  public expStack: exp.Expression[] = []  // Postfix evaluation
-  public lastSeen?: (OpEntry | exp.Expression)
-  public tokenExpSet: exp.TokenExpressionSet = []
-  public parenStack: Token[] = []
-}
-
 export class Parser extends Tokenizer {
 
   public assembler: Assembler
 
-  private evalState: EvalState
-  private evalStack: EvalState[]
+  private sourceFile: SourceFile | undefined
+  private lineNumber: number = -1
+
+  public tokenExpSet: exp.TokenExpressionSet = []
+  public tokenExpStack: exp.TokenExpressionSet[] = []
 
   constructor(assembler: Assembler) {
     super()
     this.assembler = assembler
-
-    // dummy until initLine is called
-    this.evalState = new EvalState()
-    this.evalStack = []
   }
 
-  private initLine(sourceLine: string) {
+  private initLine(lineRecord: LineRecord, sourceLine: string) {
     this.setSourceLine(sourceLine)
   
-    this.evalState = new EvalState()
-    this.evalStack = []
+    this.sourceFile = lineRecord.sourceFile
+    this.lineNumber = lineRecord.lineNumber
+
+    this.tokenExpSet = []
+    this.tokenExpStack = []
   }
 
   // push/pop the current expression to/from the expressionStack
   // *** move these ***
 
-  private startExpression(token?: Token) {
-    // *** save start position for possible revert? ***
-    this.evalStack.push(this.evalState)
-    this.evalState = new EvalState()
+  public startExpression(token?: Token) {
+    this.tokenExpStack.push(this.tokenExpSet)
+    this.tokenExpSet = []
     if (token) {
       this.pushToken(token)
     }
   }
 
-  private endExpression(): exp.TokenExpressionSet {
-    const result = this.evalState.tokenExpSet
-    const prevState = this.evalStack.pop()
-    // NOTE: don't pop the last state because that's the statement itself
-    if (prevState) {
-      this.evalState = prevState
+  public endExpression(): exp.TokenExpressionSet {
+    const result = this.tokenExpSet
+    const prevSet = this.tokenExpStack.pop()
+    // NOTE: don't pop the last set because that's the statement itself
+    if (prevSet) {
+      this.tokenExpSet = prevSet
     }
     return result
   }
@@ -124,7 +120,7 @@ export class Parser extends Tokenizer {
   // *** use "add" instead of "push" ***
 
   pushToken(token: Token) {
-    this.evalState.tokenExpSet.push(token)
+    this.tokenExpSet.push(token)
   }
 
   mustPushNextToken(expectMsg: string): Token {
@@ -141,6 +137,14 @@ export class Parser extends Tokenizer {
 
   pushNextToken(): Token | undefined {
     const token = this.getNextToken()
+    if (token) {
+      this.pushToken(token)
+    }
+    return token
+  }
+
+  addVeryNextToken(): Token | undefined {
+    const token = this.getVeryNextToken()
     if (token) {
       this.pushToken(token)
     }
@@ -181,17 +185,18 @@ export class Parser extends Tokenizer {
   }
 
   addMissingToken(message: string): Token {
-    const start = this.position
-    const token = new Token(this.sourceLine, start, start, TokenType.Missing)
+    const token = this.createMissingToken()
     token.setError("Missing token, " + message)
     this.pushToken(token)
     return token
   }
 
-  // *** pushVeryNextToken ***
+  createMissingToken(): Token {
+    return new Token(this.sourceLine, this.position, this.position, TokenType.Missing)
+  }
 
   pushExpression(expression: exp.Expression) {
-    this.evalState.tokenExpSet.push(expression)
+    this.tokenExpSet.push(expression)
   }
 
   mustPushNextExpression(token?: Token): exp.Expression {
@@ -213,7 +218,7 @@ export class Parser extends Tokenizer {
 
     let statement: stm.Statement | undefined
 
-    this.initLine(sourceLine)
+    this.initLine(lineRecord, sourceLine)
 
     // if (!this.conditional.isEnabled()) {
       // *** conditional checks
@@ -222,20 +227,66 @@ export class Parser extends Tokenizer {
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
 
-    let labelExpression = this.parseLabel(true)
-    if (labelExpression) {
-      this.pushExpression(labelExpression)
+    // *** check for keywords first ***
+
+    let labelExp = this.parseSymbol(true)
+    let opToken: Token | undefined
+
+    if (labelExp) {
+      this.pushExpression(labelExp)
+
+      if (labelExp instanceof exp.VarExpression) {
+        opToken = this.pushNextToken()
+        statement = new stm.VarStatement()
+      }
     }
 
-    statement = this.parseOpcode()
+    if (!statement) {
+      opToken = this.pushNextToken()
+      if (opToken) {
+        let opNameLC = opToken.getString().toLowerCase()
+
+        // ACME syntax uses '!' prefix for keywords and '+' for macro invocations
+        if (opNameLC == "!" || opNameLC == "+") {
+          if (!this.syntax || this.syntax == Syntax.ACME) {
+            const nextToken = this.getVeryNextToken()
+            if (nextToken) {
+              opToken.end = nextToken.end
+              opToken.type = TokenType.Symbol
+              opNameLC = opToken.getString().toLowerCase()
+            }
+          }
+        }
+
+        // if (opNameLC == "}") {
+        //   // *** this probably shouldn't be done here ***
+        //   // ACME syntax ends conditions and other blocks with '}'
+        //   if (!this.syntax || this.syntax == Syntax.ACME) {
+        //     // TODO: process end block
+        //     // *** push token ***
+        //     return
+        //   }
+        // }
+
+        statement = this.parseOpcode(opToken, opNameLC)
+      }
+    }
+
     if (!statement) {
       statement = new stm.Statement()
     }
 
-    statement.init(/*statementType,*/ sourceLine, this.endExpression()/*, symbol*/)
+    // *** TODO: won't be needed once VarExpressions have been handled above
+    let label: exp.SymbolExpression | undefined
+    if (labelExp && labelExp instanceof exp.SymbolExpression) {
+      label = labelExp
+    }
+
+    statement.init(sourceLine, opToken, this.endExpression(), label)
     statement.parse(this)
 
     // handle extra tokens
+    // *** don't generate more errors if this already has an error ***
     let token = this.getNextToken()
     if (token) {
       const extraTokens: Token[] = []
@@ -248,47 +299,34 @@ export class Parser extends Tokenizer {
                           // *** name collision with ERR statement?
                           // *** just use generic Expression?
       // *** just push the tokens directly? ***
-      this.pushExpression(new exp.ErrorExpression(extraTokens))
+        // *** BadExpression ***
+      this.pushExpression(new exp.BadExpression(extraTokens))
     }
 
     // handle possible comment at end of statement
-    // *** getting pushed twice ***
+    // *** still getting pushed twice? ***
     this.pushNextComment()
+
+    // *** if not macro, if not dummy, if not disabled ***
+    {
+      const symValue = statement.labelExp?.symbol?.getValue()
+      if (!symValue) {
+        statement.labelExp?.symbol?.setValue(new exp.PcExpression(), SymbolFrom.Statement)
+      }
+
+      // *** if OpStatement
+        // *** walk all symbol expressions
+          // *** if immediate, mark low values as constant
+            // *** exclude low/high byte expressions
+          // if (ZP),Y mark as zpage -- only simple expressions or number constants
+    }
 
     lineRecord.statement = statement
   }
 
-  private parseOpcode(): stm.Statement | undefined {
+  private parseOpcode(token: Token, statementTypeLC: string): stm.Statement | undefined {
 
-    let token = this.getNextToken()
-    if (!token) {
-      return
-    }
-
-    // ACME syntax uses '!' prefix for keywords and '+' for macro invocations
-    let statementType = token.getString().toLowerCase()
-    if (statementType == "!" || statementType == "+") {
-      if (!this.syntax || this.syntax == Syntax.ACME) {
-        const nextToken = this.getVeryNextToken()
-        if (nextToken) {
-          token.end = nextToken.end
-          token.type = TokenType.Symbol
-          statementType = token.getString().toLowerCase()
-        }
-      }
-    } else if (statementType == "}") {
-      // *** this probably shouldn't be done here ***
-      // ACME syntax ends conditions and other blocks with '}'
-      if (!this.syntax || this.syntax == Syntax.ACME) {
-        // TODO: process end block
-        // *** push token ***
-        return
-      }
-    }
-
-    this.pushToken(token)
-
-    let opcode = (Opcodes6502 as {[key: string]: any})[statementType]
+    let opcode = (Opcodes6502 as {[key: string]: any})[statementTypeLC]
     if (opcode !== undefined) {
       token.type = TokenType.Opcode
       return new stm.OpStatement(opcode)
@@ -297,7 +335,7 @@ export class Parser extends Tokenizer {
     let keyword: any
     for (let i = 1; i < SyntaxDefs.length; i += 1) {
       if (!this.syntax || i == this.syntax) {
-        const k = SyntaxDefs[i].keywordMap.get(statementType)
+        const k = SyntaxDefs[i].keywordMap.get(statementTypeLC)
         if (k !== undefined) {
           keyword = k
           // *** count match ***
@@ -324,7 +362,7 @@ export class Parser extends Tokenizer {
       return
     }
 
-    const firstChar = statementType[0]
+    const firstChar = statementTypeLC[0]
 
     if (firstChar == "!" || firstChar == ".") {
       token.setError("Unknown keyword")
@@ -343,9 +381,10 @@ export class Parser extends Tokenizer {
 
   // *** keep count of local types and directive matches to determine syntax ***
 
-  private parseLabel(definition: boolean, token?: Token): exp.Expression | undefined {
+  private parseSymbol(isDefinition: boolean, token?: Token):
+    exp.SymbolExpression | exp.VarExpression | undefined {
 
-    if (definition) {
+    if (isDefinition) {
       const nextChar = this.peekVeryNextChar()
       if (!nextChar) {
         return
@@ -384,193 +423,263 @@ export class Parser extends Tokenizer {
       }
     }
 
+    let str = token.getString()
+
+    // handle Merlin vars before everything else
+    if (str == "]") {
+      if (!this.syntax || this.syntax == Syntax.MERLIN) {
+        // *** enforce/handle var assignment
+          // peekNextToken == "=" ?
+        return this.parseVarExpression(token)
+      }
+    }
+
     // a token that starts with a "." could be a local or a keyword
     //  depending on the syntax
-    let str = token.getString()
     if (token.type == TokenType.Symbol && str[0] == ".") {
-      if (definition) {
+      // *** maybe duplicate in parseValueExpression?
+      // if (isDefinition) {
         // turn the token into a single character "." and back up
         // *** TODO: add logic to decide when to do this ***
         token.type = TokenType.Operator
         token.end = token.start + 1
         this.position = token.end
         str = "."
-      }
+      // }
     }
-
-    let nextType: TokenType | undefined
-    this.startExpression(token)
 
     if (token.type == TokenType.Operator) {
-      if (str == ":") {
-        // *** could be global scope in first column? ***
-        token.type = TokenType.LocalLabelPrefix
-        nextType = TokenType.LocalLabel
-        if (this.syntax &&
-            this.syntax != Syntax.MERLIN) {   // *** any others?
-          token.setError("Not supported in this syntax")
-        }
-      } else if (str == "]") {
-        // *** increment Merlin syntax counter ***
-        token.type = TokenType.VariablePrefix
-        nextType = TokenType.Variable
-        if (this.syntax &&
-            this.syntax != Syntax.MERLIN) {
-          token.setError("Not supported in this syntax")
-        }
-      } else if (str == ".") {
-        // *** could be directive in first column ***
-        token.type = TokenType.LocalLabelPrefix
-        nextType = TokenType.LocalLabel
-        if (this.syntax &&
-            this.syntax != Syntax.DASM &&
-            this.syntax != Syntax.ACME) {       // *** what others?
-          token.setError("Not supported in this syntax")
-        }
-      } else if (str == "@") {
-        token.type = TokenType.LocalLabelPrefix
-        nextType = TokenType.LocalLabel
-        if (this.syntax &&
-            this.syntax != Syntax.CA65) {       // *** what others?
-          token.setError("Not supported in this syntax")
-        }
-      } else if ((str[0] == "-" || str[0] == "+")
-          && (str[0] == str[str.length - 1])) {
-        // *** maybe macro invocation in first column? ***
-        // *** must be whitespace/eol afterwards to be label?
-        token.type = TokenType.LocalLabelPrefix
-        if (this.syntax &&
-            this.syntax != Syntax.ACME) {       // *** what others?
-          token.setError("Not supported in this syntax")
-        }
-      } else if ((str == ">" || str == "<") && !definition) {
-        // *** shouldn't do this if already doing # immediate operation
-        // *** must be whitespace/eol afterwards?
-        token.type = TokenType.LocalLabelPrefix
-        if (this.syntax &&
-            this.syntax != Syntax.LISA) {       // *** what others?
-          token.setError("Not supported in this syntax")
-        }
-      } else {
-        // *** error
-      }
-    } else {
-      if (token.type != TokenType.Symbol &&
-        token.type != TokenType.HexNumber &&
-        token.type != TokenType.DecNumber) {
-        //*** maybe back up and fail instead? ***
-        token.setError("Unexpected token, expecting label name")
-      } else {
-        token.type = TokenType.Label
-      }
-    }
 
-    if (nextType) {
-      token = this.mustGetVeryNextToken("expecting label name")
-      this.pushToken(token)
-      if (token.type != TokenType.Missing) {
-        if (token.type != TokenType.Symbol &&
-            token.type != TokenType.HexNumber &&
-            token.type != TokenType.DecNumber) {
-          //*** maybe back up and fail instead? ***
-          token.setError("Unexpected token, expecting label name")
-        } else {
-          token.type = nextType
-        }
-      }
-    }
-
-    if (token.type == TokenType.Variable) {
-      // *** enforce/handle var assignment
-        // peekNextToken == "=" ?
-      return new exp.VarExpression(this.endExpression())
-    }
-
-    if (definition) {
-      const nextChar = this.peekVeryNextChar()
-      if (nextChar == ":") {
-        if (!this.syntax || this.syntax == Syntax.ACME) {
-          const token = this.pushNextToken()
-          if (token) {
-            // TODO: change token.type to what?
+      if (isDefinition) {
+        if (str == "^") {
+          if (!this.syntax || this.syntax == Syntax.LISA) {
+            return this.parseLisaLocal(token, isDefinition)
+          }
+        } else if ((str[0] == "-" || str[0] == "+")
+            && (str[0] == str[str.length - 1])) {
+          if (!this.syntax || this.syntax == Syntax.ACME) {
+            if (str.length > 9) {
+              token.setError("Anonymous local is too long")
+              return new exp.BadExpression([token])
+            }
+            // *** maybe macro invocation in first column? ***
+            // *** must be whitespace/eol afterwards to be label?
+            token.type = TokenType.LocalLabelPrefix
+            return this.buildSymbolExp([token], SymbolType.AnonLocal, isDefinition)
           }
         }
       }
+
+      if (str == ".") {
+        // *** could be directive in first column ***
+        if (!this.syntax ||
+            this.syntax == Syntax.DASM ||
+            this.syntax == Syntax.ACME) {       // *** what others?
+          return this.parseLocal(token, SymbolType.ZoneLocal, isDefinition)
+        }
+      } else if (str == ":") {
+        if (!this.syntax ||
+            this.syntax == Syntax.MERLIN) {   // *** any others?
+          return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
+        }
+      } else if (str == "@") {
+        if (!this.syntax ||
+            this.syntax == Syntax.ACME ||
+            this.syntax == Syntax.CA65) {       // *** what others?
+          return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
+        }
+      }
     }
 
-    if (!definition) {
-      // *** parse fully scoped
+    let localType = SymbolType.Simple
+    this.startExpression(token)
+
+    if (isDefinition) {
+
+      if (token.type != TokenType.Symbol &&
+          token.type != TokenType.HexNumber) {
+        token.setError("Unexpected token, expecting symbol name")
+        return new exp.BadExpression(this.endExpression())
+      }
+      token.type = TokenType.Symbol
+      this.pushTrailingColon()
+
+    } else {
+
+      if (str == "::") {
+        if (this.syntax && this.syntax != Syntax.CA65) {
+          token.setError("Unexpected token")
+          return new exp.BadExpression(this.endExpression())
+        }
+
+        localType = SymbolType.Scoped
+        // TODO: what type should scoping colons be?
+        token.type = TokenType.Keyword
+
+        token = this.getVeryNextToken()
+        if (!token) {
+          this.addMissingToken("Missing scope name")
+          return new exp.BadExpression(this.endExpression())
+        }
+
+        this.pushToken(token)
+      }
+
+      while (true) {
+        if (token.type != TokenType.Symbol &&
+          token.type != TokenType.HexNumber) {
+          token.setError("Unexpected token, expecting symbol name")
+          return new exp.BadExpression(this.endExpression())
+        }
+
+        token.type = TokenType.Symbol
+
+        const nextChar = this.peekVeryNextChar()
+        if (nextChar != ":") {
+          break
+        }
+
+        // *** this.pushVeryNextToken()
+        token = this.getVeryNextToken()
+        if (!token) {
+          break
+        }
+
+        this.pushToken(token)
+        str = token.getString()
+
+        if (str == "::") {
+          if (this.syntax && this.syntax != Syntax.CA65) {
+            token.setError("Unexpected token")
+            return new exp.BadExpression(this.endExpression())
+          }
+        } else {
+          if (this.syntax /*&& this.syntax != Syntax.SBASM*/) {
+            token.setError("Unexpected token")
+            return new exp.BadExpression(this.endExpression())
+          }
+        }
+
+        // TODO: what type should scoping colons be?
+        token.type = TokenType.Keyword
+        localType = SymbolType.Scoped
+
+        // *** this.pushVeryNextToken()
+        token = this.getVeryNextToken()
+        if (!token) {
+          this.addMissingToken("expected symbol name")
+          return new exp.BadExpression(this.endExpression())
+        }
+
+        this.pushToken(token)
+      }
     }
-  
-    const expression = new exp.LabelExpression(this.endExpression())
 
-    // *** trailing whitespace?
-    // *** special syntax logic ***
-
-    // *** scoping? ***
-    // *** build symbol ***
-    // *** build Label/VarExpression and return ***
-    // *** single character labels/locals ***
-
-    return expression
+    return this.buildSymbolExp(this.endExpression(), localType, isDefinition)
   }
 
-  mustParseExpression(token?: Token): exp.Expression {
+  public buildSymbolExp(
+      children: exp.TokenExpressionSet,
+      symbolType: SymbolType,
+      isDefinition: boolean): exp.SymbolExpression {
+    const symExp = new exp.SymbolExpression(children, symbolType, isDefinition)
+    if (isDefinition && this.sourceFile) {
+      symExp.symbol = new Symbol(symbolType, this.sourceFile, this.lineNumber)
+    }
+    return symExp
+  }
+
+  private pushTrailingColon() {
+    const nextChar = this.peekVeryNextChar()
+    if (nextChar == ":") {
+      const token = this.pushNextToken()
+      if (token) {
+        // TODO: change token.type to what?
+        if (this.syntax &&
+          this.syntax != Syntax.ACME &&
+          this.syntax != Syntax.CA65) {
+          token.setError("Not allowed for this syntax")
+        }
+      }
+    }
+  }
+
+  parseLocal(token: Token, symbolType: SymbolType, isDefinition: boolean): exp.Expression {
+    this.startExpression(token)
+    token.type = TokenType.LocalLabelPrefix
+
+    let nextToken = this.addVeryNextToken()
+    if (nextToken) {
+      if (nextToken.type != TokenType.Symbol &&
+          nextToken.type != TokenType.HexNumber &&
+          nextToken.type != TokenType.DecNumber) {
+        nextToken.setError("Invalid label name")
+      } else {
+        nextToken.type = TokenType.LocalLabel
+      }
+    } else {
+      nextToken = this.addMissingToken("Missing local name")
+    }
+
+    // look for trailing ':'
+    if (isDefinition) {
+      this.pushTrailingColon()
+    }
+
+    return this.buildSymbolExp(this.endExpression(), symbolType, isDefinition)
+  }
+
+  parseLisaLocal(token: Token, isDefinition: boolean): exp.Expression {
+    this.startExpression(token)
+    token.type = TokenType.LocalLabelPrefix
+
+    let nextToken = this.addVeryNextToken()
+    if (nextToken) {
+      if (nextToken.type == TokenType.DecNumber) {
+        if (nextToken.getString().length != 1) {
+          nextToken.setError("Only single digit allowed")
+        } else {
+          nextToken.type = TokenType.LocalLabel
+        }
+      } else {
+        nextToken.setError("Must be single decimal digit")
+      }
+    } else {
+      nextToken = this.addMissingToken("Missing decimal digit")
+    }
+
+    return this.buildSymbolExp(this.endExpression(), SymbolType.LisaLocal, isDefinition)
+  }
+
+  private mustParseExpression(token?: Token): exp.Expression {
     if (!token) {
       token = this.mustGetNextToken("expected expression")
     }
     if (token.type == TokenType.Missing) {
-      return new exp.ErrorExpression([token])
+      return new exp.BadExpression([token])
     }
 
-    let start = this.position
+    // let start = this.position
     let expression = this.parseExpression(token)
     if (!expression) {
       // *** token = new Token(this.sourceLine, start, start, TokenType.Missing)
       token.setError("Expected expression")
-      expression = new exp.ErrorExpression([token])
+      expression = new exp.BadExpression([token])
     }
     return expression
   }
 
-  private parseOperator(token: Token, isUnary: boolean): OpEntry | undefined {
-    const syntax: SyntaxDef = SyntaxDefs[this.syntax]
-    const opName = token.getString().toUpperCase()
-    let opDef: OpDef | undefined
-    if (isUnary) {
-      opDef = syntax.unaryOpMap?.get(opName)
-    } else {
-      opDef = syntax.binaryOpMap?.get(opName)
-    }
-    if (opDef) {
-      return new OpEntry(token, opDef, isUnary)
-    }
-  }
-
-  // *** needs cleanup pass for new parser ***
-  private parseValueExpression(token: Token): exp.Expression | undefined {
+  // *** what happens to token if not used?
+    // *** force this.position = token.end ???
+  public parseValueExpression(token: Token): exp.Expression | undefined {
     let str = token.getString()
     if (token.type == TokenType.Operator) {
       if (str == "$" || str == "%") {
         return this.parseNumberExpression(token)
       }
-      if (this.isLocalPrefix(str)) {
-        // *** if (str == ".") look for keywords first ***
-        return this.parseLabel(false, token)
-      }
-      // *** what about unknown?
-      if (str == "]") {
-        if (!this.syntax || this.syntax == Syntax.MERLIN) {
-          return this.parseVarExpression(token)
-        }
-        return
-      }
       if (str == "*") {
+        token.type = TokenType.Keyword
         return new exp.PcExpression(token)
-      }
-      // *** here or elsewhere? ***
-      if (str == "(") {
-        return this.parseParenExpression(token)
       }
       if (str == '"' || str == "'") {
         // *** how to choose between string literals and strings? ***
@@ -578,280 +687,59 @@ export class Parser extends Tokenizer {
         const allowEscapes = true
         const allowUnterminated = false
         return this.parseStringExpression(token, allowEscapes, allowUnterminated)
-      } else if (str == ",") {
+      }
+      if (str == "!") {
+        // *** LISA supports '!' prefix for decimal numbers, including "!-9"
+        // *** could be keyword
+        // *** otherwise, return nothing
+        return
+      }
+      if (str == ":" || str == "::") {
+        // *** possible cheap locals (MERLIN)
+        // *** possible macro local (SBASM)
+        // *** possible macro divider (ACME)
+        return this.parseSymbol(false, token)
+      }
+      if (str == "@") {
+        // *** possible cheap locals
+        return this.parseSymbol(false, token)
+      }
+
+      // NOTE: #>, #< (LISA) and ++,-- (ACME) are handled in OpStatement parsing
+
+      // *** what about str == "." ???
+      if (str[0] == ".") {
+        // *** look for keywords before looking for symbols ***
+        // if not keyword, split off '.'
+        // *** parse symbol
+        // *** if not symbol, ???
+        return this.parseSymbol(false, token)
+      }
+      if (str == "]") {
+        if (!this.syntax || this.syntax == Syntax.MERLIN) {
+          return this.parseVarExpression(token)
+        }
+        return
+      }
+      if (str == ",") {
         // ***
       }
+      // *** what about unknown?
       return
     }
     if (token.type == TokenType.DecNumber) {
       return this.parseNumberExpression(token)
     }
-    if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-      // *** expression = parseSymbolReference(token)
-      // *** maybe extend symbol scope ***
-      token.type = TokenType.Symbol
-      str = token.getString()
-      // *** scoping ***
-      // *** symbol linking if possible ***
-      return new exp.SymbolExpression(str, token)
-    }
 
-    //*** what happens to token here? ***
+    return this.parseSymbol(false, token)
   }
-
-  // http://www.neocomputer.org/projects/lang/infix.html
-
-  // *** pass in hint about type of expression
-  // *** flush parse stack ***
-  // *** mustParseExpression ***
 
   parseExpression(inToken?: Token): exp.Expression | undefined {
-
-    //*** pass inToken?
-    this.startExpression()
-
-    // consume operators and expressions in Infix order and process them on Postfix order
-    while (true) {
-
-      const token = inToken ? inToken : this.getNextToken()
-      inToken = undefined
-      if (!token) {
-        break
-      }
-
-      let isUnary = true
-      // *** affected by parens ***
-      if (this.evalState.lastSeen) {
-        if (this.evalState.lastSeen instanceof exp.Expression) {
-          isUnary = false
-        }
-      }
-
-      // *** deal with merlin "." operator versus symbols here ***
-
-      // *** search for scoped label first? ***
-
-      // *** deal with paired operators (parens,backets,braces)
-
-      // *** what about "," or other expression enders?
-
-      const nextOp = this.parseOperator(token, isUnary)
-      if (nextOp) {
-        this.evalState.lastSeen = nextOp
-
-        // *** if token is open paren/brace/bracket
-
-        // *** if token is close paren/brace/bracket
-
-        if (nextOp.isUnary) {
-          // *** does this handle unary ops of different precedence? ***
-          if (nextOp.rightAssoc) {
-            this.evalState.opStack.push(nextOp)
-          } else {
-            this.processOperator(nextOp)
-            // *** error condition? ***
-          }
-        } else {
-          while (true) {
-            const opEntry = this.evalState.opStack.pop()
-            if (!opEntry) {
-              break
-            }
-
-            if (opEntry.precedence > nextOp.precedence ||
-              (nextOp.rightAssoc && opEntry.precedence == nextOp.precedence)) {
-                this.processOperator(opEntry)
-                // *** if in error state, break
-            } else {
-              this.evalState.opStack.push(opEntry)
-              break
-            }
-
-            this.processOperator(opEntry)
-            // *** if in error state, break
-          }
-
-          // *** what if error above? ***
-          this.evalState.opStack.push(nextOp)
-        }
-      } else {
-        // values/operands are always pushed to output stack
-        const nextExp = this.parseValueExpression(token)
-        if (!nextExp) {
-          // *** for now, stop and back up at any unknown token ***
-          this.position = token.start
-          break
-        }
-
-        this.evalState.lastSeen = nextExp
-        this.evalState.expStack.push(nextExp)
-      }
-    }
-
-    // process remaining ops on stack
-    while (true) {
-      const opEntry = this.evalState.opStack.pop()
-      if (!opEntry) {
-        break
-      }
-      this.processOperator(opEntry)
-      // *** error condition? ***
-    }
-
-    // expression stack holds top-level expression
-    let expression = this.evalState.expStack.pop()
-    if (!expression) {
-      // *** error ***
-      return
-    }
-
-    // there shouldn't be anything left on expression stack
-    if (this.evalState.expStack.length != 0) {
-      // *** error ***
-      return
-    }
-
-    this.endExpression()
-    return expression
+    const expBuilder = new ExpressionBuilder(this)
+    return expBuilder.parse(inToken)
   }
 
-  private processOperator(opEntry: OpEntry) {
-    if (opEntry.isUnary) {
-      let arg = this.evalState.expStack.pop()
-      if (!arg) {
-        // *** error ***
-        return
-      }
-      this.evalState.expStack.push(new exp.UnaryExpression(opEntry.token, opEntry.op, arg))
-    } else {
-      let arg2 = this.evalState.expStack.pop()
-      let arg1 = this.evalState.expStack.pop()
-      if (!arg1 || !arg2) {
-        // *** error ***
-        return
-      }
-      this.evalState.expStack.push(new exp.BinaryExpression(arg1, opEntry.token, opEntry.op, arg2))
-    }
-  }
-
-
-  // *** need to pass in token?
-  // OLD_parseExpression(token?: Token, recurse: boolean = true): exp.Expression | undefined {
-  //   if (!token) {
-  //     token = this.getNextToken()
-  //     // *** check this
-  //     if (!token) {
-  //       return
-  //     }
-  //   }
-
-  //   let expression: exp.Expression | undefined
-  //   let str = token.getString()
-  //   if (token.type == TokenType.Operator) {
-  //     if (str == "$" || str == "%") {
-  //       expression = this.parseNumberExpression(token)
-  //     } else if (this.isLocalPrefix(str)) {
-  //       // *** if (str == ".") look for keywords first ***
-  //       expression = this.parseLabel(false, token)
-  //     } else if (str == "]" && this.syntax == Syntax.MERLIN) {
-  //       expression = this.parseVarExpression(token)
-  //     } else if (str == "<" || str == ">" || str == "-"
-  //       || (str == "/" && this.syntax == Syntax.LISA && recurse)) {
-  //       // *** need to apply precendence ***
-  //       let arg = this.mustParseExpression(/*undefined, recurse*/)
-  //       if (arg) {
-  //         expression = new exp.UnaryExpression(token, arg)
-  //       } else {
-  //         // *** error ***
-  //       }
-  //     } else if (str == "*") {
-  //       expression = new exp.PcExpression(/*token*/)
-  //     } else if (str == "(") {
-  //       expression = this.parseParenExpression(token)
-  //     } else if (str == '"' || str == "'") {
-  //       // *** how to choose between string literals and strings? ***
-  //       // *** pick these values dynamically ***
-  //       const allowEscapes = true
-  //       const allowUnterminated = false
-  //       expression = this.parseStringExpression(token, allowEscapes, allowUnterminated)
-  //     } else if (str == ",") {
-  //       // ***
-  //     } else {
-  //       // token.setError("Unexpected token")
-  //       return
-  //     }
-  //   } else if (token.type == TokenType.DecNumber) {
-  //     expression = this.parseNumberExpression(token)
-  //   } else if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-  //     // *** expression = parseSymbolReference(token)
-  //     // *** maybe extend symbol scope ***
-  //     token.type = TokenType.Symbol
-  //     str = token.getString()
-  //     // *** scoping ***
-  //     // *** symbol linking if possible ***
-  //     expression = new exp.SymbolExpression(str, token)
-  //   } else {
-  //     // ***
-  //     // token.setError("Invalid expression")
-  //     return
-  //   }
-
-  //   if (recurse) {
-  //     while (true) {
-  //       token = this.peekNextToken()
-  //       if (!token) {
-  //         break
-  //       }
-  //       const str = token.getString()
-  //       if (str == '-' || str == '+' || str == '*' || str == '/') {
-  //         // valid for every syntax
-  //       } else if (str == "=") {
-  //         if (this.syntax
-  //           && this.syntax != Syntax.DASM
-  //           && this.syntax != Syntax.ACME) {
-  //           break
-  //         }
-  //       //*** more here
-  //       } else {
-  //         break
-  //       }
-
-  //       const opToken = this.getNextToken()   // operator token
-  //       if (opToken) {
-  //         let expression2: exp.Expression | undefined
-  //         expression2 = this.OLD_parseExpression(undefined, false)
-  //         //*** error check
-  //         if (expression && expression2) {
-  //           expression = new exp.BinaryExpression(expression, opToken, expression2)
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   return expression
-  // }
-
-  // *** revisit ***
-  // *** some assemblers use '.' prefix for keywords, not labels
-  private isLocalPrefix(str: string): boolean {
-    if (str == ":") {
-      return !this.syntax || this.syntax == Syntax.MERLIN
-    }
-    if (str == ".") {
-      // *** others here ***
-      return !this.syntax || this.syntax == Syntax.DASM
-    }
-    if (str == ">" || str == "<") {
-      // *** others here? ***
-      return !this.syntax || this.syntax == Syntax.LISA
-    }
-    if (str == "@") {
-      // *** others here? ***
-      return !this.syntax || this.syntax == Syntax.CA65
-    }
-    return false
-  }
-
+  // *** LISA uses '!' prefix for decimal numbers ***
   parseNumberExpression(token: Token): exp.NumberExpression {
     let value = NaN
     let forceLong = false
@@ -895,14 +783,20 @@ export class Parser extends Tokenizer {
 
   // Collect all tokens of a string, including opening quote,
   //  actual text, escape characters and terminating quote.
-  //
-  // *** consider a token builder class to simplify/share this logic ***
 
   parseStringExpression(quoteToken: Token, allowEscapes = true, allowUnterminated = false): exp.StringExpression {
 
     quoteToken.type = TokenType.Quote
     this.startExpression(quoteToken)
-    const terminator = quoteToken.getString()
+    let terminator = quoteToken.getString()
+
+    // TODO: just to support NajaText USR parsing
+    if (!this.syntax || this.syntax == Syntax.MERLIN) {
+      if (terminator == "(") {
+        terminator = ")"
+        quoteToken.type = TokenType.Operator
+      }
+    }
 
     let token = new Token(this.sourceLine, this.position, this.position, TokenType.String)
     while (token.end < this.sourceLine.length) {
@@ -913,7 +807,7 @@ export class Parser extends Tokenizer {
           this.pushToken(token)
           this.position = token.end
         }
-        token = new Token(this.sourceLine, this.position, this.position + 1, TokenType.Quote)
+        token = new Token(this.sourceLine, this.position, this.position + 1, quoteToken.type)
         break
       }
       if (nextChar == "\\" && allowEscapes) {
@@ -947,24 +841,63 @@ export class Parser extends Tokenizer {
     this.pushToken(token)
     this.position = token.end
 
-    // *** look for errors in constructor and mark expression?
+    // TODO: just to support NajaText USR parsing
+    if (!this.syntax || this.syntax == Syntax.MERLIN) {
+      if (terminator == ")") {
+        const nextChar = this.peekVeryNextChar()
+        if (nextChar) {
+          if ("=+-".indexOf(nextChar) != -1) {
+            this.pushNextToken()
+          }
+        }
+      }
+    }
+
     return new exp.StringExpression(this.endExpression())
   }
 
-  parseParenExpression(parenToken: Token): exp.Expression {
-    this.startExpression(parenToken)
-    // const recurse = true    // *** always?
-    // *** use this.mustPushExpression?
-    const expression = this.parseExpression(/*undefined, recurse*/)
-    if (expression) {
-      // *** use new this.pushExpression() ***
-      this.pushExpression(expression)
+  mustPushNextFileName(): Token {
+    this.skipWhitespace()
+    let token = this.veryNextFileName()
+    if (token.isEmpty()) {
+      token = new Token(this.sourceLine, this.position, this.position, TokenType.Missing)
+      token.setError("Missing argument, expecting file path")
     }
-    const token = this.mustPushNextToken("expecting ')")
-    if (token.getString() != ")") {
-      token.setError("Unexpected token, expecting ')'")
+    this.pushToken(token)
+    return token
+  }
+
+  private veryNextFileName(): Token {
+
+    const token = new Token(this.sourceLine, this.position, this.position, TokenType.Null)
+    if (this.position < this.sourceLine.length) {
+      let quoted = false
+      if (this.sourceLine[this.position] == '"') {
+        quoted = true
+        this.position += 1
+      }
+
+      while (this.position < this.sourceLine.length) {
+        const code = this.sourceLine.charCodeAt(this.position)
+        if ((code >= 0x30 && code <= 0x39) ||			// 0-9
+          (code >= 0x41 && code <= 0x5A) ||		    // A-Z
+          (code >= 0x61 && code <= 0x7A) ||		    // a-z
+          code == 0x5F || code == 0x2E || code == 0x2F) { // "_" or "." or "/"
+          this.position += 1
+          continue
+        }
+        if (quoted && code == 0x22) {
+          this.position += 1
+        }
+        break
+      }
     }
-    return new exp.ParenExpression(this.endExpression())
+
+    token.end = this.position
+    if (token.length > 0) {
+      token.type = TokenType.FileName
+    }
+    return token
   }
 
   // caller has already checked for Merlin and that token == "]"
@@ -994,8 +927,10 @@ export class Parser extends Tokenizer {
           const equalToken = this.getNextToken()
           this.position = mark
           if (equalToken && equalToken.getString() == "=") {
-            // if found, don't treat it as a merlin line comment
-            return
+            if (equalToken.start <= 3) {
+              // if found, don't treat it as a merlin line comment
+              return
+            }
           }
         } else if (this.syntax != Syntax.MERLIN) {
           return
@@ -1003,6 +938,10 @@ export class Parser extends Tokenizer {
       } else if (this.sourceLine[this.position] != ";") {
         return
       }
+
+      // force skipping whitespace after the last token end and comment start
+      // this.skipWhitespace()
+
       const token = new Token(this.sourceLine, this.position, this.sourceLine.length, TokenType.Comment)
 
       // *** for debugging, scan comment for syntax setting ***
@@ -1025,6 +964,246 @@ export class Parser extends Tokenizer {
       this.position = this.sourceLine.length
       this.pushToken(token)
     }
+  }
+}
+
+//------------------------------------------------------------------------------
+
+// Algorithms for Infix and Postfix expression parsing
+//  http://www.neocomputer.org/projects/lang/infix.html
+
+class OpEntry {
+  public token: Token
+  public op: Op
+  public precedence: number
+  public rightAssoc: boolean
+  public groupEnd: string
+  public isUnary: boolean
+
+  constructor(token: Token, opDef: OpDef, unary: boolean) {
+    this.token = token
+    this.op = opDef.op
+    this.precedence = opDef.pre
+    this.rightAssoc = opDef.ra ?? false
+    this.groupEnd = opDef.end ?? ""
+    this.isUnary = unary
+  }
+}
+
+class ExpressionBuilder {
+
+  private parser: Parser
+
+  private opStack: OpEntry[] = []          // Infix to Postfix conversion
+  private expStack: exp.Expression[] = []  // Postfix evaluation
+  private lastSeen?: (OpEntry | exp.Expression)
+  private parenStack: OpEntry[] = []
+  private inputSet: exp.TokenExpressionSet = []
+
+  // *** pass in hint about type of expression
+  // *** mustParseExpression ***
+
+  constructor(parser: Parser) {
+    this.parser = parser
+  }
+
+  // *** what if token not used?
+
+  // *** maybe pass in syntax to be used?
+
+  // NOTE: This will return some kind of expression unless
+  //  there are no more tokens or if an unknown token type
+  //  is immediately found.
+
+  parse(inToken?: Token): exp.Expression | undefined {
+
+    this.opStack = []
+    this.expStack = []
+    this.parenStack = []
+    this.inputSet = []
+    this.lastSeen = undefined
+
+    // consume operators and expressions in Infix order and process them on Postfix order
+    while (true) {
+
+      const token = inToken ? inToken : this.parser.getNextToken()
+      inToken = undefined
+      if (!token) {
+        break
+      }
+
+      let isUnary = true
+      if (this.lastSeen) {
+        if (this.lastSeen instanceof exp.Expression) {
+          isUnary = false
+        }
+      }
+
+      // *** deal with merlin "." operator versus symbols here ***
+      // *** search for scoped label first? ***
+      // *** what about "," or other expression enders?
+
+      // check token for closing paren, etc.
+      const openOp = this.parenStack.pop()
+      if (openOp) {
+        if (token.getString() == openOp.groupEnd) {
+          this.inputSet.push(token)
+          if (!this.processGroup(openOp, token)) {
+            return this.badExpression()
+          }
+          continue
+        } else {
+          this.parenStack.push(openOp)
+        }
+      }
+
+      const nextOp = this.parseOperator(token, isUnary)
+      if (nextOp) {
+        this.lastSeen = nextOp
+        this.inputSet.push(nextOp.token)
+
+        // check token for opening paren, etc.
+        if (nextOp.op == Op.Group) {
+          this.parenStack.push(nextOp)
+          this.opStack.push(nextOp)
+          continue
+        }
+
+        if (nextOp.isUnary) {
+          // NOTE: All unary operators are assumed/forced to be right associative.
+          //  Only posfix operators would be left-associative, but none are supported.
+          //
+          // *** does this handle unary ops of different precedence? ***
+          this.opStack.push(nextOp)
+        } else {
+          while (true) {
+            const opEntry = this.opStack.pop()
+            if (!opEntry) {
+              break
+            }
+
+            if (opEntry.precedence > nextOp.precedence ||
+              (nextOp.rightAssoc && opEntry.precedence == nextOp.precedence)) {
+                if (!this.processOperator(opEntry)) {
+                  return this.badExpression()
+                }
+            } else {
+              this.opStack.push(opEntry)
+              break
+            }
+          }
+
+          this.opStack.push(nextOp)
+        }
+        continue
+      }
+
+      // values/operands are always pushed to output stack
+      const nextExp = this.parser.parseValueExpression(token)
+      if (!nextExp) {
+        // *** check for ',' and treat all others as error?
+        // *** for now, stop and back up at any unknown token ***
+        // *** maybe add parser.ungetToken(token)? ***
+        this.parser.setPosition(token.start)
+        break
+      }
+
+      this.lastSeen = nextExp
+      this.inputSet.push(nextExp)
+      this.expStack.push(nextExp)
+    }
+
+    // process remaining ops on stack
+    while (true) {
+      const opEntry = this.opStack.pop()
+      if (!opEntry) {
+        break
+      }
+      if (!this.processOperator(opEntry)) {
+        return this.badExpression()
+      }
+    }
+
+    // nothing should be left on stacks
+    if (this.opStack.length || this.parenStack.length) {
+      return this.badExpression()
+    }
+
+    // there should now be zero or one expression left on the stack
+    if (this.expStack.length > 1) {
+      return this.badExpression()
+    }
+
+    return this.expStack.pop()
+  }
+
+  private badExpression(): exp.Expression {
+    const token = this.parser.createMissingToken()
+    token.setError("Parsing error")
+    this.inputSet.push(token)
+    const expression = new exp.BadExpression(this.inputSet)
+    return expression
+  }
+
+  private parseOperator(token: Token, isUnary: boolean): OpEntry | undefined {
+    const syntax: SyntaxDef = SyntaxDefs[this.parser.syntax]
+    const opName = token.getString().toUpperCase()
+    let opDef: OpDef | undefined
+    if (isUnary) {
+      opDef = syntax.unaryOpMap?.get(opName)
+    } else {
+      opDef = syntax.binaryOpMap?.get(opName)
+    }
+    if (opDef) {
+      return new OpEntry(token, opDef, isUnary)
+    }
+  }
+
+  private processOperator(opEntry: OpEntry): boolean {
+    if (opEntry.isUnary) {
+      let arg = this.expStack.pop()
+      if (!arg) {
+        return false
+      }
+      this.expStack.push(new exp.UnaryExpression(opEntry.token, opEntry.op, arg))
+    } else {
+      if (this.expStack.length < 2) {
+        return false
+      }
+      let arg2 = this.expStack.pop()
+      let arg1 = this.expStack.pop()
+      if (arg1 && arg2) {
+        this.expStack.push(new exp.BinaryExpression(arg1, opEntry.token, opEntry.op, arg2))
+      }
+    }
+    return true
+  }
+
+  // process operators until opening group op is found
+  private processGroup(openOp: OpEntry, closeToken: Token): boolean {
+    while (true) {
+      const opEntry = this.opStack.pop()
+      if (!opEntry) {
+        return false
+      }
+      if (opEntry == openOp) {
+        break
+      }
+      if (!this.processOperator(opEntry)) {
+        return false
+      }
+    }
+
+    // *** is empty parens an error? ***
+
+    let arg = this.expStack.pop()
+    if (!arg) {
+      return false
+    }
+    const groupExp = new exp.ParenExpression([openOp.token, arg, closeToken])
+    this.expStack.push(groupExp)
+    this.lastSeen = groupExp
+    return true
   }
 }
 

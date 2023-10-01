@@ -1,6 +1,7 @@
 
 import { Token } from "./tokenizer"
-import { OpDef, Op } from "./syntax"
+import { Op } from "./syntax"
+import { Symbol, SymbolType } from "./symbols"
 
 export type TokenExpressionSet = (Token | Expression)[]
 
@@ -16,7 +17,13 @@ export class Expression {
     }
   }
 
+  // pushTokenExp(item: Token | Expression) {
+  //   this.children.push(item)
+  // }
+
   // return flat list of tokens for this expression and sub-expressions
+  // *** stop using this? ***
+  // *** forEachToken instead?
   getTokens(): Token[] {
     const result: Token[] = []
     for (let i = 0; i < this.children.length; i += 1) {
@@ -32,22 +39,31 @@ export class Expression {
     return result
   }
 
-  // return token containing character position
-  // *** needs to return parent expression ***
-  getTokenAt(ch: number): Token | undefined {
+  // TODO: mechanism to exit early?
+  forEachExpression(proc: (expression: Expression) => void) {
     for (let i = 0; i < this.children.length; i += 1) {
       const child = this.children[i]
       if (child instanceof Expression) {
-        const token = child.getTokenAt(ch)
-        if (token) {
-          return token
+        proc(child)
+      }
+    }
+  }
+
+  // return token containing character position and its parent expression
+  getExpressionAt(ch: number): { expression: Expression, token: Token } | undefined {
+    for (let i = 0; i < this.children.length; i += 1) {
+      const child = this.children[i]
+      if (child instanceof Expression) {
+        const res = child.getExpressionAt(ch)
+        if (res) {
+          return res
         }
       } else {
         if (ch < child.start) {
           return
         }
         if (ch < child.end) {
-          return child
+          return { expression: this, token: child }
         }
       }
     }
@@ -92,8 +108,7 @@ export class Expression {
 
 //------------------------------------------------------------------------------
 
-//*** maybe just push token directly instead?
-export class ErrorExpression extends Expression {
+export class BadExpression extends Expression {
   // ***
 }
 
@@ -177,27 +192,26 @@ export class StringExpression extends Expression {
 
 //------------------------------------------------------------------------------
 
-// *** assignment versus reference instead?
-
-export class LabelExpression extends Expression {
-  // *** put symbol here instead of in token
-
-  // resolve
-  // getSize
-}
-
-// *** currently this is a reference to a symbol ***
 export class SymbolExpression extends Expression {
-  // *** put symbol here instead of in token
 
-  constructor(fullName: string, token: Token) {
-    super([token])
-    // this.fullName = fullName
-    // this.token = token
+  public symbolType: SymbolType
+  public isDefinition: boolean
+  public fullName = ""
+  public symbol?: Symbol
+
+  constructor(children: TokenExpressionSet, symbolType: SymbolType, isDefinition: boolean) {
+    super(children)
+    this.symbolType = symbolType
+    this.isDefinition = isDefinition
   }
 
-  // resolve
-  // getSize
+  resolve(): number | undefined {
+    return this.symbol?.resolve()
+  }
+
+  getSize(): number | undefined {
+    return this.symbol?.getSize()
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -422,7 +436,7 @@ export class AlignExpression extends Expression {
 
   // TODO: expression might be different based on syntax
   constructor(alignment: Expression) {
-    super()
+    super([alignment])
     this.alignment = alignment
     this.pc = new PcExpression()
   }
