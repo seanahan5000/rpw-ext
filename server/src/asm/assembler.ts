@@ -4,6 +4,7 @@ import * as sym from "./symbols"
 import * as par from "./x_parser"
 import * as stm from "./x_statements"
 import * as exp from "./x_expressions"
+import { Symbol, ScopeState } from "./symbols"
 
 export type RpwModule = {
   srcbase: string,
@@ -97,7 +98,7 @@ export class Module {
   public project: Project
   private sourceDir: string
   private startFile: string
-  public symbols = new sym.Symbols()
+  public symbolMap = new Map<string, Symbol>
 
   //*** separate list of exported symbols (also in this.symbols)
   //*** when creating xxx = $ffff symbols, search all other module exports and link
@@ -124,7 +125,7 @@ export class Module {
   update() {
     this.sourceFiles = []
     this.lineRecords = []
-    this.symbols = new sym.Symbols()
+    this.symbolMap = new Map<string, Symbol>
     let asm = new Assembler(this)
     asm.parse(this.startFile)
 
@@ -197,31 +198,31 @@ export class Module {
     }
   }
 
-  addSymbol(symbol: sym.Symbol): boolean {
+  // addSymbol(symbol: Symbol): boolean {
 
-    if (!this.symbols.add(symbol)) {
-      if (!symbol.sourceFile.isShared) {
-    //   token.setError("Duplicate symbol")
-        return false
-      }
-      // *** shared symbol -- should use existing symbol? ***
-      return true
-    }
+  //   if (!this.symbols.add(symbol)) {
+  //     if (!symbol.sourceFile.isShared) {
+  //   //   token.setError("Duplicate symbol")
+  //       return false
+  //     }
+  //     // *** shared symbol -- should use existing symbol? ***
+  //     return true
+  //   }
 
-    // if (!this.symbols.add(symbol)) {
-    //   token.setError("Duplicate symbol")
-    //   *** remove symbol from token? ***
-    //   // *** somehow link this symbol to the previous definition?
-    // } else {
+  //   // if (!this.symbols.add(symbol)) {
+  //   //   token.setError("Duplicate symbol")
+  //   //   *** remove symbol from token? ***
+  //   //   // *** somehow link this symbol to the previous definition?
+  //   // } else {
 
-    // ***
-    return true
-  }
+  //   // ***
+  //   return true
+  // }
 
-  findSymbol(name: string, scope: string): sym.Symbol | undefined {
-    // ***
-    return
-  }
+  // findSymbol(name: string, scope: string): Symbol | undefined {
+  //   // ***
+  //   return
+  // }
 }
 
 export class SourceFile {
@@ -286,19 +287,19 @@ class FileReader {
   }
 }
 
-// *** guess syntax by watching opcodes? ***
+// *** guess syntax by watching keywords? ***
 
 export class Assembler {
 
   public module: Module
-  private scopeState: sym.ScopeState
+  private scopeState: ScopeState
 
   //*** more default file handling behavior ***
   private fileReader: FileReader = new FileReader()
 
   constructor(module: Module) {
     this.module = module
-    this.scopeState = new sym.ScopeState()
+    this.scopeState = new ScopeState()
   }
 
   // pass 0: parse all source files
@@ -331,7 +332,7 @@ export class Assembler {
 
           // process all possible symbols immediately
           if (lineRecord.statement) {
-            this.processSymbols(lineRecord.statement)
+            this.processSymbols(lineRecord.statement, true)
           }
 
           // *** error handling ***
@@ -356,31 +357,50 @@ export class Assembler {
     for (let i = 0; i < this.module.lineRecords.length; i += 1) {
       const statement = this.module.lineRecords[i].statement
       if (statement) {
-        this.processSymbols(statement)
+        this.processSymbols(statement, false)
       }
     }
   }
 
   // *** put in module instead? ***
-  private processSymbols(statement: stm.Statement) {
+  private processSymbols(statement: stm.Statement, firstPass: boolean) {
     // *** maybe just stop on error while walking instead of walking twice
     if (!statement.hasError()) {
       statement.forEachExpression((expression) => {
         if (expression instanceof exp.SymbolExpression) {
           const symExp = expression
+
+          // must do this in the first pass while scope is being tracked
           if (!symExp.fullName) {
             symExp.fullName = this.scopeState.setSymbolExpression(symExp)
-            const foundSym = this.module.symbols.find(symExp.fullName)
-            if (symExp.isDefinition && symExp.symbol) {
-              if (foundSym) {
-                // *** mark as duplicate
-                return
+          }
+          if (symExp.fullName) {
+            if (symExp.isDefinition) {
+              if (firstPass) {
+                const foundSym = this.module.symbolMap.get(symExp.fullName)
+                if (foundSym) {
+                  symExp.setError("Duplicate label")
+                  foundSym.definition.setError("Duplicate label")
+                  return
+                }
+                if (symExp.symbol) {
+                  this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+                }
               }
-              symExp.symbol.fullName = symExp.fullName
-              this.module.symbols.add(symExp.symbol)
-            } else if (foundSym) {
-              // *** add reference to symbol
-              symExp.symbol = foundSym
+            } else if (!symExp.symbol) {
+              const foundSym = this.module.symbolMap.get(symExp.fullName)
+              if (foundSym) {
+                symExp.symbol = foundSym
+                symExp.fullName = foundSym.fullName
+                // *** don't add reference if line is in macro def?
+                foundSym.addReference(symExp)
+              } else if (!firstPass) {
+                // *** should also set error if this is part of a project
+                //  *** but not a standalone file
+                if (symExp.isLocalType()) {
+                  symExp.setError("Label not found")
+                }
+              }
             }
           }
         }

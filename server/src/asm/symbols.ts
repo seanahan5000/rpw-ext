@@ -1,15 +1,12 @@
 
-import * as asm from "./assembler"
+import { SourceFile } from "./assembler"
 import * as exp from "./x_expressions"
 import { Token } from "./tokenizer"
-
-// *** what do generated addresses look like?
-  // *** PcExpression?
-// *** what about locals? constants?
 
 export enum SymbolType {
   Simple      = 0,
   Scoped      = 1,  // explicit scope, fully specified
+
   CheapLocal  = 2,  // scoped to previous non-local
   ZoneLocal   = 3,  // scoped to SUBROUTINE or !zone
   AnonLocal   = 4,  // ++ or --
@@ -18,6 +15,10 @@ export enum SymbolType {
   // Macro          // local inside of macro?
   // Global
   // External
+}
+
+export function isLocalType(symbolType: SymbolType): boolean {
+  return symbolType >= SymbolType.CheapLocal
 }
 
 export enum SymbolFrom {
@@ -39,45 +40,26 @@ export enum SymbolIs {
 
 //------------------------------------------------------------------------------
 
-// *** is there value in this class anymore? ***
-export class Symbols {
-  public map = new Map<string, Symbol>
-
-  add(symbol: Symbol): boolean {
-    if (!symbol.fullName) {
-      return false
-    }
-    if (this.map.get(symbol.fullName)) {
-      return false
-    }
-    this.map.set(symbol.fullName, symbol)
-    return true
-  }
-
-  find(fullName: string): Symbol | undefined {
-    return this.map.get(fullName)
-  }
-}
-
 export class Symbol {
-  // NOTE: Linking a statment instead is complicated by the fact that the
-  //  statement hasn't been created yet at the time of symbol creation.
-  public sourceFile: asm.SourceFile
-  public lineNumber: number
-
-  // Name is assigned later, after scope information is processed
-  //  and symbol has been added to map.
-  public fullName?: string
-  private value?: exp.Expression
-
   public type: SymbolType
   public from = SymbolFrom.Unknown
   public is = SymbolIs.Unknown
 
-  constructor(type: SymbolType, file: asm.SourceFile, lineNumber: number) {
+  public definition: exp.SymbolExpression
+  public references: exp.SymbolExpression[] = []
+  private value?: exp.Expression
+
+  // Name is assigned later, after scope information is processed
+  //  and symbol has been added to map.
+  public fullName?: string
+
+  constructor(type: SymbolType, definition: exp.SymbolExpression) {
     this.type = type
-    this.sourceFile = file
-    this.lineNumber = lineNumber
+    this.definition = definition
+  }
+
+  addReference(symExp: exp.SymbolExpression) {
+    this.references.push(symExp)
   }
 
   getValue(): exp.Expression | undefined {
@@ -98,13 +80,6 @@ export class Symbol {
   }
 }
 
-// export class PcSymbol extends Symbol {
-//   // *** name is fullName? ***
-//   constructor(name: string, file: asm.SourceFile, lineNumber: number) {
-//     super(name, file, lineNumber, new exp.PcExpression())
-//   }
-// }
-
 //------------------------------------------------------------------------------
 
 export class ScopeState {
@@ -120,78 +95,58 @@ export class ScopeState {
 
   private anonCounts = new Array(20).fill(0)
 
-  pushScope(scopeName: string) {
-    if (this.scopePath) {
-      this.scopeStack.push(this.scopePath)
-      this.scopePath = this.scopePath + scopeName
-    } else {
-      this.scopePath = scopeName
-    }
-  }
-
-  popScope() {
-    this.scopePath = this.scopeStack.pop()
-  }
-
-  pushZone(zoneName?: string) {
-    if (this.zoneName) {
-      this.zoneStack.push(this.zoneName)
-    }
-    this.setZone(zoneName)
-  }
-
-  setZone(zoneName?: string) {
-    if (!zoneName) {
-      zoneName = "__z" + this.zoneIndex.toString()
-      this.zoneIndex += 1
-    }
-    this.zoneName = zoneName
-  }
-
-  popZone() {
-    this.zoneName = this.zoneStack.pop()
-  }
-
-  setCheapScope(cheapScope: string) {
-    if (this.scopePath) {
-      this.cheapScope = this.scopePath + cheapScope
-    } else {
-      this.cheapScope = cheapScope
-    }
-  }
-
   setSymbolExpression(symExp: exp.SymbolExpression): string {
 
     switch (symExp.symbolType) {
 
       case SymbolType.Simple: {
         const nameToken = symExp.children[0]
-        if (nameToken instanceof Token) {
-          if (this.scopePath) {
-            return this.scopePath + ":" + nameToken.getString()
-          } else {
-            return nameToken.getString()
+        if (nameToken && !(nameToken instanceof Token)) {
+          break
+        }
+        if (!nameToken && !symExp.isZoneStart) {
+          break
+        }
+
+        let nameStr: string
+        if (nameToken) {
+          nameStr = nameToken.getString()
+        } else {
+          nameStr = "__z" + this.zoneIndex.toString()
+          this.zoneIndex += 1
+        }
+
+        if (this.scopePath) {
+          nameStr = this.scopePath + ":" + nameStr
+        }
+        if (symExp.isDefinition) {
+          this.cheapScope = nameStr
+          if (symExp.isZoneStart) {
+            this.zoneName = nameStr
           }
         }
-        break
+        return nameStr
       }
 
       // NOTE: This currently only supports explicit scoping.
       // TODO: support scope searching used by CA65?
       case SymbolType.Scoped: {
         let result = ""
-        symExp.children.forEach(child => {
-          if (child instanceof Token) {
-            const str = child.getString()
-            if (str[0] == ":") {
-              if (result != "") {
-                result = result + ":"
+        if (!symExp.isDefinition) {
+          for (let i = 0; i < symExp.children.length; i += 1) {
+            const child = symExp.children[i]
+            if (child instanceof Token) {
+              const str = child.getString()
+              if (str[0] == ":") {
+                if (result != "") {
+                  result = result + ":"
+                }
+              } else {
+                result = result + str
               }
-            } else {
-              result = result + str
             }
           }
-        })
+        }
         return result
       }
 
@@ -256,6 +211,40 @@ export class ScopeState {
     }
 
     return ""
+  }
+
+  // future possible methods
+
+  private pushScope(scopeName: string) {
+    if (this.scopePath) {
+      this.scopeStack.push(this.scopePath)
+      this.scopePath = this.scopePath + scopeName
+    } else {
+      this.scopePath = scopeName
+    }
+  }
+
+  private popScope() {
+    this.scopePath = this.scopeStack.pop()
+  }
+
+  private pushZone(zoneName?: string) {
+    if (this.zoneName) {
+      this.zoneStack.push(this.zoneName)
+    }
+    this.setZone(zoneName)
+  }
+
+  private setZone(zoneName?: string) {
+    if (!zoneName) {
+      zoneName = "__z" + this.zoneIndex.toString()
+      this.zoneIndex += 1
+    }
+    this.zoneName = zoneName
+  }
+
+  private popZone() {
+    this.zoneName = this.zoneStack.pop()
   }
 }
 

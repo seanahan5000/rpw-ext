@@ -64,7 +64,7 @@ import { Assembler, LineRecord, SourceFile } from "./assembler"
 import { Tokenizer, Token, TokenType } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
 import { Syntax, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
-import { Symbol, SymbolType, SymbolFrom } from "./symbols"
+import { SymbolType, SymbolFrom } from "./symbols"
 import * as exp from "./x_expressions"
 import * as stm from "./x_statements"
 
@@ -74,8 +74,8 @@ export class Parser extends Tokenizer {
 
   public assembler: Assembler
 
-  private sourceFile: SourceFile | undefined
-  private lineNumber: number = -1
+  public sourceFile: SourceFile | undefined
+  public lineNumber: number = -1
 
   public tokenExpSet: exp.TokenExpressionSet = []
   public tokenExpStack: exp.TokenExpressionSet[] = []
@@ -465,7 +465,7 @@ export class Parser extends Tokenizer {
             // *** maybe macro invocation in first column? ***
             // *** must be whitespace/eol afterwards to be label?
             token.type = TokenType.LocalLabelPrefix
-            return this.buildSymbolExp([token], SymbolType.AnonLocal, isDefinition)
+            return this.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
           }
         }
       }
@@ -575,18 +575,12 @@ export class Parser extends Tokenizer {
       }
     }
 
-    return this.buildSymbolExp(this.endExpression(), localType, isDefinition)
+    return this.newSymbolExpression(this.endExpression(), localType, isDefinition)
   }
 
-  public buildSymbolExp(
-      children: exp.TokenExpressionSet,
-      symbolType: SymbolType,
-      isDefinition: boolean): exp.SymbolExpression {
-    const symExp = new exp.SymbolExpression(children, symbolType, isDefinition)
-    if (isDefinition && this.sourceFile) {
-      symExp.symbol = new Symbol(symbolType, this.sourceFile, this.lineNumber)
-    }
-    return symExp
+  public newSymbolExpression(children: exp.TokenExpressionSet,
+      symbolType: SymbolType, isDefinition: boolean): exp.SymbolExpression {
+    return new exp.SymbolExpression(children, symbolType, isDefinition, this.sourceFile, this.lineNumber)
   }
 
   private pushTrailingColon() {
@@ -626,7 +620,7 @@ export class Parser extends Tokenizer {
       this.pushTrailingColon()
     }
 
-    return this.buildSymbolExp(this.endExpression(), symbolType, isDefinition)
+    return this.newSymbolExpression(this.endExpression(), symbolType, isDefinition)
   }
 
   parseLisaLocal(token: Token, isDefinition: boolean): exp.Expression {
@@ -648,7 +642,7 @@ export class Parser extends Tokenizer {
       nextToken = this.addMissingToken("Missing decimal digit")
     }
 
-    return this.buildSymbolExp(this.endExpression(), SymbolType.LisaLocal, isDefinition)
+    return this.newSymbolExpression(this.endExpression(), SymbolType.LisaLocal, isDefinition)
   }
 
   private mustParseExpression(token?: Token): exp.Expression {

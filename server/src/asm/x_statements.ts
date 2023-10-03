@@ -1,10 +1,10 @@
 
 import { Syntax } from "./syntax"
 import { Token, TokenType } from "./tokenizer"
-// import { Expression, TokenExpressionSet } from "./x_expressions"
-import * as exp from "./x_expressions"
-import { Parser } from "./x_parser"
 import { SymbolType, SymbolFrom } from "./symbols"
+import { Assembler } from "./assembler"
+import { Parser } from "./x_parser"
+import * as exp from "./x_expressions"
 
 //------------------------------------------------------------------------------
 
@@ -38,8 +38,23 @@ export class Statement extends exp.Expression {
 }
 
 //------------------------------------------------------------------------------
+
+// "subroutine" and ".zone" support
+export class ZoneStatement extends Statement {
+
+  parse(parser: Parser) {
+    if (!this.labelExp) {
+      this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
+        parser.sourceFile, parser.lineNumber)
+      this.children.unshift(this.labelExp)
+    }
+    this.labelExp.isZoneStart = true
+  }
+}
+
+//==============================================================================
 // Opcodes
-//------------------------------------------------------------------------------
+//==============================================================================
 
 enum OpMode {
   NONE,
@@ -190,7 +205,7 @@ export class OpStatement extends Statement {
                 return
               }
               token.type = TokenType.LocalLabelPrefix
-              parser.pushExpression(parser.buildSymbolExp([token], SymbolType.AnonLocal, isDefinition))
+              parser.pushExpression(parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition))
               return
             }
           }
@@ -227,9 +242,9 @@ export class OpStatement extends Statement {
   }
 }
 
-//------------------------------------------------------------------------------
+//==============================================================================
 // Conditionals
-//------------------------------------------------------------------------------
+//==============================================================================
 
 class ConditionalStatement extends Statement {
   // ***
@@ -263,9 +278,9 @@ export class EndIfStatement extends ConditionalStatement {
   // ***
 }
 
-//------------------------------------------------------------------------------
+//==============================================================================
 // Storage
-//------------------------------------------------------------------------------
+//==============================================================================
 
 class DataStatement extends Statement {
 
@@ -322,6 +337,8 @@ export class WordDataStatement extends DataStatement {
     super(2, swapEndian)
   }
 }
+
+//------------------------------------------------------------------------------
 
 export class StorageStatement extends Statement {
 
@@ -386,6 +403,8 @@ export class WordStorageStatement extends StorageStatement {
   }
 }
 
+//------------------------------------------------------------------------------
+
 // NOTE: caller has checked for odd nibbles
 function scanHex(hexString: string, buffer: number[]) {
   while (hexString.length > 0) {
@@ -441,9 +460,9 @@ export class HexStatement extends Statement {
   }
 }
 
-//------------------------------------------------------------------------------
+//==============================================================================
 // Disk
-//------------------------------------------------------------------------------
+//==============================================================================
 
 export class IncludeStatement extends Statement {
   parse(parser: Parser) {
@@ -562,6 +581,7 @@ export class UsrStatement extends Statement {
 
 // TODO: probably needs to be split by syntax
 
+// *** macro invoke, not definition ***
 export class MacroStatement extends Statement {
 
   parse(parser: Parser) {

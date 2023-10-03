@@ -303,7 +303,7 @@ class DasmSyntax extends SyntaxDef {
       [ "eif",        { create: () => { return new stm.EndIfStatement() }}],
 
       // scope
-      [ "subroutine", {}],
+      [ "subroutine", { create: () => { return new stm.ZoneStatement() }}],
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

@@ -1,7 +1,8 @@
 
+import { SourceFile } from "./assembler"
 import { Token } from "./tokenizer"
 import { Op } from "./syntax"
-import { Symbol, SymbolType } from "./symbols"
+import { Symbol, SymbolType, isLocalType } from "./symbols"
 
 export type TokenExpressionSet = (Token | Expression)[]
 
@@ -17,13 +18,50 @@ export class Expression {
     }
   }
 
+  // *** overkill to set same error on every token ***
+  setError(message: string) {
+    for (let i = 0; i < this.children.length; i += 1) {
+      this.children[i].setError(message)
+    }
+  }
+
+  // get full range of child tokens and expressions
+  // *** could add this to Tokens too ***
+  getRange(): { sourceLine: string, start: number, end: number } | undefined {
+    let start = 9999
+    let end = -1
+    let sourceLine = ""
+    for (let i = 0; i < this.children.length; i += 1) {
+      const child = this.children[i]
+      if (child instanceof Expression) {
+        const range = child.getRange()
+        if (range) {
+          if (start > range.start) {
+            start = range.start
+          }
+          if (end < range.end) {
+            end = range.end
+          }
+        }
+      } else {
+        sourceLine = child.sourceLine
+        if (start > child.start) {
+          start = child.start
+        }
+        if (end < child.end) {
+          end = child.end
+        }
+      }
+    }
+    return start < end ? { sourceLine, start, end } : undefined
+  }
+
   // pushTokenExp(item: Token | Expression) {
   //   this.children.push(item)
   // }
 
   // return flat list of tokens for this expression and sub-expressions
-  // *** stop using this? ***
-  // *** forEachToken instead?
+  // *** stop using this! ***
   getTokens(): Token[] {
     const result: Token[] = []
     for (let i = 0; i < this.children.length; i += 1) {
@@ -82,14 +120,10 @@ export class Expression {
   }
 
   // return flat string of all tokens in expression, possibly including whitespace
+  // *** return undefined instead? ***
   getString(): string {
-    const tokens = this.getTokens()
-    if (tokens.length == 0) {
-      return ""
-    }
-    const start = tokens[0].start
-    const end = tokens[tokens.length - 1].end
-    return tokens[0].sourceLine.substring(start, end)
+    const range = this.getRange()
+    return range ? range.sourceLine.substring(range.start, range.end) : ""
   }
 
   // *** type?
@@ -196,13 +230,30 @@ export class SymbolExpression extends Expression {
 
   public symbolType: SymbolType
   public isDefinition: boolean
-  public fullName = ""
+  public sourceFile?: SourceFile
+  public lineNumber: number
+  public fullName?: string
   public symbol?: Symbol
+  public isZoneStart = false
 
-  constructor(children: TokenExpressionSet, symbolType: SymbolType, isDefinition: boolean) {
+  constructor(
+      children: TokenExpressionSet,
+      symbolType: SymbolType,
+      isDefinition: boolean,
+      sourceFile?: SourceFile,
+      lineNumber?: number) {
     super(children)
     this.symbolType = symbolType
     this.isDefinition = isDefinition
+    this.sourceFile = sourceFile
+    this.lineNumber = lineNumber ?? 0
+    if (isDefinition) {
+      this.symbol = new Symbol(symbolType, this)
+    }
+  }
+
+  isLocalType(): boolean {
+    return isLocalType(this.symbolType)
   }
 
   resolve(): number | undefined {

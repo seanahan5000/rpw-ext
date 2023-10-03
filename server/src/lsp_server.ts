@@ -8,7 +8,7 @@ import * as asm from "./asm/assembler";
 import * as exp from "./asm/x_expressions";
 import * as stm from "./asm/x_statements";
 import * as fs from 'fs';
-import { SymbolIs } from "./asm/symbols";
+import { Symbol, SymbolIs } from "./asm/symbols";
 
 //------------------------------------------------------------------------------
 
@@ -437,7 +437,7 @@ export class LspServer {
         if (includedTypes) {
           // *** exclude constants if in non-immediate opcode
           // *** watch out for errors and warnings?
-          sourceFile.module.symbols.map.forEach((symbol, key: string) => {
+          sourceFile.module.symbolMap.forEach((symbol, key: string) => {
 
             // *** consider adding source file name where found, in details ***
 
@@ -467,7 +467,7 @@ export class LspServer {
             // *** item.detail = "detail text"
             // *** item.labelDetails = { detail: " label det", description: "label det desc" }
 
-            item.data = { filePath: symbol.sourceFile.path, line: symbol.lineNumber }
+            item.data = { filePath: symbol.definition.sourceFile?.path, line: symbol.definition.lineNumber }
             completions.push(item)
           })
         }
@@ -492,43 +492,6 @@ export class LspServer {
       }
     }
     return item
-  }
-
-  async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      // TODO: if symbol is entry point, scan entire project, skip duplicates
-      let sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        const statement = sourceFile.statements[params.position.line]
-        if (statement) {
-          const res = statement.getExpressionAt(params.position.character)
-          if (res && res.expression instanceof exp.SymbolExpression) {
-            const symbol = res.expression.symbol
-            if (symbol) {
-              // *** need sourceFile, lineNumber, expression (or range of characters) ***
-          //**********
-              const dstStatement = symbol.sourceFile.statements[symbol.lineNumber]
-              // *** don't just use flag tokens ***
-              const dstTokens = dstStatement.getTokens()
-              const dstToken = dstTokens[0]
-              let range: lsp.Range = {
-                start: { line: symbol.lineNumber, character: dstToken.start },
-                end: { line: symbol.lineNumber, character: dstToken.end }
-              }
-              // *** just use lsp.Definition instead? ***
-              let targetLink: lsp.DefinitionLink = {
-                targetUri: URI.file(symbol.sourceFile.path).toString(),
-                targetRange: range,
-                targetSelectionRange: range
-              }
-          //**********
-              return [ targetLink ]
-            }
-          }
-        }
-      }
-    }
   }
 
   async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
@@ -624,36 +587,60 @@ export class LspServer {
         // *** TODO: if hovering over macro invocation, show macro contents ***
 
         if (hoverExp instanceof exp.SymbolExpression) {
-
           if (hoverExp.isDefinition) {
             // *** show value of symbol, if resolved
-          } else {
-            // *** also show value, if resolved
-            // *** show header comments for symbol being referenced
+          } else if (hoverExp.symbol) {
+            const defExp = hoverExp.symbol?.definition
+            if (defExp && defExp.sourceFile) {
+              // *** also show value, if resolved
+              let header = this.getCommentHeader(defExp.sourceFile, defExp.lineNumber)
+              if (header) {
+                return { contents: header };
+              }
+            }
           }
         }
-
-        // if (res.token.type == TokenType.Symbol) {
-        //   //*** if local, may need to build and find full name
-        //   const str = res.token.getString()
-        //   // (will eventually require walk across projects/ENT files)
-        //   // *** for now, just search global scope ***
-        //   const symbol = sourceFile.module.symbols.find(str)
-        //   if (symbol !== undefined) {
-        //     let header = this.getCommentHeader(symbol.sourceFile, symbol.lineNumber)
-        //     if (header) {
-        //       return { contents: header };
-        //     }
-        //   }
-        // }
       }
     }
 
     return { contents: [] }
   }
 
+  async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      // TODO: if symbol is entry point, scan entire project, skip duplicates
+      let sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
+        const statement = sourceFile.statements[params.position.line]
+        if (statement) {
+          const res = statement.getExpressionAt(params.position.character)
+          if (res && res.expression instanceof exp.SymbolExpression) {
+            const symExp = res.expression
+            let symbol = symExp.symbol
+            if (symbol) {
+              const expRange = symbol.definition.getRange()
+              if (expRange && symbol.definition.sourceFile) {
+                let range: lsp.Range = {
+                  start: { line: symbol.definition.lineNumber, character: expRange.start },
+                  end: { line: symbol.definition.lineNumber, character: expRange.end }
+                }
+                // *** just use lsp.Definition instead? ***
+                let targetLink: lsp.DefinitionLink = {
+                  targetUri: URI.file(symbol.definition.sourceFile.path).toString(),
+                  targetRange: range,
+                  targetSelectionRange: range
+                }
+                return [ targetLink ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // TODO: if symbol is an entry point, walk all modules of project
-  // *** fix this ***
   async onReferences(params: lsp.ReferenceParams, token?: lsp.CancellationToken): Promise<lsp.Location[]> {
     const locations: lsp.Location[] = []
     const filePath = pathFromUriString(params.textDocument.uri)
@@ -668,32 +655,19 @@ export class LspServer {
         // *** if SymbolExpression
         const symbol = statement?.labelExp?.symbol
         if (symbol) {
-          // *** walk symbol.references.forEach ***
-            // *** need souceFile, lineNumber, expression (or character range) ***
-
-          // const token = undefined //statement.getTokenAt(params.position.character)
-          // if (token /*&& token.symbol*/) {
-          //   const module = sourceFile.module
-          //   module.sourceFiles.forEach((sourceFile: asm.SourceFile) => {
-          //     sourceFile.statements.forEach((refStatement: stm.Statement, refIndex: number) => {
-          //       // *** don't just use flattened tokens ***
-          //       const refTokens = refStatement.getTokens()
-          //       for (let i = 0; i < refTokens.length; i += 1) {
-          //         const refToken = refTokens[i]
-          //         // if (refToken.symbol == token.symbol) {
-          //           let location: lsp.Location = {
-          //             uri: URI.file(sourceFile.path).toString(),
-          //             range: {
-          //               start: { line: refIndex, character: refToken.start },
-          //               end: { line: refIndex, character: refToken.end }
-          //             }
-          //           }
-          //           locations.push(location)
-          //         // }
-          //       }
-          //     })
-          //   })
-          // }
+          symbol.references.forEach(symExp => {
+            const expRange = symExp.getRange()
+            if (expRange) {
+              let location: lsp.Location = {
+                uri: URI.file(sourceFile.path).toString(),
+                range: {
+                  start: { line: symExp.lineNumber, character: expRange.start },
+                  end: { line: symExp.lineNumber, character: expRange.end }
+                }
+              }
+              locations.push(location)
+            }
+          })
         }
       }
     }
@@ -710,6 +684,7 @@ export class LspServer {
       const statement = sourceFile.statements[i];
       const tokens = statement.getTokens()
       // TODO: mark statement with error and skip token scan here
+      // *** limit duplicate errors on single line ***
       for (let j = 0; j < tokens.length; j += 1) {
         const token = tokens[j];
         if (token.errorType != TokenErrorType.None) {
