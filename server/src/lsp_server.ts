@@ -2,13 +2,12 @@
 import * as lsp from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { TokenType, TokenErrorType } from "./asm/tokenizer"
-import { LabelScanner } from "./asm/labels";
+import { Token, TokenType, TokenErrorType } from "./asm/tokenizer"
 import * as asm from "./asm/assembler";
 import * as exp from "./asm/x_expressions";
-import * as stm from "./asm/x_statements";
 import * as fs from 'fs';
-import { Symbol, SymbolIs } from "./asm/symbols";
+import { Symbol, SymbolIs } from "./asm/symbols"
+import { renumberLocals, renameSymbol } from "./asm/labels"
 
 //------------------------------------------------------------------------------
 
@@ -41,6 +40,9 @@ export enum SemanticModifier {
 
 //------------------------------------------------------------------------------
 
+// *** this needs cleanup, fix Windows normalization ***
+// *** look at protocol-translation.ts in tslsp
+
 export function pathFromUriString(stringUri: string): string | undefined {
   const uri = URI.parse(stringUri);
   if (uri.scheme == 'file') {
@@ -48,6 +50,10 @@ export function pathFromUriString(stringUri: string): string | undefined {
     const RE_PATHSEP_WINDOWS = /\\/g;
     return fsPath.replace(RE_PATHSEP_WINDOWS, '/');
   }
+}
+
+function uriFromPath(path: string) {
+  return URI.file(path).toString()
 }
 
 //------------------------------------------------------------------------------
@@ -221,10 +227,13 @@ export class LspServer {
     connection.onFoldingRanges(this.onFoldingRanges.bind(this))
     connection.onHover(this.onHover.bind(this))
     connection.onReferences(this.onReferences.bind(this))
+    connection.onPrepareRename(this.onPrepareRename.bind(this))
+    connection.onRenameRequest(this.onRename.bind(this))
     connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
     connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
   }
 
+  // *** just use a map lookup directly? ***
   private findSourceFile(filePath: string): asm.SourceFile | undefined {
     for (let i = 0; i < this.projects.length; i += 1) {
       const sourceFile = this.projects[i].findSourceFile(filePath)
@@ -496,6 +505,9 @@ export class LspServer {
 
   async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
     if (params.command == "rpw65.renumberLocals") {
+
+      // TODO: make this a call to separate method
+
       if (params.arguments === undefined || params.arguments.length < 2) {
         return;
       }
@@ -521,8 +533,12 @@ export class LspServer {
         return
       }
 
-      const scanner = new LabelScanner()
-      const lineEdits = scanner.renumberLocals(sourceFile.statements, range.start.line, range.end.line)
+      const fileEdits = renumberLocals(sourceFile, range.start.line, range.end.line)
+      if (!fileEdits || fileEdits.size > 1) {
+        return
+      }
+
+      const lineEdits = fileEdits.get(sourceFile)
       if (!lineEdits) {
         return
       }
@@ -674,10 +690,72 @@ export class LspServer {
     return locations
   }
 
+  async onPrepareRename(params: lsp.PrepareRenameParams, token?: lsp.CancellationToken): Promise<lsp.Range | { range: lsp.Range; placeholder: string; } | undefined | null> {
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      const sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
+        const statement = sourceFile.statements[params.position.line]
+        const res = statement.getExpressionAt(params.position.character)
+        if (res && res.expression instanceof exp.SymbolExpression) {
+          const symExp = res.expression
+          let symbol = symExp.symbol
+          if (symbol) {
+            const token = symbol.getSimpleNameToken()
+            let range: lsp.Range = {
+              start: { line: symbol.definition.lineNumber, character: token.start },
+              end: { line: symbol.definition.lineNumber, character: token.end }
+            }
+            return { range, placeholder: token.getString() }
+          }
+        }
+      }
+    }
+  }
+
+  async onRename(params: lsp.RenameParams, token?: lsp.CancellationToken): Promise<lsp.WorkspaceEdit | undefined | null> {
+    const filePath = pathFromUriString(params.textDocument.uri)
+    if (filePath) {
+      const sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
+        const statement = sourceFile.statements[params.position.line]
+        const res = statement.getExpressionAt(params.position.character)
+        if (res && res.expression instanceof exp.SymbolExpression) {
+          const symExp = res.expression
+          let symbol = symExp.symbol
+          if (symbol) {
+            // *** make sure new name won't cause duplicate label problems ***
+            const fileEdits = renameSymbol(symbol, params.newName)
+            if (fileEdits) {
+              const changes: lsp.WorkspaceEdit['changes'] = {}
+              fileEdits.forEach((value, key) => {
+                const sourceFile = key
+                const lineEdits = value
+                const uri = uriFromPath(sourceFile.path)
+                const textEdits = changes[uri] || (changes[uri] = [])
+                for (let i = 0; i < lineEdits.length; i += 1) {
+                  const lineEdit = lineEdits[i]
+                  const edit: lsp.TextEdit = {
+                    range: {
+                      start: { line: lineEdit.line, character: lineEdit.start },
+                      end: { line: lineEdit.line, character: lineEdit.end }
+                    },
+                    newText: lineEdit.text
+                  }
+                  textEdits.push(edit)
+                }
+              })
+              return { changes }
+            }
+          }
+        }
+      }
+    }
+  }
+
   public updateDiagnostics(sourceFile: asm.SourceFile) {
 
-    const scanner = new LabelScanner();
-    scanner.scanStatements(sourceFile.statements);
+    // *** mark unused (simple) labels?
 
     const diagnostics: lsp.Diagnostic[] = [];
     for (let i = 0; i < sourceFile.statements.length; i += 1) {
@@ -839,20 +917,20 @@ export class LspServer {
   private getCommentHeader(atFile: asm.SourceFile, atLine: number): string | undefined {
 
     // scan up from hover line looking for comment blocks
-    let startLine = atLine;
+    let startLine = atLine
     while (startLine > 0) {
-      startLine -= 1;
-      const statement = atFile.statements[startLine]
-      const tokens = statement.getTokens()
+      startLine -= 1
+      const token = atFile.statements[startLine].children[0]
 
       // include empty statements
-      if (tokens.length == 0) {
-        continue;
+      if (token == undefined) {
+        continue
       }
+
       // stop when first non-comment statement found
-      if (tokens[0].type != TokenType.Comment) {
-        startLine += 1;
-        break;
+      if (!(token instanceof Token) || token.type != TokenType.Comment) {
+        startLine += 1
+        break
       }
     }
 

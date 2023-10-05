@@ -1,5 +1,4 @@
 
-import { SourceFile } from "./assembler"
 import * as exp from "./x_expressions"
 import { Token } from "./tokenizer"
 
@@ -77,6 +76,17 @@ export class Symbol {
 
   getSize(): number | undefined {
     return this.value?.getSize()
+  }
+
+  // get symbol name with no scope, local prefix, or trailing ":"
+  //  (mainly used to rename symbols)
+  getSimpleNameToken(): Token {
+    let index = this.definition.children.length - 1
+    let token = this.definition.children[index]
+    if (index > 0 && token.getString() == ":") {
+      token = this.definition.children[index - 1]
+    }
+    return <Token>token
   }
 }
 

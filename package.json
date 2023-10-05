@@ -59,7 +59,8 @@
 			"editor/context": [
 				{
 					"when": "resourceLangId == rpw65",
-					"command": "rpw65.renumberLocals"
+					"command": "rpw65.renumberLocals",
+					"group": "1_modification"
 				}
 			]
 		},

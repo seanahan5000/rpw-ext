@@ -59,6 +59,7 @@ connection.onInitialize((params: InitializeParams) => {
 			},
 			definitionProvider: true,
 			hoverProvider: true,
+			renameProvider: { prepareProvider: true },
 			referencesProvider: true,
 			foldingRangeProvider: true
 			// ,

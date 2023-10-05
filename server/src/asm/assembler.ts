@@ -1,6 +1,5 @@
 
 import * as fs from 'fs'
-import * as sym from "./symbols"
 import * as par from "./x_parser"
 import * as stm from "./x_statements"
 import * as exp from "./x_expressions"
@@ -363,6 +362,7 @@ export class Assembler {
   }
 
   // *** put in module instead? ***
+  // *** later, when scanning disabled lines, still process references ***
   private processSymbols(statement: stm.Statement, firstPass: boolean) {
     // *** maybe just stop on error while walking instead of walking twice
     if (!statement.hasError()) {

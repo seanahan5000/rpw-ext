@@ -100,7 +100,9 @@ export class Expression {
         if (ch < child.start) {
           return
         }
-        if (ch < child.end) {
+        // NOTE: if ch is at end, include it in this token rather than next
+        //  (necessary because a selected word reports its position as at the end)
+        if (ch <= child.end) {
           return { expression: this, token: child }
         }
       }
