@@ -179,7 +179,7 @@ class MerlinSyntax extends SyntaxDef {
 
     this.keywordMap = new Map<string, KeywordDef>([
       [ "xc",     {}],
-      [ "org",    {}],
+      [ "org",    { create: () => { return new stm.OrgStatement() }}],
       [ "equ",    { create: () => { return new stm.EquStatement() }}],
       [ "=",      { create: () => { return new stm.EquStatement() }}],
       [ "err",    { create: () => { return new stm.ErrorStatement() }}],
@@ -190,9 +190,11 @@ class MerlinSyntax extends SyntaxDef {
       [ "sav",    { create: () => { return new stm.SaveStatement() }}],
       [ "dsk",    {}],
 
+      // macros
       [ "mac",    {}],
       [ "eom",    {}],
       [ "<<<",    {}],
+
       [ "dum",    {}],
       [ "dummy",  {}],
       [ "dend",   {}],
@@ -264,7 +266,7 @@ class DasmSyntax extends SyntaxDef {
 
     this.keywordMap = new Map<string, KeywordDef>([
       [ "processor",  {}],
-      [ "org",        {}],
+      [ "org",        { create: () => { return new stm.OrgStatement() }}],
       [ "equ",        { create: () => { return new stm.EquStatement() }}],
       [ "=",          { create: () => { return new stm.EquStatement() }}],
       [ "err",        { create: () => { return new stm.ErrorStatement() }}],
@@ -272,8 +274,10 @@ class DasmSyntax extends SyntaxDef {
       // disk
       [ "include",    { create: () => { return new stm.IncludeStatement() }}],
 
+      // macros
       [ "mac",        {}],
       [ "endm",       {}],
+
       [ "seg",        {}],
       [ "repeat",     {}],
       [ "repend",     {}],
@@ -370,6 +374,7 @@ class AcmeSyntax extends SyntaxDef {
 
     this.keywordMap = new Map<string, KeywordDef>([
       [ "!cpu",       {}],
+      [ "*",          { create: () => { return new stm.OrgStatement() }}],
 
       // disk
       [ "!source",    {}],
@@ -388,7 +393,7 @@ class AcmeSyntax extends SyntaxDef {
       [ "!if",        { create: () => { return new stm.IfStatement() }}],
 
       // scope
-      [ "!zone",      {}],
+      [ "!zone",      { create: () => { return new stm.ZoneStatement() }}],
 
       // messages
       [ "!serious",   {}],
@@ -463,6 +468,7 @@ class Ca65Syntax extends SyntaxDef {
     super()
 
     this.keywordMap = new Map<string, KeywordDef>([
+      [ ".org",     { create: () => { return new stm.OrgStatement() }}],
       // ***
     ])
 
@@ -536,7 +542,7 @@ class LisaSyntax extends SyntaxDef {
     super()
 
     this.keywordMap = new Map<string, KeywordDef>([
-      [ "org",  {}],
+      [ "org",  { create: () => { return new stm.OrgStatement() }}],
       [ "equ",  { create: () => { return new stm.EquStatement() }}],
       [ "=",    { create: () => { return new stm.EquStatement() }}],
 

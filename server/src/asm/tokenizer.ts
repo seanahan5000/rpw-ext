@@ -112,13 +112,14 @@ export class Tokenizer {
   }
 
   getNextToken(): Token | undefined {
-    // let start = this.position
+    let start = this.position
     this.skipWhitespace()
     let token = this.getVeryNextToken()
-    // if (!token) {
-    //   // back up to before skipWhitespace
-    //   this.position = start
-    // }
+    if (!token) {
+      // Back up to before skipWhitespace so that a subsequent missing token
+      //  can be added at source of problem instead of at the next of the line.
+      this.position = start
+    }
     return token
   }
 

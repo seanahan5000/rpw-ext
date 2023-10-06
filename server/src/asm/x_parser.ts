@@ -234,7 +234,6 @@ export class Parser extends Tokenizer {
 
     if (labelExp) {
       this.pushExpression(labelExp)
-
       if (labelExp instanceof exp.VarExpression) {
         opToken = this.pushNextToken()
         statement = new stm.VarStatement()
@@ -304,7 +303,7 @@ export class Parser extends Tokenizer {
     }
 
     // handle possible comment at end of statement
-    // *** still getting pushed twice? ***
+    this.skipWhitespace()
     this.pushNextComment()
 
     // *** if not macro, if not dummy, if not disabled ***
@@ -390,7 +389,7 @@ export class Parser extends Tokenizer {
         return
       }
 
-      if (nextChar == "!" || nextChar == "}") {
+      if (nextChar == "!" || nextChar == "}" || nextChar == "*") {
         if (!this.syntax || this.syntax == Syntax.ACME){
           return
         }
@@ -401,11 +400,12 @@ export class Parser extends Tokenizer {
   
       if (nextChar == " " || nextChar == "\t") {    // *** tabs?
 
-        // detect indented variable assignment
+        // detect indented variable assignment but exclude
+        //  "*=$1000" syntax for setting org
         if (!this.syntax || this.syntax == Syntax.ACME) {
           const t1 = this.getNextToken()
           const t2 = this.peekNextToken()
-          if (!t1 || !t2 || t2.getString() != "=") {
+          if (!t1 || !t2 || t1.getString() == "*" || t2.getString() != "=") {
             this.position = savedPosition
             return
           }

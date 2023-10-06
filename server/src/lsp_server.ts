@@ -1,12 +1,14 @@
 
 import * as lsp from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
+import * as fs from 'fs';
+
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Token, TokenType, TokenErrorType } from "./asm/tokenizer"
-import * as asm from "./asm/assembler";
-import * as exp from "./asm/x_expressions";
-import * as fs from 'fs';
-import { Symbol, SymbolIs } from "./asm/symbols"
+import * as asm from "./asm/assembler"
+import * as exp from "./asm/x_expressions"
+import { Statement } from "./asm/x_statements"
+import { SymbolType, SymbolIs } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 
 //------------------------------------------------------------------------------
@@ -233,6 +235,20 @@ export class LspServer {
     connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
   }
 
+  private getSourceFile(uri: string): asm.SourceFile | undefined {
+    const filePath = pathFromUriString(uri)
+    if (filePath) {
+      return this.findSourceFile(filePath)
+    }
+  }
+
+  private getStatement(uri: string, lineNumber: number): Statement | undefined {
+    const sourceFile = this.getSourceFile(uri)
+    if (sourceFile) {
+      return sourceFile.statements[lineNumber]
+    }
+  }
+
   // *** just use a map lookup directly? ***
   private findSourceFile(filePath: string): asm.SourceFile | undefined {
     for (let i = 0; i < this.projects.length; i += 1) {
@@ -389,7 +405,7 @@ export class LspServer {
         }
 
         // *** mark as dirty the file/projects that changed ***
-        this.updateProjects()   // ***
+        this.updateProjects()
 
         const sourceFile = this.findSourceFile(filePath)
         if (sourceFile) {
@@ -447,6 +463,10 @@ export class LspServer {
           // *** exclude constants if in non-immediate opcode
           // *** watch out for errors and warnings?
           sourceFile.module.symbolMap.forEach((symbol, key: string) => {
+
+            if (symbol.type != SymbolType.Simple) {
+              return
+            }
 
             // *** consider adding source file name where found, in details ***
 
@@ -561,47 +581,34 @@ export class LspServer {
 
   async onFoldingRanges(params: lsp.FoldingRangeParams, token?: lsp.CancellationToken): Promise<lsp.FoldingRange[] | undefined> {
     const foldingRanges: lsp.FoldingRange[] = []
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      let sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        sourceFile.statements.forEach(statement => {
-          const nextConditional = (statement as any).nextConditional
-          if (nextConditional && sourceFile) {
-            const startLine = sourceFile.statements.indexOf(statement)
-            const endLine = sourceFile.statements.indexOf(nextConditional) - 1
-            if (startLine < endLine) {
-              const range: lsp.FoldingRange = {
-                startLine, endLine
-              }
-              foldingRanges.push(range)
+    let sourceFile = this.getSourceFile(params.textDocument.uri)
+    if (sourceFile) {
+      // TODO: could support folding macro definitions
+      sourceFile.statements.forEach(statement => {
+        const nextConditional = (statement as any).nextConditional
+        if (nextConditional && sourceFile) {
+          const startLine = sourceFile.statements.indexOf(statement)
+          const endLine = sourceFile.statements.indexOf(nextConditional) - 1
+          if (startLine < endLine) {
+            const range: lsp.FoldingRange = {
+              startLine, endLine
             }
+            foldingRanges.push(range)
           }
-        })
-      }
+        }
+      })
     }
     return foldingRanges
   }
 
   // TODO: if symbol is an entry point, walk all modules of project
   async onHover(params: lsp.TextDocumentPositionParams, token?: lsp.CancellationToken): Promise<lsp.Hover> {
-    const filePath = pathFromUriString(params.textDocument.uri);
-    if (!filePath) {
-      return { contents: [] };
-    }
-
-    const sourceFile = this.findSourceFile(filePath)
-    if (!sourceFile) {
-      return { contents: [] };
-    }
-
-    const statement = sourceFile.statements[params.position.line];
+    const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
-      const hoverExp = statement.getExpressionAt(params.position.character);
-      if (hoverExp) {
-
-        // *** TODO: if hovering over macro invocation, show macro contents ***
-
+      const res = statement.getExpressionAt(params.position.character)
+      if (res && res.expression instanceof exp.SymbolExpression) {
+        const hoverExp = res.expression
+        // TODO: if hovering over macro invocation, show macro contents
         if (hoverExp instanceof exp.SymbolExpression) {
           if (hoverExp.isDefinition) {
             // *** show value of symbol, if resolved
@@ -611,7 +618,7 @@ export class LspServer {
               // *** also show value, if resolved
               let header = this.getCommentHeader(defExp.sourceFile, defExp.lineNumber)
               if (header) {
-                return { contents: header };
+                return { contents: header }
               }
             }
           }
@@ -623,33 +630,27 @@ export class LspServer {
   }
 
   async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      // TODO: if symbol is entry point, scan entire project, skip duplicates
-      let sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        const statement = sourceFile.statements[params.position.line]
-        if (statement) {
-          const res = statement.getExpressionAt(params.position.character)
-          if (res && res.expression instanceof exp.SymbolExpression) {
-            const symExp = res.expression
-            let symbol = symExp.symbol
-            if (symbol) {
-              const expRange = symbol.definition.getRange()
-              if (expRange && symbol.definition.sourceFile) {
-                let range: lsp.Range = {
-                  start: { line: symbol.definition.lineNumber, character: expRange.start },
-                  end: { line: symbol.definition.lineNumber, character: expRange.end }
-                }
-                // *** just use lsp.Definition instead? ***
-                let targetLink: lsp.DefinitionLink = {
-                  targetUri: URI.file(symbol.definition.sourceFile.path).toString(),
-                  targetRange: range,
-                  targetSelectionRange: range
-                }
-                return [ targetLink ]
-              }
+    const statement = this.getStatement(params.textDocument.uri, params.position.line)
+    if (statement) {
+      const res = statement.getExpressionAt(params.position.character)
+      // TODO: support macro definitions
+      if (res && res.expression instanceof exp.SymbolExpression) {
+        const symExp = res.expression
+        let symbol = symExp.symbol
+        if (symbol) {
+          const expRange = symbol.definition.getRange()
+          if (expRange && symbol.definition.sourceFile) {
+            let range: lsp.Range = {
+              start: { line: symbol.definition.lineNumber, character: expRange.start },
+              end: { line: symbol.definition.lineNumber, character: expRange.end }
             }
+            // TODO: is there value in using lsp.DefinitionLink instead of just lsp.Definition?
+            let targetLink: lsp.DefinitionLink = {
+              targetUri: URI.file(symbol.definition.sourceFile.path).toString(),
+              targetRange: range,
+              targetSelectionRange: range
+            }
+            return [ targetLink ]
           }
         }
       }
@@ -659,94 +660,80 @@ export class LspServer {
   // TODO: if symbol is an entry point, walk all modules of project
   async onReferences(params: lsp.ReferenceParams, token?: lsp.CancellationToken): Promise<lsp.Location[]> {
     const locations: lsp.Location[] = []
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      const sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        const statement = sourceFile.statements[params.position.line]
-
-        // *** if MacroExpression
-        // *** if MacroName
-
-        // *** if SymbolExpression
-        const symbol = statement?.labelExp?.symbol
-        if (symbol) {
-          symbol.references.forEach(symExp => {
-            const expRange = symExp.getRange()
-            if (expRange) {
-              let location: lsp.Location = {
-                uri: URI.file(sourceFile.path).toString(),
-                range: {
-                  start: { line: symExp.lineNumber, character: expRange.start },
-                  end: { line: symExp.lineNumber, character: expRange.end }
-                }
+    const statement = this.getStatement(params.textDocument.uri, params.position.line)
+    if (statement) {
+      // TODO: support macros definitions and references
+      const symbol = statement?.labelExp?.symbol
+      if (symbol) {
+        symbol.references.forEach(symExp => {
+          const expRange = symExp.getRange()
+          if (expRange && symExp.sourceFile) {
+            let location: lsp.Location = {
+              uri: URI.file(symExp.sourceFile.path).toString(),
+              range: {
+                start: { line: symExp.lineNumber, character: expRange.start },
+                end: { line: symExp.lineNumber, character: expRange.end }
               }
-              locations.push(location)
             }
-          })
-        }
+            locations.push(location)
+          }
+        })
       }
     }
     return locations
   }
 
   async onPrepareRename(params: lsp.PrepareRenameParams, token?: lsp.CancellationToken): Promise<lsp.Range | { range: lsp.Range; placeholder: string; } | undefined | null> {
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      const sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        const statement = sourceFile.statements[params.position.line]
-        const res = statement.getExpressionAt(params.position.character)
-        if (res && res.expression instanceof exp.SymbolExpression) {
-          const symExp = res.expression
-          let symbol = symExp.symbol
-          if (symbol) {
-            const token = symbol.getSimpleNameToken()
-            let range: lsp.Range = {
-              start: { line: symbol.definition.lineNumber, character: token.start },
-              end: { line: symbol.definition.lineNumber, character: token.end }
-            }
-            return { range, placeholder: token.getString() }
+    const statement = this.getStatement(params.textDocument.uri, params.position.line)
+    if (statement) {
+      const res = statement.getExpressionAt(params.position.character)
+      // TODO: support macro rename
+      if (res && res.expression instanceof exp.SymbolExpression) {
+        const symExp = res.expression
+        let symbol = symExp.symbol
+        if (symbol) {
+          const token = symbol.getSimpleNameToken()
+          let range: lsp.Range = {
+            start: { line: symbol.definition.lineNumber, character: token.start },
+            end: { line: symbol.definition.lineNumber, character: token.end }
           }
+          return { range, placeholder: token.getString() }
         }
       }
     }
   }
 
   async onRename(params: lsp.RenameParams, token?: lsp.CancellationToken): Promise<lsp.WorkspaceEdit | undefined | null> {
-    const filePath = pathFromUriString(params.textDocument.uri)
-    if (filePath) {
-      const sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        const statement = sourceFile.statements[params.position.line]
-        const res = statement.getExpressionAt(params.position.character)
-        if (res && res.expression instanceof exp.SymbolExpression) {
-          const symExp = res.expression
-          let symbol = symExp.symbol
-          if (symbol) {
-            // *** make sure new name won't cause duplicate label problems ***
-            const fileEdits = renameSymbol(symbol, params.newName)
-            if (fileEdits) {
-              const changes: lsp.WorkspaceEdit['changes'] = {}
-              fileEdits.forEach((value, key) => {
-                const sourceFile = key
-                const lineEdits = value
-                const uri = uriFromPath(sourceFile.path)
-                const textEdits = changes[uri] || (changes[uri] = [])
-                for (let i = 0; i < lineEdits.length; i += 1) {
-                  const lineEdit = lineEdits[i]
-                  const edit: lsp.TextEdit = {
-                    range: {
-                      start: { line: lineEdit.line, character: lineEdit.start },
-                      end: { line: lineEdit.line, character: lineEdit.end }
-                    },
-                    newText: lineEdit.text
-                  }
-                  textEdits.push(edit)
+    const statement = this.getStatement(params.textDocument.uri, params.position.line)
+    if (statement) {
+      const res = statement.getExpressionAt(params.position.character)
+      // TODO: support macro rename
+      if (res && res.expression instanceof exp.SymbolExpression) {
+        const symExp = res.expression
+        let symbol = symExp.symbol
+        if (symbol) {
+          // *** make sure new name won't cause duplicate label problems ***
+          const fileEdits = renameSymbol(symbol, params.newName)
+          if (fileEdits) {
+            const changes: lsp.WorkspaceEdit['changes'] = {}
+            fileEdits.forEach((value, key) => {
+              const sourceFile = key
+              const lineEdits = value
+              const uri = uriFromPath(sourceFile.path)
+              const textEdits = changes[uri] || (changes[uri] = [])
+              for (let i = 0; i < lineEdits.length; i += 1) {
+                const lineEdit = lineEdits[i]
+                const edit: lsp.TextEdit = {
+                  range: {
+                    start: { line: lineEdit.line, character: lineEdit.start },
+                    end: { line: lineEdit.line, character: lineEdit.end }
+                  },
+                  newText: lineEdit.text
                 }
-              })
-              return { changes }
-            }
+                textEdits.push(edit)
+              }
+            })
+            return { changes }
           }
         }
       }

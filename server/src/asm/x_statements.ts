@@ -94,6 +94,9 @@ export class OpStatement extends Statement {
 
     let str = token?.getString().toLowerCase() ?? ""
     if (str == "") {
+      if (this.opcode.NONE === undefined) {
+        this.opToken?.setError("Mode not allowed for this opcode")
+      }
       this.mode = OpMode.NONE
     } else if (token) {
       if (str == "a") {
@@ -521,9 +524,27 @@ export class VarStatement extends Statement {
 
 //------------------------------------------------------------------------------
 
+export class OrgStatement extends Statement {
+
+  private value?: exp.Expression
+
+  parse(parser: Parser) {
+    if (this.opToken?.getString() == "*") {
+      const token = parser.mustAddToken("=")
+      if (!token) {
+        return
+      }
+    }
+
+    this.value = parser.mustPushNextExpression()
+  }
+}
+
+
 export class EntryStatement extends Statement {
   // ***
 }
+
 
 export class ErrorStatement extends Statement {
 
