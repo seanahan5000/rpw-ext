@@ -2,8 +2,8 @@
 import { Syntax } from "./syntax"
 import { Token, TokenType } from "./tokenizer"
 import { SymbolType, SymbolFrom } from "./symbols"
-import { Parser } from "./x_parser"
-import * as exp from "./x_expressions"
+import { Parser } from "./parser"
+import * as exp from "./expressions"
 
 //------------------------------------------------------------------------------
 

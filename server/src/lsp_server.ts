@@ -6,8 +6,8 @@ import * as fs from 'fs';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Token, TokenType, TokenErrorType } from "./asm/tokenizer"
 import * as asm from "./asm/assembler"
-import * as exp from "./asm/x_expressions"
-import { Statement } from "./asm/x_statements"
+import * as exp from "./asm/expressions"
+import { Statement } from "./asm/statements"
 import { SymbolType, SymbolIs } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 

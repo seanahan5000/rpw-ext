@@ -1,8 +1,8 @@
 
 import * as fs from 'fs'
-import * as par from "./x_parser"
-import * as stm from "./x_statements"
-import * as exp from "./x_expressions"
+import * as par from "./parser"
+import * as stm from "./statements"
+import * as exp from "./expressions"
 import { Symbol, ScopeState } from "./symbols"
 
 export type RpwModule = {

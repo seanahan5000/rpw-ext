@@ -1,5 +1,5 @@
 
-import * as exp from "./x_expressions"
+import * as exp from "./expressions"
 import { Token } from "./tokenizer"
 
 export enum SymbolType {

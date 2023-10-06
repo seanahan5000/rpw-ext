@@ -1,8 +1,8 @@
 
 import { SourceFile } from "./assembler"
 import { Symbol, SymbolType } from "./symbols"
-import { SymbolExpression } from "./x_expressions"
-import { Statement } from "./x_statements"
+import { SymbolExpression } from "./expressions"
+import { Statement } from "./statements"
 
 // *** maybe move to symbols? ***
 

@@ -65,8 +65,8 @@ import { Tokenizer, Token, TokenType } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
 import { Syntax, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
 import { SymbolType, SymbolFrom } from "./symbols"
-import * as exp from "./x_expressions"
-import * as stm from "./x_statements"
+import * as exp from "./expressions"
+import * as stm from "./statements"
 
 //------------------------------------------------------------------------------
 

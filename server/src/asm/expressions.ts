@@ -8,6 +8,8 @@ export type TokenExpressionSet = (Token | Expression)[]
 
 //------------------------------------------------------------------------------
 
+// *** this could use a common base class with Tokens ***
+
 export class Expression {
 
   public children: TokenExpressionSet = []
@@ -61,7 +63,7 @@ export class Expression {
   // }
 
   // return flat list of tokens for this expression and sub-expressions
-  // *** stop using this! ***
+  // *** stop using this! *** (still used in lsp_server)
   getTokens(): Token[] {
     const result: Token[] = []
     for (let i = 0; i < this.children.length; i += 1) {
