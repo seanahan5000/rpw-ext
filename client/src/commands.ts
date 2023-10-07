@@ -123,11 +123,11 @@ export async function tabIndentCmd(shift: boolean) {
 						end = ch + (4 - (ch % 4));
 					}
 					let indent = "".padEnd(end - ch, " ");
-					// if tabbing to comment column, also add "; "
+					// if tabbing to comment column, also add ";"
 					// *** keep this? ***
 					if (end == tabColumns[tabColumns.length - 1]) {
 						if (ch + 1 == lineText.length) {
-							indent += "; ";
+							indent += ";";
 						}
 					}
 					edit.replace(selection, indent);

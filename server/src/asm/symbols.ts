@@ -1,6 +1,8 @@
 
-import * as exp from "./expressions"
 import { Token } from "./tokenizer"
+import { Expression, SymbolExpression} from "./expressions"
+
+//------------------------------------------------------------------------------
 
 export enum SymbolType {
   Simple      = 0,
@@ -44,28 +46,28 @@ export class Symbol {
   public from = SymbolFrom.Unknown
   public is = SymbolIs.Unknown
 
-  public definition: exp.SymbolExpression
-  public references: exp.SymbolExpression[] = []
-  private value?: exp.Expression
+  public definition: SymbolExpression
+  public references: SymbolExpression[] = []
+  private value?: Expression
 
   // Name is assigned later, after scope information is processed
   //  and symbol has been added to map.
   public fullName?: string
 
-  constructor(type: SymbolType, definition: exp.SymbolExpression) {
+  constructor(type: SymbolType, definition: SymbolExpression) {
     this.type = type
     this.definition = definition
   }
 
-  addReference(symExp: exp.SymbolExpression) {
+  addReference(symExp: SymbolExpression) {
     this.references.push(symExp)
   }
 
-  getValue(): exp.Expression | undefined {
+  getValue(): Expression | undefined {
     return this.value
   }
 
-  setValue(value: exp.Expression, from: SymbolFrom) {
+  setValue(value: Expression, from: SymbolFrom) {
     this.value = value
     this.from = from
   }
@@ -105,7 +107,7 @@ export class ScopeState {
 
   private anonCounts = new Array(20).fill(0)
 
-  setSymbolExpression(symExp: exp.SymbolExpression): string {
+  setSymbolExpression(symExp: SymbolExpression): string {
 
     switch (symExp.symbolType) {
 
@@ -188,7 +190,7 @@ export class ScopeState {
           let offset = 0
           if (name[0] == "+") {
             index += 10
-          } else {
+          } else if (!symExp.isDefinition) {
             offset = -1
           }
           let outIndex = this.anonCounts[index] + offset

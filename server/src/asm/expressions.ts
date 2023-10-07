@@ -85,6 +85,7 @@ export class Expression {
       const child = this.children[i]
       if (child instanceof Expression) {
         proc(child)
+        child.forEachExpression(proc)
       }
     }
   }

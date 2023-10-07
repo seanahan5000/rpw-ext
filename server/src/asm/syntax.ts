@@ -276,6 +276,7 @@ class DasmSyntax extends SyntaxDef {
 
       // macros
       [ "mac",        {}],
+      [ "macro",      {}],
       [ "endm",       {}],
 
       [ "seg",        {}],

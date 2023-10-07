@@ -85,16 +85,6 @@ export class Parser extends Tokenizer {
     this.assembler = assembler
   }
 
-  private initLine(lineRecord: LineRecord, sourceLine: string) {
-    this.setSourceLine(sourceLine)
-  
-    this.sourceFile = lineRecord.sourceFile
-    this.lineNumber = lineRecord.lineNumber
-
-    this.tokenExpSet = []
-    this.tokenExpStack = []
-  }
-
   // push/pop the current expression to/from the expressionStack
   // *** move these ***
 
@@ -213,16 +203,16 @@ export class Parser extends Tokenizer {
     return expression
   }
 
-  // *** if parsing fails with general syntax, try again using likelySyntax ***
-  parseStatement(lineRecord: LineRecord, sourceLine: string) {
+  parseStatement(sourceFile: SourceFile, lineNumber: number, sourceLine: string): stm.Statement {
+
+    // initialze for this statement parsing
+    this.setSourceLine(sourceLine)
+    this.sourceFile = sourceFile
+    this.lineNumber = lineNumber
+    this.tokenExpSet = []
+    this.tokenExpStack = []
 
     let statement: stm.Statement | undefined
-
-    this.initLine(lineRecord, sourceLine)
-
-    // if (!this.conditional.isEnabled()) {
-      // *** conditional checks
-    // }
 
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
@@ -257,17 +247,24 @@ export class Parser extends Tokenizer {
           }
         }
 
-        // if (opNameLC == "}") {
-        //   // *** this probably shouldn't be done here ***
-        //   // ACME syntax ends conditions and other blocks with '}'
-        //   if (!this.syntax || this.syntax == Syntax.ACME) {
-        //     // TODO: process end block
-        //     // *** push token ***
-        //     return
-        //   }
-        // }
+        if (opNameLC == "}") {
+          // ACME syntax ends conditionals, zones, and other blocks with '}'
+          if (!this.syntax || this.syntax == Syntax.ACME) {
+            const elseToken = this.peekNextToken()
+            if (elseToken) {
+              if (elseToken.getString().toLowerCase() == "else") {
+                statement = new stm.ElseStatement()
+              }
+            } else {
+              // TODO: end correct current group type (!if, !zone, etc.)
+              statement = new stm.EndIfStatement()
+            }
+          }
+        }
 
-        statement = this.parseOpcode(opToken, opNameLC)
+        if (!statement) {
+          statement = this.parseOpcode(opToken, opNameLC)
+        }
       }
     }
 
@@ -320,7 +317,7 @@ export class Parser extends Tokenizer {
           // if (ZP),Y mark as zpage -- only simple expressions or number constants
     }
 
-    lineRecord.statement = statement
+    return statement
   }
 
   private parseOpcode(token: Token, statementTypeLC: string): stm.Statement | undefined {
@@ -756,6 +753,7 @@ export class Parser extends Tokenizer {
       }
     } else if (str == "%") {
       // *** should "%" be DecNumber or left as Operator?
+      // *** support ACME's %..####.. format too
       token.type = TokenType.DecNumber
       token = this.mustPushNextToken("expecting binary digits")
       str = token.getString()

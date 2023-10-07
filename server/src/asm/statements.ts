@@ -1,9 +1,9 @@
 
+import * as exp from "./expressions"
+import { Parser } from "./parser"
+import { SymbolFrom, SymbolType } from "./symbols"
 import { Syntax } from "./syntax"
 import { Token, TokenType } from "./tokenizer"
-import { SymbolType, SymbolFrom } from "./symbols"
-import { Parser } from "./parser"
-import * as exp from "./expressions"
 
 //------------------------------------------------------------------------------
 
@@ -14,7 +14,8 @@ export class Statement extends exp.Expression {
   public labelExp?: exp.SymbolExpression
   public opToken?: Token
 
-  init(sourceLine: string, opToken: Token | undefined, children: exp.TokenExpressionSet, labelExp?: exp.SymbolExpression) {
+  init(sourceLine: string, opToken: Token | undefined,
+      children: exp.TokenExpressionSet, labelExp?: exp.SymbolExpression) {
     this.sourceLine = sourceLine
     this.opToken = opToken
     this.children = children
@@ -38,7 +39,12 @@ export class Statement extends exp.Expression {
 
 //------------------------------------------------------------------------------
 
-// "subroutine" and ".zone" support
+// MERLIN:
+//   DASM:  <label> SUBROUTINE    (label is optional)
+//   ACME:  <label> !zone {       (label required?)
+//   CA65:
+//   LISA:
+//  SBASM:
 export class ZoneStatement extends Statement {
 
   parse(parser: Parser) {
@@ -81,7 +87,7 @@ export class OpStatement extends Statement {
     this.opcode = opcode
   }
 
-  // *** maybe split this out into a separate callable/shareable function? ***
+  // *** split this out into a separate callable/shareable function? ***
 
   parse(parser: Parser) {
     let token: Token | undefined
@@ -248,41 +254,343 @@ export class OpStatement extends Statement {
 // Conditionals
 //==============================================================================
 
-class ConditionalStatement extends Statement {
-  // ***
+// TODO: should this move somewhere else?
+
+type ConditionalState = {
+  enableCount: number,
+  satisfied: boolean,
+  statement?: ConditionalStatement
 }
 
-export class IfStatement extends ConditionalStatement {
-  // ***
+export class Conditional {
+  private enableCount = 1
+  private satisfied = true
+  public statement?: ConditionalStatement
+  private stack: ConditionalState[] = []
+
+  public push(): boolean {
+    // set an arbitrary limit on stack size to catch infinite recursion
+    if (this.stack.length > 255) {
+      return false
+    }
+    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied, statement: this.statement})
+    this.enableCount -= 1
+    this.satisfied = false
+    this.statement = undefined
+    return true
+  }
+
+  public pull(): boolean {
+    if (this.stack.length == 0) {
+      return false
+    }
+    const state = this.stack.pop()
+    if (state) {
+      this.enableCount = state.enableCount
+      this.satisfied = state.satisfied
+      this.statement = state.statement
+    }
+    return true
+  }
+
+  public setSatisfied(satisfied: boolean) {
+    this.satisfied = satisfied
+  }
+
+  public isSatisfied(): boolean {
+    return this.satisfied
+  }
+
+  public enable() {
+    this.enableCount += 1
+  }
+
+  public disable() {
+    this.enableCount -= 1
+  }
+
+  public isEnabled(): boolean {
+    return this.enableCount > 0
+  }
+
+  public isComplete(): boolean {
+    return this.stack.length == 0
+  }
 }
+
+//------------------------------------------------------------------------------
+
+export abstract class ConditionalStatement extends Statement {
+
+  // link between conditional statements, used to build code folding ranges
+  public nextConditional?: ConditionalStatement
+
+  abstract applyConditional(conditional: Conditional): void
+
+  parseTrailingOpenBrace(parser: Parser): boolean {
+    const opStr = this.opToken?.getString() ?? ""
+    if (opStr.startsWith("!")) {
+      const res = parser.mustAddToken("{")
+      if (res.index == 0) {
+        // TODO: start new ACME group state
+        return true
+      }
+    }
+    return false
+  }
+}
+
+
+// MERLIN:  DO <exp>
+//   DASM:  IF <exp>
+//   ACME:  !if <exp> {
+//   CA65:  .if <exp>
+//   LISA:  .IF <exp>
+//          NOTE: LISA does not support nested IF's.
+//  SBASM:  .DO <exp>
+
+export class IfStatement extends ConditionalStatement {
+
+  private expression?: exp.Expression
+  private isInline = false
+
+  parse(parser: Parser) {
+    // TODO: give hint that this expression is for conditional code
+    this.expression = parser.mustPushNextExpression()
+    if (this.parseTrailingOpenBrace(parser)) {
+
+      // TODO: parse inline code after opening brace to
+      //  closing brace and maybe else statement
+      // TODO: fix this hack to eat ACME inline code
+      let token = parser.getNextToken()
+      if (token) {
+        this.isInline = true
+
+        parser.startExpression()
+        while (true) {
+          if (token.getString() == "}") {
+            break
+          }
+          token.setError("Unexpected token")
+          parser.pushToken(token)
+          token = parser.getNextToken()
+          if (!token) {
+            break
+          }
+        }
+        parser.pushExpression(new exp.BadExpression(parser.endExpression()))
+        if (token) {
+          parser.pushToken(token)
+        }
+      }
+    }
+  }
+
+  applyConditional(conditional: Conditional): void {
+
+    // TODO: fix this hack for ACME inline code
+    if (this.isInline) {
+      return
+    }
+
+    if (!conditional.push()) {
+      this.setError("Exceeded nested conditionals maximum")
+      return
+    }
+
+    conditional.statement = this
+
+    let value = this.expression?.resolve() ?? 0
+    if (value != 0) {
+      conditional.setSatisfied(true)
+      conditional.enable()
+    }
+  }
+}
+
+
+// MERLIN:
+//   DASM:  IFCONST <symbol>
+//          IFNCONST <symbol>
+//   ACME:  !ifdef <symbol> {
+//          !ifndef <symbol> {
+//   CA65:
+//   LISA:
+//  SBASM:
 
 export class IfDefStatement extends ConditionalStatement {
 
-  private defined: boolean
+  private isDefined: boolean
+  private symExpression?: exp.SymbolExpression
 
-  constructor(defined: boolean) {
+  constructor(isDefined: boolean) {
     super()
-    this.defined = defined
+    this.isDefined = isDefined
   }
 
-  // ***
+  parse(parser: Parser) {
+    const expression = parser.mustPushNextExpression()
+    if (expression instanceof exp.SymbolExpression) {
+      this.symExpression = expression
+    } else {
+      expression.setError("Symbol expression required")
+    }
+
+    this.parseTrailingOpenBrace(parser)
+  }
+
+  applyConditional(conditional: Conditional): void {
+    if (!conditional.push()) {
+      this.setError("Exceeded nested conditionals maximum")
+      return
+    }
+
+    conditional.statement = this
+
+    const symDefined = this.symExpression?.symbol !== undefined
+    if ((symDefined && this.isDefined) || (!symDefined && !this.isDefined)) {
+      conditional.setSatisfied(true)
+      conditional.enable()
+    }
+  }
 }
+
+
+// MERLIN:  ELSE
+//   DASM:  ELSE
+//   ACME:  } else {
+//   CA65:  .else
+//   LISA:  .EL
+//  SBASM:  .EL
 
 export class ElseStatement extends ConditionalStatement {
-  // ***
+
+  parse(parser: Parser) {
+    const opStr = this.opToken?.getString() ?? ""
+    if (opStr == "}") {
+      const elseToken = parser.pushNextToken()
+      if (!elseToken) {
+        parser.addMissingToken("expecting ELSE")
+        return
+      }
+      if (elseToken.getString().toLowerCase() != "else") {
+        elseToken.setError("Unexpected token, expecting ELSE")
+        return
+      }
+      const res = parser.mustAddToken("{")
+      if (res.index == 0) {
+        // TODO: start new ACME group state
+      }
+    }
+  }
+
+  applyConditional(conditional: Conditional): void {
+    if (conditional.isComplete()) {
+      this.setError("Unexpected ELSE without IF")
+      return
+    }
+
+    if (conditional.statement) {
+      conditional.statement.nextConditional = this
+    } else {
+      this.setError("No matching IF statement")
+      return
+    }
+    conditional.statement = this
+
+    if (!conditional.isSatisfied()) {
+      conditional.setSatisfied(true)
+      conditional.enable()
+    } else {
+      conditional.disable()
+    }
+  }
 }
+
+
+// MERLIN:
+//   DASM:
+//   ACME:
+//   CA65:  .elseif <exp>
+//   LISA:
+//  SBASM:
 
 export class ElseIfStatement extends ConditionalStatement {
-  // ***
+
+  private expression?: exp.Expression
+
+  parse(parser: Parser) {
+    // TODO: give hint that this expression is for conditional code
+    this.expression = parser.mustPushNextExpression()
+  }
+
+  applyConditional(conditional: Conditional): void {
+    if (conditional.isComplete()) {
+      this.setError("Unexpected ELIF without IF")
+      return
+    }
+
+    if (conditional.statement) {
+      conditional.statement.nextConditional = this
+    } else {
+      this.setError("no matching IF/ELIF statement")
+      return
+    }
+    conditional.statement = this
+
+    let value = this.expression?.resolve() ?? 0
+    if (conditional.isSatisfied() && value != 0) {
+      conditional.setSatisfied(true)
+      conditional.enable()
+    } else {
+      conditional.disable()
+    }
+  }
 }
 
+
+// MERLIN:  FIN
+//   DASM:  ENDIF
+//          EIF
+//   ACME:  }
+//   CA65:  .endif
+//   LISA:  .FI
+//  SBASM:  .FI
+
 export class EndIfStatement extends ConditionalStatement {
-  // ***
+
+  parse(parser: Parser) {
+    // *** trailing close brace ***
+  }
+
+  applyConditional(conditional: Conditional): void {
+    if (conditional.statement) {
+      conditional.statement.nextConditional = this
+    } else {
+      this.setError("no matching IF/ELIF statement")
+      return
+    }
+    if (!conditional.pull()) {
+      // Merlin ignores unused FIN
+      // if (!assembler->SetMerlinWarning("Unexpected FIN/ENDIF")) {
+      //   return
+      // }
+    }
+  }
 }
 
 //==============================================================================
 // Storage
 //==============================================================================
+
+// *** others ***
+
+//   LISA:  .DA <exp>[,<exp>]
+//          #<expression>
+//          /<expreseion>
+//          <expression>
+//          "string"
+//          'string'
 
 class DataStatement extends Statement {
 
@@ -492,6 +800,10 @@ export class SaveStatement extends Statement {
 //  *** LISA, for example, doesn't allow that
 // *** SBASM requires resolvable value with no forward references
 // *** mark symbol as being assigned rather than just a label?
+
+// DASM: symbol EQU exp
+//       symbol = exp
+
 export class EquStatement extends Statement {
 
   private value?: exp.Expression
@@ -530,8 +842,8 @@ export class OrgStatement extends Statement {
 
   parse(parser: Parser) {
     if (this.opToken?.getString() == "*") {
-      const token = parser.mustAddToken("=")
-      if (!token) {
+      const res = parser.mustAddToken("=")
+      if (res.index < 0) {
         return
       }
     }
@@ -595,6 +907,33 @@ export class UsrStatement extends Statement {
       }
     }
   }
+}
+
+//==============================================================================
+// Macros
+//==============================================================================
+
+// MERLIN:  <name> MAC    (label required)
+//   DASM:  MAC <name>    (no label allowed)
+//          MACRO <name>
+//   ACME:  <name> !macro {
+//   CA65:  .mac <name>
+//          .macro <name>
+//   LISA:
+//  SBASM:  <name> .MA <params-list>
+export class MacroDefStatement extends Statement {
+}
+
+
+// MERLIN:  EOM       (label is allowed)
+//          <<<
+//   DASM:  ENDM      (no label allowed)
+//   ACME:  }
+//   CA65:  .endmac
+//          .endmacro
+//   LISA:
+//  SBASM:  <name> .EM
+export class EndMacroDefStatement extends Statement {
 }
 
 //------------------------------------------------------------------------------

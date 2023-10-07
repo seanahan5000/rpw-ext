@@ -4,7 +4,7 @@ import { Symbol, SymbolType } from "./symbols"
 import { SymbolExpression } from "./expressions"
 import { Statement } from "./statements"
 
-// *** maybe move to symbols? ***
+// TODO: maybe move to symbols?
 
 //------------------------------------------------------------------------------
 

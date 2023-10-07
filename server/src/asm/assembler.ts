@@ -1,9 +1,9 @@
 
 import * as fs from 'fs'
-import * as par from "./parser"
-import * as stm from "./statements"
-import * as exp from "./expressions"
+import { Parser } from "./parser"
 import { Symbol, ScopeState } from "./symbols"
+import { SymbolExpression } from "./expressions"
+import { Statement, Conditional, ConditionalStatement } from "./statements"
 
 export type RpwModule = {
   srcbase: string,
@@ -17,7 +17,7 @@ export type RpwProject = {
 export type LineRecord = {
   sourceFile: SourceFile,
   lineNumber: number,
-  statement?: stm.Statement
+  statement?: Statement
   // TODO: isVisible?
 }
 
@@ -232,7 +232,7 @@ export class SourceFile {
   public isShared: boolean
 
   // statements for just this file, one per line
-  public statements: stm.Statement[] = []
+  public statements: Statement[] = []
 
   constructor(module: Module, path: string, lines: string[]) {
     this.module = module
@@ -286,7 +286,12 @@ class FileReader {
   }
 }
 
+//------------------------------------------------------------------------------
+
 // *** guess syntax by watching keywords? ***
+// *** include file step should move outside of parsing pass
+  // *** needs to be affected by conditionals ***
+// *** if statement parsing fails with general syntax, try again using likelySyntax
 
 export class Assembler {
 
@@ -309,8 +314,10 @@ export class Assembler {
       // *** handle error ***
     }
 
+    const conditional = new Conditional()
+
     // *** this is ugly ***
-    const parser = new par.Parser(this)
+    const parser = new Parser(this)
     while (this.fileReader.state.file) {
       do {
         while (this.fileReader.state.curLineIndex < this.fileReader.state.endLineIndex) {
@@ -324,14 +331,27 @@ export class Assembler {
           // must advance before parsing that may include a different file
           this.fileReader.state.curLineIndex += 1
 
+          // if (!this.conditional.isEnabled()) {
+          //   *** conditional checks
+          // }
+
           // *** different parse behavior if handling macros or loops ***
 
-          const sourceLine = this.fileReader.state.file.lines[lineRecord.lineNumber]
-          parser.parseStatement(lineRecord, sourceLine)
+          lineRecord.statement = parser.parseStatement(
+            lineRecord.sourceFile,
+            lineRecord.lineNumber,
+            this.fileReader.state.file.lines[lineRecord.lineNumber])
 
-          // process all possible symbols immediately
-          if (lineRecord.statement) {
+          if (lineRecord.statement instanceof ConditionalStatement) {
+            // need symbol references hooked up before resolving conditional expression
             this.processSymbols(lineRecord.statement, true)
+            lineRecord.statement.applyConditional(conditional)
+          } else {
+            if (!conditional.isEnabled()) {
+              lineRecord.statement = new Statement()
+            } else {
+              this.processSymbols(lineRecord.statement, true)
+            }
           }
 
           // *** error handling ***
@@ -363,11 +383,11 @@ export class Assembler {
 
   // *** put in module instead? ***
   // *** later, when scanning disabled lines, still process references ***
-  private processSymbols(statement: stm.Statement, firstPass: boolean) {
+  private processSymbols(statement: Statement, firstPass: boolean) {
     // *** maybe just stop on error while walking instead of walking twice
     if (!statement.hasError()) {
       statement.forEachExpression((expression) => {
-        if (expression instanceof exp.SymbolExpression) {
+        if (expression instanceof SymbolExpression) {
           const symExp = expression
 
           // must do this in the first pass while scope is being tracked
@@ -420,3 +440,5 @@ export class Assembler {
     return true
   }
 }
+
+//------------------------------------------------------------------------------
