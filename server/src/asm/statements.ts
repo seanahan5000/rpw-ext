@@ -3,7 +3,7 @@ import * as exp from "./expressions"
 import { Parser } from "./parser"
 import { SymbolFrom, SymbolType } from "./symbols"
 import { Syntax } from "./syntax"
-import { Token, TokenType } from "./tokenizer"
+import { Node, Token, TokenType } from "./tokenizer"
 
 //------------------------------------------------------------------------------
 
@@ -15,7 +15,7 @@ export class Statement extends exp.Expression {
   public opToken?: Token
 
   init(sourceLine: string, opToken: Token | undefined,
-      children: exp.TokenExpressionSet, labelExp?: exp.SymbolExpression) {
+      children: Node[], labelExp?: exp.SymbolExpression) {
     this.sourceLine = sourceLine
     this.opToken = opToken
     this.children = children
@@ -45,6 +45,7 @@ export class Statement extends exp.Expression {
 //   CA65:
 //   LISA:
 //  SBASM:
+
 export class ZoneStatement extends Statement {
 
   parse(parser: Parser) {
@@ -106,7 +107,7 @@ export class OpStatement extends Statement {
       this.mode = OpMode.NONE
     } else if (token) {
       if (str == "a") {
-        parser.pushToken(token)
+        parser.addToken(token)
         if (this.opcode.A === undefined) {
           token.setError("Accumulator mode not allowed for this opcode")
         } else if (parser.syntax && parser.syntax == Syntax.ACME) {
@@ -115,15 +116,15 @@ export class OpStatement extends Statement {
         token.type = TokenType.Opcode
         this.mode = OpMode.A
       } else if (str == "#") {
-        parser.pushToken(token)
+        parser.addToken(token)
         if (this.opcode.IMM === undefined) {
           token.setError("Immediate mode not allowed for this opcode")
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
-        parser.mustPushNextExpression()
+        parser.mustAddNextExpression()
       } else if (str == "/") {			// same as "#>"
-        parser.pushToken(token)
+        parser.addToken(token)
         if (this.opcode.IMM === undefined) {
           token.setError("Immediate mode not allowed for this opcode")
         } else if (parser.syntax && parser.syntax != Syntax.LISA) {
@@ -132,12 +133,12 @@ export class OpStatement extends Statement {
           // TODO: would be clearer to extend warning to entire expression
         }
         this.mode = OpMode.IMM
-        parser.mustPushNextExpression()
+        parser.mustAddNextExpression()
       } else if (str == "(") {
-        parser.pushToken(token)
+        parser.addToken(token)
         // *** check opcode has this address mode ***
         token.type = TokenType.Opcode
-        parser.mustPushNextExpression()
+        parser.mustAddNextExpression()
 
         let res = parser.mustAddToken([",", ")"], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
@@ -155,7 +156,7 @@ export class OpStatement extends Statement {
 
         } else if (res.index == 1) {        // (exp) or (exp),Y
 
-          let nextToken = parser.pushNextToken()
+          let nextToken = parser.addNextToken()
           if (!nextToken) {
             if (this.opcode.IND === undefined) {
               token.setError("Indirect mode not allowed for this opcode")
@@ -166,7 +167,7 @@ export class OpStatement extends Statement {
             str = token.getString()
             if (str == ",") {
               token.type = TokenType.Opcode
-              token = parser.mustPushNextToken("expecting 'Y'")
+              token = parser.mustAddNextToken("expecting 'Y'")
               str = token.getString().toLowerCase()  
               if (str == "y") {
                 if (this.opcode.INDY === undefined) {
@@ -201,7 +202,7 @@ export class OpStatement extends Statement {
           const isDefinition = false
           if (str == ">" || str == "<") {
             if (!parser.syntax || parser.syntax == Syntax.LISA) {
-              parser.pushExpression(parser.parseLisaLocal(token, isDefinition))
+              parser.addExpression(parser.parseLisaLocal(token, isDefinition))
               return
             }
           } else if ((str[0] == "-" || str[0] == "+")
@@ -209,25 +210,25 @@ export class OpStatement extends Statement {
             if (!parser.syntax || parser.syntax == Syntax.ACME) {
               if (str.length > 9) {
                 token.setError("Anonymous local is too long")
-                parser.pushExpression(new exp.BadExpression([token]))
+                parser.addExpression(new exp.BadExpression([token]))
                 return
               }
               token.type = TokenType.LocalLabelPrefix
-              parser.pushExpression(parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition))
+              parser.addExpression(parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition))
               return
             }
           }
         }
 
-        parser.mustPushNextExpression(token)
-        token = parser.pushNextToken()
+        parser.mustAddNextExpression(token)
+        token = parser.addNextToken()
         // *** premature to assign ZP when expression size isn't known ***
         if (!token) {
           this.mode = OpMode.ZP             // exp
         } else {
           if (token.getString() == ",") {   // exp,X or exp,Y
             token.type = TokenType.Opcode
-            token = parser.mustPushNextToken("expecting 'X' or 'Y'")
+            token = parser.mustAddNextToken("expecting 'X' or 'Y'")
             if (token.type != TokenType.Missing) {
               str = token.getString().toLowerCase()
               if (str == "x") {             // exp,X
@@ -356,7 +357,7 @@ export class IfStatement extends ConditionalStatement {
 
   parse(parser: Parser) {
     // TODO: give hint that this expression is for conditional code
-    this.expression = parser.mustPushNextExpression()
+    this.expression = parser.mustAddNextExpression()
     if (this.parseTrailingOpenBrace(parser)) {
 
       // TODO: parse inline code after opening brace to
@@ -372,15 +373,15 @@ export class IfStatement extends ConditionalStatement {
             break
           }
           token.setError("Unexpected token")
-          parser.pushToken(token)
+          parser.addToken(token)
           token = parser.getNextToken()
           if (!token) {
             break
           }
         }
-        parser.pushExpression(new exp.BadExpression(parser.endExpression()))
+        parser.addExpression(new exp.BadExpression(parser.endExpression()))
         if (token) {
-          parser.pushToken(token)
+          parser.addToken(token)
         }
       }
     }
@@ -429,7 +430,7 @@ export class IfDefStatement extends ConditionalStatement {
   }
 
   parse(parser: Parser) {
-    const expression = parser.mustPushNextExpression()
+    const expression = parser.mustAddNextExpression()
     if (expression instanceof exp.SymbolExpression) {
       this.symExpression = expression
     } else {
@@ -468,7 +469,7 @@ export class ElseStatement extends ConditionalStatement {
   parse(parser: Parser) {
     const opStr = this.opToken?.getString() ?? ""
     if (opStr == "}") {
-      const elseToken = parser.pushNextToken()
+      const elseToken = parser.addNextToken()
       if (!elseToken) {
         parser.addMissingToken("expecting ELSE")
         return
@@ -521,7 +522,7 @@ export class ElseIfStatement extends ConditionalStatement {
 
   parse(parser: Parser) {
     // TODO: give hint that this expression is for conditional code
-    this.expression = parser.mustPushNextExpression()
+    this.expression = parser.mustAddNextExpression()
   }
 
   applyConditional(conditional: Conditional): void {
@@ -616,14 +617,14 @@ class DataStatement extends Statement {
       // DASM allows ".byte #<MYLABEL", for example
       if (!parser.syntax || parser.syntax == Syntax.DASM) {
         if (token.getString() == "#") {
-          parser.pushToken(token)
+          parser.addToken(token)
           token = undefined
         }
       }
 
       // *** token could be "," here ***
 
-      let expression = parser.pushNextExpression(token)
+      let expression = parser.addNextExpression(token)
       if (!expression) {
         // *** what happens to token?
         break
@@ -671,21 +672,21 @@ export class StorageStatement extends Statement {
     token = parser.mustGetNextToken("expecting storage size expression")
     // *** empty??? ***
     if (token.isEmpty()) {
-      parser.pushToken(token)
+      parser.addToken(token)
       return
     }
 
     if (token.getString() == "\\") {
       if (!parser.syntax || parser.syntax == Syntax.MERLIN) {
         this.sizeArg = new exp.AlignExpression(new exp.NumberExpression([token], 256, false))
-        parser.pushExpression(this.sizeArg)
+        parser.addExpression(this.sizeArg)
       } else {
-        parser.pushToken(token)
+        parser.addToken(token)
         token.setError("Invalid storage size")
         return
       }
     } else {
-      this.sizeArg = parser.mustPushNextExpression(token)
+      this.sizeArg = parser.mustAddNextExpression(token)
       if (!this.sizeArg) {
         return
       }
@@ -697,7 +698,7 @@ export class StorageStatement extends Statement {
       return
     }
 
-    this.patternArg = parser.mustPushNextExpression()
+    this.patternArg = parser.mustAddNextExpression()
   }
 }
 
@@ -729,7 +730,7 @@ export class HexStatement extends Statement {
 
   parse(parser: Parser) {
     while (true) {
-      let token = parser.pushNextToken()
+      let token = parser.addNextToken()
       if (!token) {
         parser.addMissingToken("Hex value expected")
         break
@@ -739,7 +740,7 @@ export class HexStatement extends Statement {
       // *** TODO: which syntaxes is the true for? ***
       if (hexString == "$") {
         token.setError("$ prefix not allowed on HEX statements")
-        token = parser.pushNextToken()
+        token = parser.addNextToken()
         if (!token) {
           break
         }
@@ -753,7 +754,7 @@ export class HexStatement extends Statement {
         scanHex(hexString, this.dataBytes)
       }
 
-      token = parser.pushNextToken()
+      token = parser.addNextToken()
       if (!token) {
         break
       }
@@ -814,7 +815,7 @@ export class EquStatement extends Statement {
       return
     }
 
-    this.value = parser.mustPushNextExpression()
+    this.value = parser.mustAddNextExpression()
     this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
   }
 }
@@ -830,7 +831,7 @@ export class VarStatement extends Statement {
       return
     }
 
-    this.value = parser.mustPushNextExpression()
+    this.value = parser.mustAddNextExpression()
   }
 }
 
@@ -848,13 +849,19 @@ export class OrgStatement extends Statement {
       }
     }
 
-    this.value = parser.mustPushNextExpression()
+    this.value = parser.mustAddNextExpression()
   }
 }
 
 
 export class EntryStatement extends Statement {
-  // ***
+  parse(parser: Parser) {
+    if (this.labelExp) {
+      this.labelExp.isEntryPoint = true
+    } else {
+      this.opToken?.setError("Label is required")
+    }
+  }
 }
 
 
@@ -866,7 +873,7 @@ export class ErrorStatement extends Statement {
     // *** maybe use a different variation like parseControlExpression?
     this.errExpression = parser.parseExpression()
     if (this.errExpression) {
-      parser.pushExpression(this.errExpression)
+      parser.addExpression(this.errExpression)
     }
   }
 
@@ -888,20 +895,20 @@ export class UsrStatement extends Statement {
       // *** not on first pass ***
       const str = token.getString()
       if (str == ",") {
-        parser.pushToken(token)
+        parser.addToken(token)
         continue
       }
 
       if (str == "(") {
         const strExpression = parser.parseStringExpression(token, true, false)
-        parser.pushExpression(strExpression)
+        parser.addExpression(strExpression)
         continue
 
         // *** attempt NajaText
         // *** attempt 6502 addressing
       }
 
-      const expression = parser.pushNextExpression(token)
+      const expression = parser.addNextExpression(token)
       if (!expression) {
         break
       }
@@ -921,6 +928,7 @@ export class UsrStatement extends Statement {
 //          .macro <name>
 //   LISA:
 //  SBASM:  <name> .MA <params-list>
+
 export class MacroDefStatement extends Statement {
 }
 
@@ -933,6 +941,7 @@ export class MacroDefStatement extends Statement {
 //          .endmacro
 //   LISA:
 //  SBASM:  <name> .EM
+
 export class EndMacroDefStatement extends Statement {
 }
 
@@ -958,21 +967,21 @@ export class MacroStatement extends Statement {
       // *** merlin-only ***
       // *** not on first pass ***
       if (str == ";") {
-        parser.pushToken(token)
+        parser.addToken(token)
         continue
       }
 
       if (str == "(") {
         // *** must at least one ";" before doing this??? ***
         const strExpression = parser.parseStringExpression(token, true, false)
-        parser.pushExpression(strExpression)
+        parser.addExpression(strExpression)
         continue
 
         // *** attempt NajaText
         // *** attempt 6502 addressing
       }
 
-      const expression = parser.pushNextExpression(token)
+      const expression = parser.addNextExpression(token)
       if (!expression) {
         break
       }

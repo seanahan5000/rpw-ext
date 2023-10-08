@@ -128,8 +128,7 @@ connection.onInitialize((params: InitializeParams) => {
 			],
 		},
 		full: true,
-		//*** supporting this
-		range: false
+		range: true
 	};
 
 	return result;

@@ -4,6 +4,7 @@ import { Parser } from "./parser"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
 import { Statement, Conditional, ConditionalStatement } from "./statements"
+import { Syntax, SyntaxMap } from "./syntax"
 
 export type RpwModule = {
   srcbase: string,
@@ -11,6 +12,7 @@ export type RpwModule = {
 }
 
 export type RpwProject = {
+  syntax: string,
   modules: RpwModule[]
 }
 
@@ -32,6 +34,7 @@ export type LineRecord = {
 export class Project {
 
   public rootDir: string
+  protected syntax = Syntax.UNKNOWN
   protected modules: Module[] = []
 
   constructor(rootDir: string) {
@@ -46,6 +49,11 @@ export class Project {
       if (!this.loadModule(rpwProject.modules[i])) {
         return false
       }
+    }
+
+    if (rpwProject.syntax) {
+      this.syntax = SyntaxMap.get(rpwProject.syntax.toUpperCase()) ?? Syntax.UNKNOWN
+      // TODO: error if syntax match not found?
     }
     return true
   }

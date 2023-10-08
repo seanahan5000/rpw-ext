@@ -1,35 +1,24 @@
 
 import { SourceFile } from "./assembler"
-import { Token } from "./tokenizer"
+import { Node, NodeRange, Token } from "./tokenizer"
 import { Op } from "./syntax"
 import { Symbol, SymbolType, isLocalType } from "./symbols"
 
-export type TokenExpressionSet = (Token | Expression)[]
-
 //------------------------------------------------------------------------------
 
-// *** this could use a common base class with Tokens ***
+export class Expression extends Node {
 
-export class Expression {
+  public children: Node[] = []
 
-  public children: TokenExpressionSet = []
-
-  constructor(children?: TokenExpressionSet) {
+  constructor(children?: Node[]) {
+    super()
     if (children) {
       this.children = children
     }
   }
 
-  // *** overkill to set same error on every token ***
-  setError(message: string) {
-    for (let i = 0; i < this.children.length; i += 1) {
-      this.children[i].setError(message)
-    }
-  }
-
   // get full range of child tokens and expressions
-  // *** could add this to Tokens too ***
-  getRange(): { sourceLine: string, start: number, end: number } | undefined {
+  getRange(): NodeRange | undefined {
     let start = 9999
     let end = -1
     let sourceLine = ""
@@ -45,7 +34,7 @@ export class Expression {
             end = range.end
           }
         }
-      } else {
+      } else if (child instanceof Token) {
         sourceLine = child.sourceLine
         if (start > child.start) {
           start = child.start
@@ -58,25 +47,10 @@ export class Expression {
     return start < end ? { sourceLine, start, end } : undefined
   }
 
-  // pushTokenExp(item: Token | Expression) {
-  //   this.children.push(item)
-  // }
-
-  // return flat list of tokens for this expression and sub-expressions
-  // *** stop using this! *** (still used in lsp_server)
-  getTokens(): Token[] {
-    const result: Token[] = []
-    for (let i = 0; i < this.children.length; i += 1) {
-      const child = this.children[i]
-      if (child instanceof Expression) {
-        if (child.children) {
-          result.push(...child.getTokens())
-        }
-      } else {
-        result.push(child)
-      }
-    }
-    return result
+  // return flat string of all tokens in expression, possibly including whitespace
+  getString(): string {
+    const range = this.getRange()
+    return range ? range.sourceLine.substring(range.start, range.end) : ""
   }
 
   // TODO: mechanism to exit early?
@@ -91,15 +65,15 @@ export class Expression {
   }
 
   // return token containing character position and its parent expression
-  getExpressionAt(ch: number): { expression: Expression, token: Token } | undefined {
+  findExpressionAt(ch: number): { expression: Expression, token: Token } | undefined {
     for (let i = 0; i < this.children.length; i += 1) {
       const child = this.children[i]
       if (child instanceof Expression) {
-        const res = child.getExpressionAt(ch)
+        const res = child.findExpressionAt(ch)
         if (res) {
           return res
         }
-      } else {
+      } else if (child instanceof Token) {
         if (ch < child.start) {
           return
         }
@@ -112,29 +86,24 @@ export class Expression {
     }
   }
 
-  // TODO: should this return a token/expression?
-  // TODO: somebody should call this
-  hasError(): boolean {
+  // return true if this expression or any of its children have an error
+  // TODO: return Node | undefined instead?
+  hasAnyError(): boolean {
+    if (this.hasError()) {
+      return true
+    }
     for (let i = 0; i < this.children.length; i += 1) {
-      // NOTE: both Expression and Token have hasError method
-      if (this.children[i].hasError()) {
-        return true
+      const child = this.children[i]
+      if (child instanceof Expression) {
+        return child.hasAnyError()
+      } else {
+        return child.hasError()
       }
     }
     return false
   }
 
-  // return flat string of all tokens in expression, possibly including whitespace
-  // *** return undefined instead? ***
-  getString(): string {
-    const range = this.getRange()
-    return range ? range.sourceLine.substring(range.start, range.end) : ""
-  }
-
-  // *** type?
-  // canResolve (?)
-
-  // *** make these abstract? ***
+  // TODO: make these abstract?
 
   resolve(): number | undefined {
     return
@@ -157,7 +126,7 @@ export class NumberExpression extends Expression {
   private value: number
   private force16: boolean
 
-  constructor(children: TokenExpressionSet, value: number, force16: boolean) {
+  constructor(children: Node[], value: number, force16: boolean) {
     super(children)
     this.value = value
     this.force16 = force16
@@ -179,7 +148,7 @@ export class ParenExpression extends Expression {
   private arg: Expression | undefined
 
   // [left paren, expression, right paren]
-  constructor(children: TokenExpressionSet) {
+  constructor(children: Node[]) {
     super(children)
 
     if (children[1] instanceof Expression) {
@@ -200,9 +169,9 @@ export class ParenExpression extends Expression {
 
 export class StringExpression extends Expression {
 
-  // TokenExpressionSet contains all segments of the string,
+  // Node[] contains all segments of the string,
   //  including quotes and escape codes.
-  // constructor(children: TokenExpressionSet) {
+  // constructor(children: Node[]) {
   //   super(children)
   // }
 
@@ -239,10 +208,13 @@ export class SymbolExpression extends Expression {
   public lineNumber: number
   public fullName?: string
   public symbol?: Symbol
+
+  // only apply when isDefinition is true
   public isZoneStart = false
+  public isEntryPoint = false
 
   constructor(
-      children: TokenExpressionSet,
+      children: Node[],
       symbolType: SymbolType,
       isDefinition: boolean,
       sourceFile?: SourceFile,
@@ -467,7 +439,7 @@ export class PcExpression extends Expression {
 export class VarExpression extends Expression {
 
   // first token in set is bracket, second is name
-  constructor(children: TokenExpressionSet) {
+  constructor(children: Node[]) {
     super(children)
   }
 

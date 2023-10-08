@@ -61,9 +61,9 @@
 //  +macro                           ACME
 
 import { Assembler, LineRecord, SourceFile } from "./assembler"
-import { Tokenizer, Token, TokenType } from "./tokenizer"
+import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
-import { Syntax, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
+import { Syntax, SyntaxMap, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
 import { SymbolType, SymbolFrom } from "./symbols"
 import * as exp from "./expressions"
 import * as stm from "./statements"
@@ -77,8 +77,8 @@ export class Parser extends Tokenizer {
   public sourceFile: SourceFile | undefined
   public lineNumber: number = -1
 
-  public tokenExpSet: exp.TokenExpressionSet = []
-  public tokenExpStack: exp.TokenExpressionSet[] = []
+  public tokenExpSet: Node[] = []
+  public tokenExpStack: Node[][] = []
 
   constructor(assembler: Assembler) {
     super()
@@ -92,11 +92,11 @@ export class Parser extends Tokenizer {
     this.tokenExpStack.push(this.tokenExpSet)
     this.tokenExpSet = []
     if (token) {
-      this.pushToken(token)
+      this.addToken(token)
     }
   }
 
-  public endExpression(): exp.TokenExpressionSet {
+  public endExpression(): Node[] {
     const result = this.tokenExpSet
     const prevSet = this.tokenExpStack.pop()
     // NOTE: don't pop the last set because that's the statement itself
@@ -107,28 +107,27 @@ export class Parser extends Tokenizer {
   }
 
   // push tokens and expression onto the current parent expression
-  // *** use "add" instead of "push" ***
 
-  pushToken(token: Token) {
+  addToken(token: Token) {
     this.tokenExpSet.push(token)
   }
 
-  mustPushNextToken(expectMsg: string): Token {
+  mustAddNextToken(expectMsg: string): Token {
     const token = this.mustGetNextToken(expectMsg)
-    this.pushToken(token)
+    this.addToken(token)
     return token
   }
 
-  mustPushVeryNextToken(expectMsg: string): Token {
+  mustAddVeryNextToken(expectMsg: string): Token {
     const token = this.mustGetVeryNextToken(expectMsg)
-    this.pushToken(token)
+    this.addToken(token)
     return token
   }
 
-  pushNextToken(): Token | undefined {
+  addNextToken(): Token | undefined {
     const token = this.getNextToken()
     if (token) {
-      this.pushToken(token)
+      this.addToken(token)
     }
     return token
   }
@@ -136,7 +135,7 @@ export class Parser extends Tokenizer {
   addVeryNextToken(): Token | undefined {
     const token = this.getVeryNextToken()
     if (token) {
-      this.pushToken(token)
+      this.addToken(token)
     }
     return token
   }
@@ -148,7 +147,7 @@ export class Parser extends Tokenizer {
 
   mustAddToken(possible: string | string[], type?: TokenType): { index: number, token?: Token} {
     const strings = typeof possible == "string" ? [possible] : possible
-    const token = this.pushNextToken()
+    const token = this.addNextToken()
     const str = token?.getString().toLowerCase() ?? ""
     const index = strings.indexOf(str)
     if (index == -1) {
@@ -177,7 +176,7 @@ export class Parser extends Tokenizer {
   addMissingToken(message: string): Token {
     const token = this.createMissingToken()
     token.setError("Missing token, " + message)
-    this.pushToken(token)
+    this.addToken(token)
     return token
   }
 
@@ -185,20 +184,20 @@ export class Parser extends Tokenizer {
     return new Token(this.sourceLine, this.position, this.position, TokenType.Missing)
   }
 
-  pushExpression(expression: exp.Expression) {
+  addExpression(expression: exp.Expression) {
     this.tokenExpSet.push(expression)
   }
 
-  mustPushNextExpression(token?: Token): exp.Expression {
+  mustAddNextExpression(token?: Token): exp.Expression {
     const expression = this.mustParseExpression(token)
-    this.pushExpression(expression)
+    this.addExpression(expression)
     return expression
   }
 
-  pushNextExpression(token?: Token): exp.Expression | undefined {
+  addNextExpression(token?: Token): exp.Expression | undefined {
     const expression = this.parseExpression(token)
     if (expression) {
-      this.pushExpression(expression)
+      this.addExpression(expression)
     }
     return expression
   }
@@ -223,15 +222,15 @@ export class Parser extends Tokenizer {
     let opToken: Token | undefined
 
     if (labelExp) {
-      this.pushExpression(labelExp)
+      this.addExpression(labelExp)
       if (labelExp instanceof exp.VarExpression) {
-        opToken = this.pushNextToken()
+        opToken = this.addNextToken()
         statement = new stm.VarStatement()
       }
     }
 
     if (!statement) {
-      opToken = this.pushNextToken()
+      opToken = this.addNextToken()
       if (opToken) {
         let opNameLC = opToken.getString().toLowerCase()
 
@@ -296,7 +295,7 @@ export class Parser extends Tokenizer {
                           // *** just use generic Expression?
       // *** just push the tokens directly? ***
         // *** BadExpression ***
-      this.pushExpression(new exp.BadExpression(extraTokens))
+      this.addExpression(new exp.BadExpression(extraTokens))
     }
 
     // handle possible comment at end of statement
@@ -519,7 +518,7 @@ export class Parser extends Tokenizer {
           return new exp.BadExpression(this.endExpression())
         }
 
-        this.pushToken(token)
+        this.addToken(token)
       }
 
       while (true) {
@@ -542,7 +541,7 @@ export class Parser extends Tokenizer {
           break
         }
 
-        this.pushToken(token)
+        this.addToken(token)
         str = token.getString()
 
         if (str == "::") {
@@ -568,14 +567,14 @@ export class Parser extends Tokenizer {
           return new exp.BadExpression(this.endExpression())
         }
 
-        this.pushToken(token)
+        this.addToken(token)
       }
     }
 
     return this.newSymbolExpression(this.endExpression(), localType, isDefinition)
   }
 
-  public newSymbolExpression(children: exp.TokenExpressionSet,
+  public newSymbolExpression(children: Node[],
       symbolType: SymbolType, isDefinition: boolean): exp.SymbolExpression {
     return new exp.SymbolExpression(children, symbolType, isDefinition, this.sourceFile, this.lineNumber)
   }
@@ -583,7 +582,7 @@ export class Parser extends Tokenizer {
   private pushTrailingColon() {
     const nextChar = this.peekVeryNextChar()
     if (nextChar == ":") {
-      const token = this.pushNextToken()
+      const token = this.addNextToken()
       if (token) {
         // TODO: change token.type to what?
         if (this.syntax &&
@@ -740,7 +739,7 @@ export class Parser extends Tokenizer {
     if (str == "$") {
       // *** should "$" be HexNumber or left as Operator?
       token.type = TokenType.HexNumber
-      token = this.mustPushNextToken("expecting hex digits")
+      token = this.mustAddNextToken("expecting hex digits")
       str = token.getString()
       if (token.type == TokenType.HexNumber || token.type == TokenType.DecNumber) {
         value = parseInt(str, 16)
@@ -755,7 +754,7 @@ export class Parser extends Tokenizer {
       // *** should "%" be DecNumber or left as Operator?
       // *** support ACME's %..####.. format too
       token.type = TokenType.DecNumber
-      token = this.mustPushNextToken("expecting binary digits")
+      token = this.mustAddNextToken("expecting binary digits")
       str = token.getString()
       if (token.type == TokenType.DecNumber) {
         value = parseInt(str, 2)
@@ -796,7 +795,7 @@ export class Parser extends Tokenizer {
       if (nextChar == terminator) {
         // close string if any, and add terminator token
         if (!token.isEmpty()) {
-          this.pushToken(token)
+          this.addToken(token)
           this.position = token.end
         }
         token = new Token(this.sourceLine, this.position, this.position + 1, quoteToken.type)
@@ -805,7 +804,7 @@ export class Parser extends Tokenizer {
       if (nextChar == "\\" && allowEscapes) {
         // close string if any, and add character escape token
         if (!token.isEmpty()) {
-          this.pushToken(token)
+          this.addToken(token)
           this.position = token.end
         }
         token = new Token(this.sourceLine, this.position, this.position + 1, TokenType.Escape)
@@ -814,7 +813,7 @@ export class Parser extends Tokenizer {
           break
         }
         token.end += 1
-        this.pushToken(token)
+        this.addToken(token)
         this.position = token.end
         token = new Token(this.sourceLine, this.position, this.position, TokenType.String)
         continue
@@ -830,7 +829,7 @@ export class Parser extends Tokenizer {
         token.setError("Unterminated string")
       }
     }
-    this.pushToken(token)
+    this.addToken(token)
     this.position = token.end
 
     // TODO: just to support NajaText USR parsing
@@ -839,7 +838,7 @@ export class Parser extends Tokenizer {
         const nextChar = this.peekVeryNextChar()
         if (nextChar) {
           if ("=+-".indexOf(nextChar) != -1) {
-            this.pushNextToken()
+            this.addNextToken()
           }
         }
       }
@@ -855,7 +854,7 @@ export class Parser extends Tokenizer {
       token = new Token(this.sourceLine, this.position, this.position, TokenType.Missing)
       token.setError("Missing argument, expecting file path")
     }
-    this.pushToken(token)
+    this.addToken(token)
     return token
   }
 
@@ -931,9 +930,6 @@ export class Parser extends Tokenizer {
         return
       }
 
-      // force skipping whitespace after the last token end and comment start
-      // this.skipWhitespace()
-
       const token = new Token(this.sourceLine, this.position, this.sourceLine.length, TokenType.Comment)
 
       // *** for debugging, scan comment for syntax setting ***
@@ -943,18 +939,12 @@ export class Parser extends Tokenizer {
         const index = str.indexOf("SYNTAX:")
         if (index != -1) {
           const name = str.substring(index + 7)
-          for (let i = 1; i < SyntaxDefs.length; i += 1) {
-            const syntaxName: string = Syntax[i]
-            if (syntaxName == name) {
-              this.syntax = i
-              break
-            }
-          }
+          this.syntax = SyntaxMap.get(name) ?? this.syntax
         }
       }
 
       this.position = this.sourceLine.length
-      this.pushToken(token)
+      this.addToken(token)
     }
   }
 }
@@ -990,7 +980,7 @@ class ExpressionBuilder {
   private expStack: exp.Expression[] = []  // Postfix evaluation
   private lastSeen?: (OpEntry | exp.Expression)
   private parenStack: OpEntry[] = []
-  private inputSet: exp.TokenExpressionSet = []
+  private inputSet: Node[] = []
 
   // *** pass in hint about type of expression
   // *** mustParseExpression ***

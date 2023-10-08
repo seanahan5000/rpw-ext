@@ -587,7 +587,7 @@ class LisaSyntax extends SyntaxDef {
 
 //------------------------------------------------------------------------------
 
-export enum Syntax {
+export const enum Syntax {
   UNKNOWN = 0,    // must be zero
   MERLIN  = 1,
   DASM    = 2,
@@ -595,6 +595,15 @@ export enum Syntax {
   ACME    = 4,
   LISA    = 5,
 }
+
+export const SyntaxMap = new Map<string, number>([
+  [ "UNKNOWN", 0 ],
+  [ "MERLIN",  1 ],
+  [ "DASM",    2 ],
+  [ "CA65",    3 ],
+  [ "ACME",    4 ],
+  [ "LISA",    5 ],
+])
 
 export const SyntaxDefs: SyntaxDef[] = [
   new UnknownSyntax(),

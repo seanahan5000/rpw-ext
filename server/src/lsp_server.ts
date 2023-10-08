@@ -4,7 +4,7 @@ import { URI } from 'vscode-uri';
 import * as fs from 'fs';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { Token, TokenType, TokenErrorType } from "./asm/tokenizer"
+import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import * as asm from "./asm/assembler"
 import * as exp from "./asm/expressions"
 import { Statement } from "./asm/statements"
@@ -202,6 +202,17 @@ class LspProject extends asm.Project {
 }
 
 //------------------------------------------------------------------------------
+
+type SemanticState = {
+  prevLine: number,
+  prevStart: number,
+  data: number[]
+}
+
+type DiagnosticState = {
+  lineNumber: number,
+  diagnostics: lsp.Diagnostic[]
+}
 
 //*** think about factoring this so some of the code could be used in SublimeText, for example
 
@@ -438,7 +449,7 @@ export class LspServer {
 
           // *** if token missed, look for token just before/after it ***
 
-          const res = statement.getExpressionAt(params.position.character)
+          const res = statement.findExpressionAt(params.position.character)
           if (res) {
             // no completions if in comments
             if (res.token.type != TokenType.Comment) {
@@ -605,7 +616,7 @@ export class LspServer {
   async onHover(params: lsp.TextDocumentPositionParams, token?: lsp.CancellationToken): Promise<lsp.Hover> {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
-      const res = statement.getExpressionAt(params.position.character)
+      const res = statement.findExpressionAt(params.position.character)
       if (res && res.expression instanceof exp.SymbolExpression) {
         const hoverExp = res.expression
         // TODO: if hovering over macro invocation, show macro contents
@@ -632,7 +643,7 @@ export class LspServer {
   async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
-      const res = statement.getExpressionAt(params.position.character)
+      const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro definitions
       if (res && res.expression instanceof exp.SymbolExpression) {
         const symExp = res.expression
@@ -686,7 +697,7 @@ export class LspServer {
   async onPrepareRename(params: lsp.PrepareRenameParams, token?: lsp.CancellationToken): Promise<lsp.Range | { range: lsp.Range; placeholder: string; } | undefined | null> {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
-      const res = statement.getExpressionAt(params.position.character)
+      const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro rename
       if (res && res.expression instanceof exp.SymbolExpression) {
         const symExp = res.expression
@@ -706,7 +717,7 @@ export class LspServer {
   async onRename(params: lsp.RenameParams, token?: lsp.CancellationToken): Promise<lsp.WorkspaceEdit | undefined | null> {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
-      const res = statement.getExpressionAt(params.position.character)
+      const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro rename
       if (res && res.expression instanceof exp.SymbolExpression) {
         const symExp = res.expression
@@ -740,165 +751,209 @@ export class LspServer {
     }
   }
 
+  // TODO: consider a range of lines?
   public updateDiagnostics(sourceFile: asm.SourceFile) {
 
-    // *** mark unused (simple) labels?
+    const diagnostics: lsp.Diagnostic[] = []
+    const state: DiagnosticState = { lineNumber: 0, diagnostics }
 
-    const diagnostics: lsp.Diagnostic[] = [];
     for (let i = 0; i < sourceFile.statements.length; i += 1) {
-      const statement = sourceFile.statements[i];
-      const tokens = statement.getTokens()
-      // TODO: mark statement with error and skip token scan here
-      // *** limit duplicate errors on single line ***
-      for (let j = 0; j < tokens.length; j += 1) {
-        const token = tokens[j];
-        if (token.errorType != TokenErrorType.None) {
-          let severity: lsp.DiagnosticSeverity;
-          switch (token.errorType) {
-            default:
-            case TokenErrorType.Error:
-              severity = lsp.DiagnosticSeverity.Error;        // red line
-              break;
-            case TokenErrorType.Warning:
-              severity = lsp.DiagnosticSeverity.Warning;      // yellow line
-              break;
-            case TokenErrorType.Info:
-              severity = lsp.DiagnosticSeverity.Information;  // blue line
-              break;
-          }
-          if (token.start == token.end) {
-            console.log();
-          }
-          const lspDiagnostic: lsp.Diagnostic = {
-            range: {
-              start: { line: i, character: token.start},
-              end: { line: i, character: Math.max(token.end, token.start + 1)}
-              // end: { line: i, character: token.end }
-            },
-            message: token.errorMessage ?? "",
-            severity: severity
-            // code:,
-            // source:,
-            // relatedInformation:,
-          };
-          diagnostics.push(lspDiagnostic);
-        }
-      }
+      const statement = sourceFile.statements[i]
+      state.lineNumber = i
+      this.diagnoseExpression(state, statement)
     }
 
     this.connection.sendDiagnostics({
       uri: URI.file(sourceFile.path).toString(),
-      diagnostics: diagnostics });
+      diagnostics: diagnostics })
+  }
+
+  private diagnoseExpression(state: DiagnosticState, expression: exp.Expression) {
+    if (expression.errorType != NodeErrorType.None) {
+      this.diagnoseNode(state, expression)
+      return
+    }
+    for (let i = 0; i < expression.children.length; i += 1) {
+      const node = expression.children[i]
+      if (node instanceof exp.Expression) {
+        this.diagnoseExpression(state, node)
+      } else {
+        this.diagnoseNode(state, node)
+      }
+    }
+  }
+
+  private diagnoseNode(state: DiagnosticState, node: Node) {
+    if (node.errorType != NodeErrorType.None) {
+      let severity: lsp.DiagnosticSeverity
+      switch (node.errorType) {
+        default:
+        case NodeErrorType.Error:
+          severity = lsp.DiagnosticSeverity.Error       // red line
+          break
+        case NodeErrorType.Warning:
+          severity = lsp.DiagnosticSeverity.Warning     // yellow line
+          break
+        case NodeErrorType.Info:
+          severity = lsp.DiagnosticSeverity.Information // blue line
+          break
+      }
+
+      const nodeRange = node.getRange()
+      if (nodeRange) {
+        const lspDiagnostic: lsp.Diagnostic = {
+          range: {
+            start: { line: state.lineNumber, character: nodeRange.start },
+            end: { line: state.lineNumber, character: Math.max(nodeRange.end, nodeRange.start + 1) }
+          },
+          message: node.errorMessage ?? "",
+          severity: severity
+          // code:,
+          // source:,
+          // relatedInformation:,
+        }
+        state.diagnostics.push(lspDiagnostic)
+      }
+    }
   }
 
   async onSemanticTokensFull(params: lsp.SemanticTokensParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
-    const filePath = pathFromUriString(params.textDocument.uri);
-    if (!filePath) {
-      return { data: [] };
+    const sourceFile = this.getSourceFile(params.textDocument.uri)
+    if (sourceFile) {
+      return this.getSemanticTokens(sourceFile, 0, sourceFile.statements.length)
+    } else {
+      return { data: [] }
     }
-
-    const sourceFile = this.findSourceFile(filePath)
-    if (!sourceFile) {
-      return { data: [] };
-    }
-
-    // export enum SemanticToken {
-    //   invalid   = 0,
-    //   comment   = 1,
-    //   string    = 2,
-    //   number    = 3,
-    //   operator  = 4,
-    //   keyword   = 5,
-    //   label     = 6,
-    //   macro     = 7,
-    
-    //   opcode    = 8,
-    //   constant  = 9,
-    //   zpage     = 10,
-    //   var       = 11
-    // }
-    
-    // export enum SemanticModifier {
-    //   local     = 0,
-    //   global    = 1,
-    //   external  = 2,
-    //   unused    = 3
-    // }
-    
-    const data: number[] = [];
-    const statements = sourceFile.statements;
-    let prevLine = 0;
-    for (let i = 0; i < statements.length; i += 1) {
-      const statement = statements[i];
-      const tokens = statement.getTokens()
-      let prevStart = 0;
-      for (let j = 0; j < tokens.length; j += 1) {
-        let index = -1
-        let bits = 0
-        const token = tokens[j];
-        if (token.type == TokenType.Comment) {
-          index = SemanticToken.comment
-        } else if (token.type == TokenType.Keyword) {
-          index = SemanticToken.keyword
-        } else if (token.type == TokenType.Opcode) {
-          index = SemanticToken.opcode
-        } else if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
-          // if (token.symbol !== undefined) {
-          //   if (token.symbol.type === undefined) {
-              index = SemanticToken.label
-          //   } else if (token.symbol.type == SymbolType.Constant) {
-          //     index = SemanticToken.constant
-          //   } else if (token.symbol.type == SymbolType.ZPage) {
-          //     index = SemanticToken.zpage
-          //   }
-          //   // *** apply unused ***
-          //   // *** apply global and/or external ***
-          // }
-        } else if (token.type == TokenType.LocalLabel
-          || token.type == TokenType.LocalLabelPrefix) {
-          index = SemanticToken.label
-          bits |= (1 << SemanticModifier.local)
-          // *** apply unused ***
-        } else if (token.type == TokenType.Operator) {
-          index = SemanticToken.operator
-        } else if (token.type == TokenType.Macro) {
-          index = SemanticToken.macro
-        } else if (token.type == TokenType.DecNumber ||
-            token.type == TokenType.HexNumber) {
-          // if ((statement instanceof xxx.OpStatement) && statement.type == "HEX") {
-          //   // TODO: maybe a different color for long HEX AAAAAAAA statements?
-          // } else {
-            index = SemanticToken.number
-          // }
-        } else if (token.type == TokenType.Variable
-          || token.type == TokenType.VariablePrefix) {
-          index = SemanticToken.var
-        } else if (token.type == TokenType.FileName) {
-          index = SemanticToken.string                  // TODO: something else
-        } else if (token.type == TokenType.String
-          || token.type == TokenType.Quote) {
-          index = SemanticToken.string
-        } else {
-          index = SemanticToken.invalid
-        }
-
-        if (index >= 0) {
-          data.push(i - prevLine, token.start - prevStart, token.length, index, bits)
-          prevStart = token.start
-          prevLine = i
-        }
-      }
-    }
-
-    return { data: data }
   }
 
   async onSemanticTokensRange(params: lsp.SemanticTokensRangeParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
-    
-    // *** add this (change client setting too) ***
-    
-    return { data: [] };
+    const sourceFile = this.getSourceFile(params.textDocument.uri)
+    if (sourceFile) {
+      return this.getSemanticTokens(sourceFile, params.range.start.line, params.range.end.line)
+    } else {
+      return { data: [] }
+    }
   }
+
+  private getSemanticTokens(sourceFile: asm.SourceFile, startLine: number, endLine: number): lsp.SemanticTokens {
+    const data: number[] = []
+    const state: SemanticState = { prevLine: 0, prevStart: 0, data: data }
+    for (let i = startLine; i < endLine; i += 1) {
+      state.prevStart = 0
+      this.semanticExpression(state, i, sourceFile.statements[i])
+    }
+    return { data }
+  }
+
+  private semanticExpression(state: SemanticState, lineNumber: number, expression: exp.Expression) {
+
+    if (expression instanceof exp.SymbolExpression) {
+      const symExp = expression
+      // let bits = 0
+      if (symExp.isDefinition) {
+        // *** check for unreferenced
+      }
+      // *** apply symbol modifier info to tokens ***
+      for (let i = 0; i < symExp.children.length; i += 1) {
+        const child = symExp.children[i]
+        if (child instanceof Token) {
+          // ***
+        }
+      }
+      // return
+    }
+
+    for (let i = 0; i < expression.children.length; i += 1) {
+      const child = expression.children[i]
+      if (child instanceof Token) {
+        this.semanticToken(state, lineNumber, child)
+      } else if (child instanceof exp.Expression) {
+        this.semanticExpression(state, lineNumber, child)
+      }
+    }
+  }
+
+  // export enum SemanticToken {
+  //   invalid   = 0,
+  //   comment   = 1,
+  //   string    = 2,
+  //   number    = 3,
+  //   operator  = 4,
+  //   keyword   = 5,
+  //   label     = 6,
+  //   macro     = 7,
+
+  //   opcode    = 8,
+  //   constant  = 9,
+  //   zpage     = 10,
+  //   var       = 11
+  // }
+
+  // export enum SemanticModifier {
+  //   local     = 0,
+  //   global    = 1,
+  //   external  = 2,
+  //   unused    = 3
+  // }
+
+  private semanticToken(state: SemanticState, lineNumber: number, token: Token) {
+    let index = -1
+    let bits = 0
+
+    if (token.type == TokenType.Comment) {
+      index = SemanticToken.comment
+    } else if (token.type == TokenType.Keyword) {
+      index = SemanticToken.keyword
+    } else if (token.type == TokenType.Opcode) {
+      index = SemanticToken.opcode
+    } else if (token.type == TokenType.Label
+        || token.type == TokenType.Symbol) {    // *** symbol should have been forced to Label already? ***
+      // if (token.symbol !== undefined) {
+      //   if (token.symbol.type === undefined) {
+          index = SemanticToken.label
+      //   } else if (token.symbol.type == SymbolType.Constant) {
+      //     index = SemanticToken.constant
+      //   } else if (token.symbol.type == SymbolType.ZPage) {
+      //     index = SemanticToken.zpage
+      //   }
+      //   // *** apply unused ***
+      //   // *** apply global and/or external ***
+      // }
+    } else if (token.type == TokenType.LocalLabel
+        || token.type == TokenType.LocalLabelPrefix) {
+      index = SemanticToken.label
+      bits |= (1 << SemanticModifier.local)
+      // *** apply unused ***
+    } else if (token.type == TokenType.Operator) {
+      index = SemanticToken.operator
+    } else if (token.type == TokenType.Macro) {
+      index = SemanticToken.macro
+    } else if (token.type == TokenType.DecNumber
+        || token.type == TokenType.HexNumber) {
+      // if ((statement instanceof xxx.OpStatement) && statement.type == "HEX") {
+      //   // TODO: maybe a different color for long HEX AAAAAAAA statements?
+      // } else {
+        index = SemanticToken.number
+      // }
+    } else if (token.type == TokenType.Variable
+      || token.type == TokenType.VariablePrefix) {
+      index = SemanticToken.var
+    } else if (token.type == TokenType.FileName) {
+      index = SemanticToken.string                  // TODO: something else
+    } else if (token.type == TokenType.String
+      || token.type == TokenType.Quote) {
+      index = SemanticToken.string
+    } else {
+      index = SemanticToken.invalid
+    }
+
+    if (index >= 0) {
+      state.data.push(lineNumber - state.prevLine, token.start - state.prevStart, token.length, index, bits)
+      state.prevStart = token.start
+      state.prevLine = lineNumber
+    }
+  }
+
 
   // TODO: move some of this into sourceFile?
   private getCommentHeader(atFile: asm.SourceFile, atLine: number): string | undefined {
@@ -948,19 +1003,5 @@ export class LspServer {
     }
   }
 }
-
-/* based on SublimeText Mariana */
-// .cm-s-dbug.CodeMirror {
-//   background: hsl(0, 0%, 10%); #1a1a1a
-//   color: hsl(0, 0%, 70%);      #b3b3b3
-// }
-// .cm-s-dbug span.cm-comment { color: hsl(114, 30%, 40%); }      #4e8547
-// .cm-s-dbug span.cm-string { color: hsl(32, 93%, 66%); }        #f9ae58
-// .cm-s-dbug span.cm-keyword { color: hsl(300, 50%, 68%); }      #d685d6
-// .cm-s-dbug span.cm-opcode { color: hsl(210, 50%, 60%); }     	#6699cc
-// .cm-s-dbug span.cm-label { color: hsl(32, 93%, 66%); }         #f9ae58
-// .cm-s-dbug span.cm-local { color: #9effff; }    /*** CHANGE THIS ***/
-// .cm-s-dbug span.cm-operator { color: #845dc4; }    /*** CHANGE THIS ***/
-// .cm-s-dbug span.cm-number { color: #ff80e1; }
 
 //------------------------------------------------------------------------------

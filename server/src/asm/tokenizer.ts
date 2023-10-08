@@ -3,6 +3,52 @@ import { Syntax } from "./syntax"
 
 //------------------------------------------------------------------------------
 
+export enum NodeErrorType {
+  None,
+  Error,
+  Warning,
+  Info
+}
+
+export type NodeRange = {
+  sourceLine: string,
+  start: number,
+  end: number
+}
+
+export abstract class Node {
+  public errorType: NodeErrorType
+  public errorMessage?: string
+
+  abstract getRange(): NodeRange | undefined
+  abstract getString(): string
+
+  constructor() {
+    this.errorType = NodeErrorType.None
+  }
+
+  setError(message: string) {
+    if (this.errorType != NodeErrorType.Error) {
+      this.errorType = NodeErrorType.Error
+      this.errorMessage = message
+    }
+  }
+
+  setWarning(message: string) {
+    if (this.errorType != NodeErrorType.Error &&
+        this.errorType != NodeErrorType.Warning) {
+      this.errorType = NodeErrorType.Warning
+      this.errorMessage = message
+    }
+  }
+
+  hasError(): boolean {
+    return this.errorType == NodeErrorType.Error
+  }
+}
+
+//------------------------------------------------------------------------------
+
 export enum TokenType {
   Null,         // *** necessary?
 
@@ -33,27 +79,26 @@ export enum TokenType {
   Missing
 }
 
-export enum TokenErrorType {
-  None,
-  Error,
-  Warning,
-  Info
-}
-
-export class Token {
+export class Token extends Node {
   public sourceLine: string
   public start: number
   public end: number
   public type: TokenType
-  public errorType: TokenErrorType
-  public errorMessage?: string
 
   constructor(sourceLine: string, start: number, end: number, type: TokenType) {
+    super()
     this.sourceLine = sourceLine
     this.start = start
     this.end = end
     this.type = type
-    this.errorType = TokenErrorType.None
+  }
+
+  getRange(): NodeRange {
+    return { sourceLine: this.sourceLine, start: this.start, end: this.end }
+  }
+
+  getString(): string {
+    return this.sourceLine.substring(this.start, this.end)
   }
 
   get length(): number {
@@ -62,29 +107,6 @@ export class Token {
 
   isEmpty(): boolean {
     return this.start == this.end
-  }
-
-  getString(): string {
-    return this.sourceLine.substring(this.start, this.end)
-  }
-
-  setError(message: string) {
-    if (this.errorType != TokenErrorType.Error) {
-      this.errorType = TokenErrorType.Error
-      this.errorMessage = message
-    }
-  }
-
-  setWarning(message: string) {
-    if (this.errorType != TokenErrorType.Error &&
-        this.errorType != TokenErrorType.Warning) {
-      this.errorType = TokenErrorType.Warning
-      this.errorMessage = message
-    }
-  }
-
-  hasError(): boolean {
-    return this.errorType == TokenErrorType.Error
   }
 }
 
