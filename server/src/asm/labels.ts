@@ -93,9 +93,9 @@ function renumberLocalType(sourceFile: SourceFile, startLine: number,
 
 function isLocalStart(statement: Statement, symbolType: SymbolType): boolean {
   const symExp = statement.labelExp
-  if (symExp) {
+  if (symExp && symExp.symbol) {
     if (symbolType == SymbolType.ZoneLocal) {
-      return symExp.isZoneStart
+      return symExp.symbol.isZoneStart
     } else if (symbolType == SymbolType.CheapLocal) {
       return symExp.symbolType == SymbolType.Simple
     }

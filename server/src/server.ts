@@ -90,11 +90,14 @@ connection.onInitialize((params: InitializeParams) => {
 				"keyword",   // 5
 				"label",     // 6
 				"macro",     // 7
+				"function",  // 8
 
-				"opcode",    // 8
-				"constant",  // 9
-				"zpage",     // 10
-				"var"        // 11
+				"buffer",	   // 9
+				"opcode",    // 10
+				"constant",  // 11
+				"zpage",     // 12
+				"var",       // 13
+				"escape"     // 14
 
 				// "comment.line.semicolon.rpw65"
 				// "keyword.control.opcode.rpw65"

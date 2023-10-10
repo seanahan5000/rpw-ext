@@ -10,31 +10,89 @@
 	"semanticTokenColors": {
 		"comment": {
 			"foreground": "#4e8547", //"#4e8547",
-			"fontStyle": "bold"
+			"fontStyle": ""
 		},
 		"string": 		"#ce9178",	//"#f9ae58",
+		"escape": {
+			// "foreground":	"#dddcaa",	// hsl(59,43%,77%) vsc escape yellow
+			"foreground":	"#DDDCAA",	// hsl(59,43%,77%) vsc yellow
+		},
 		"keyword":		"#d685d6",
 		"opcode": {
-			"foreground": "#6699cc",
+			// "foreground": "#6699cc",			// (blue)
+			// "foreground": "#8C8CD9",			// hsl(240,50,75)
+			// "foreground": "#6699CC",			// hsl(210,50,60)		*** preferred
+			// "foreground": "#3D99F5",			// hsl(210,90,60)
+
+			"foreground": "#569cd6",		// hsl(207, 61%, 59%) vsc flat blue
 			"fontStyle": ""
 		},
 		"label": {
-			"foreground": "#f9ae58",
-			"fontStyle": "bold"
-		},
-		"label.local": {
-			"foreground": "#9effff",
+			// 	// "foreground": "#f9ae58",			// (orange)
+			// 	// "foreground": "#f9ae58",			// (orange)
+			// 	// "foreground": "#CC9966",			// hsl(30,50,60)
+			// 	// "foreground": "#F5993D",			// hsl(30,90,60)
+			// 	"foreground": "#e6994c",			// hsl(30,75,60)	*** preferred
+			// 	// "foreground": "#DCDCAA",			// *** vscode yellow hsl(60,42,76)
+			// "foreground":	"#1d93e9",	// hsl(205,82%,51%) vsc royal blue
+			// "foreground":	"#999866",	// hsl(59, 20%, 50%) dark vsc yellow
+			"foreground":	"#DDDCAA",	// hsl(59,43%,77%) vsc yellow
+			// "foreground":	"#a1a072",	// ***
+			// "foreground": "#FF0000",
 			"fontStyle": ""
 		},
-		"zpage": 				"#A0C4BC",			// TODO: change this
-		"zpage.unused":	"#808080",
+		// *** does this cover all unused cases? ***
+		"label.unused": {
+			"foreground": "#808080",
+		},
+		"label.local": {
+			// "foreground":	//"#5FB4B4",			// (blue5)
+									// "#5fb4b4",			// hsl(180,36,54)
+									// "#9effff",
+			"foreground":	"#4ec7af",	// hsl(168, 52%, 54%) vsc teal
+			"fontStyle": ""
+		},
+		"label.local.unused": {
+			"foreground":	"#808080",
+			"fontStyle": ""
+		},
+		"zpage": {
+			"foreground":	"#9cddff",	 // hsl(201,100%,81%) vsc light blue
+			"fontStyle": ""
+		},
+		"zpage.unused":	"#808080",			// ***
+		"function": {
+			"foreground":	"#DDDCAA",	// hsl(59,43%,77%) vsc yellow
+			// "foreground":	"#1d93e9",	// *** hsl(205,82%,51%) vsc royal blue
+			"fontStyle": ""
+		},
+		"function.external": {
+			"foreground": "#e6994c",			// hsl(30,75,60)	*** preferred
+			"fontStyle": ""
+		},
+		// *** function.unused *** not possible? ***
+		// *** label.code
+		// *** label.data
+		"buffer": {
+			"foreground":	"#4ebffc",	// hsl(201,97%,65%) vsc medium blue
+			"fontStyle": ""
+		},
 		"operator": 	"#845dc4",
-		"macro": 			"#80b080",			// TODO: change this
-		"number": 		"#ff80e1",
-		"constant":		"#ff80e1",			// TODO: change this
+		"macro": {
+			// "foreground":	"#5fb4b4",			// hsl(180,36,54)
+			"foreground":	"#4ec7af",	// hsl(168, 52%, 54%) vsc teal
+			"fontStyle": ""
+		},
+		"number": 		{
+			"foreground":	"#D685D6",
+			// "foreground":	"#DDDCAA",	// hsl(59,43%,77%) vsc yellow
+			"fontStyle": ""
+		},
+		"constant":		"#D685D6",				// should be same as number
 		"invalid": 		"#ff0000",
 
 		"var": {
+			//*** pick a shade of blue for these
 			"foreground": "#ff80e1",		// TODO: change this
 			"fontStyle": ""
 		},
@@ -48,6 +106,44 @@
 		// KEYBRD, UNSTROB, etc should be different color
 		// different between local definition and reference to it?
 	},
+
+	// "foreground":	"#9cddff",					// hsl() vscode light blue
+	
+
+	// "black": "hsl(0, 0%, 0%)",          000000
+	// "blue": "hsl(210, 50%, 60%)",       6699CC
+	// "blue2": "hsl(209, 13%, 35%)",      4E5A65
+	// "blue3": "hsl(210, 15%, 24%)",      343D46
+	// "blue4": "hsl(210, 13%, 45%)",      647382
+	// "blue5": "hsl(180, 36%, 54%)",      5FB4B4    ***
+	// "blue6": "hsl(221, 12%, 69%)",      A6ACB9
+	// "green": "hsl(114, 30%, 40%)",      4E8547
+	// "grey": "hsl(0, 0%, 10%)",          1A1A1A
+	// "grey2": "hsl(0, 0%, 50%)",         808080
+	// "orange": "hsl(32, 93%, 66%)",      F9AE58
+	// "orange2": "hsl(32, 85%, 55%)",     EE932B
+	// "orange3": "hsl(40, 94%, 68%)",     FAC761
+	// "pink": "hsl(300, 50%, 68%)",       D685D6
+	// "red": "hsl(357, 79%, 65%)",        EC5F66
+	// "red2": "hsl(13, 93%, 66%)",        F97B58
+	// "white": "hsl(0, 0%, 100%)",        FFFFFF
+	// "white2": "hsl(0, 0%, 97%)",        F7F7F7
+	// "white3": "hsl(0, 0%, 70%)"         B3B3B3
+
+/* based on SublimeText Mariana */
+// .cm-s-dbug.CodeMirror {
+//   background: hsl(0, 0%, 10%); #1a1a1a
+//   color: hsl(0, 0%, 70%);      #b3b3b3
+// }
+// .cm-s-dbug span.cm-comment { color: hsl(114, 30%, 40%); }      #4e8547
+// .cm-s-dbug span.cm-string { color: hsl(32, 93%, 66%); }        #f9ae58
+// .cm-s-dbug span.cm-keyword { color: hsl(300, 50%, 68%); }      #d685d6
+// .cm-s-dbug span.cm-opcode { color: hsl(210, 50%, 60%); }     	#6699cc
+// .cm-s-dbug span.cm-label { color: hsl(32, 93%, 66%); }         #f9ae58
+// .cm-s-dbug span.cm-local { color: #9effff; }    /*** CHANGE THIS ***/
+// .cm-s-dbug span.cm-operator { color: #845dc4; }    /*** CHANGE THIS ***/
+// .cm-s-dbug span.cm-number { color: #ff80e1; }
+
 
 	"tokenColors": [
 

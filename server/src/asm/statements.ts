@@ -2,7 +2,7 @@
 import * as exp from "./expressions"
 import { Parser } from "./parser"
 import { SymbolFrom, SymbolType } from "./symbols"
-import { Syntax } from "./syntax"
+import { Syntax, Op } from "./syntax"
 import { Node, Token, TokenType } from "./tokenizer"
 
 //------------------------------------------------------------------------------
@@ -13,6 +13,7 @@ export class Statement extends exp.Expression {
 
   public labelExp?: exp.SymbolExpression
   public opToken?: Token
+  public opNameLC = ""
 
   init(sourceLine: string, opToken: Token | undefined,
       children: Node[], labelExp?: exp.SymbolExpression) {
@@ -20,6 +21,7 @@ export class Statement extends exp.Expression {
     this.opToken = opToken
     this.children = children
     this.labelExp = labelExp
+    this.opNameLC = opToken?.getString().toLowerCase() ?? ""
   }
 
   parse(parser: Parser) {
@@ -54,7 +56,11 @@ export class ZoneStatement extends Statement {
         parser.sourceFile, parser.lineNumber)
       this.children.unshift(this.labelExp)
     }
-    this.labelExp.isZoneStart = true
+    if (this.labelExp.symbol) {
+      this.labelExp.symbol.isZoneStart = true
+    }
+
+    // *** if !zone, look for optional trailing open brace ***
   }
 }
 
@@ -82,6 +88,7 @@ export class OpStatement extends Statement {
 
   private opcode: any
   private mode: OpMode = OpMode.NONE
+  private opExpression?: exp.Expression
 
   constructor(opcode: any) {
     super()
@@ -122,7 +129,7 @@ export class OpStatement extends Statement {
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
-        parser.mustAddNextExpression()
+        this.opExpression = parser.mustAddNextExpression()
       } else if (str == "/") {			// same as "#>"
         parser.addToken(token)
         if (this.opcode.IMM === undefined) {
@@ -133,12 +140,13 @@ export class OpStatement extends Statement {
           // TODO: would be clearer to extend warning to entire expression
         }
         this.mode = OpMode.IMM
-        parser.mustAddNextExpression()
+        // *** this loses the implied ">" operation
+        this.opExpression = parser.mustAddNextExpression()
       } else if (str == "(") {
         parser.addToken(token)
         // *** check opcode has this address mode ***
         token.type = TokenType.Opcode
-        parser.mustAddNextExpression()
+        this.opExpression = parser.mustAddNextExpression()
 
         let res = parser.mustAddToken([",", ")"], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
@@ -192,10 +200,8 @@ export class OpStatement extends Statement {
 
         // handle special case branch/jump labels
 
-        const nameUC = this.opToken?.getString().toUpperCase() ?? ""
-
         if (this.opcode.BRAN || (this.opcode.ABS &&
-            (nameUC == "JMP" || nameUC == "JSR"))) {
+            (this.opNameLC == "jmp" || this.opNameLC == "jsr"))) {
 
           // *** move to parser ***
 
@@ -213,18 +219,18 @@ export class OpStatement extends Statement {
                 parser.addExpression(new exp.BadExpression([token]))
                 return
               }
-              token.type = TokenType.LocalLabelPrefix
+              token.type = TokenType.Label
               parser.addExpression(parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition))
               return
             }
           }
         }
 
-        parser.mustAddNextExpression(token)
+        this.opExpression = parser.mustAddNextExpression(token)
+
         token = parser.addNextToken()
-        // *** premature to assign ZP when expression size isn't known ***
         if (!token) {
-          this.mode = OpMode.ZP             // exp
+          this.mode = OpMode.ABS            // exp
         } else {
           if (token.getString() == ",") {   // exp,X or exp,Y
             token.type = TokenType.Opcode
@@ -232,10 +238,10 @@ export class OpStatement extends Statement {
             if (token.type != TokenType.Missing) {
               str = token.getString().toLowerCase()
               if (str == "x") {             // exp,X
-                this.mode = OpMode.ZPX
+                this.mode = OpMode.ABSX
                 token.type = TokenType.Opcode
               } else if (str == "y") {      // exp,Y
-                this.mode = OpMode.ZPY
+                this.mode = OpMode.ABSY
                 token.type = TokenType.Opcode
               } else if (str != "") {
                 token.setError("Unexpected token, expecting 'X' or 'Y'")
@@ -247,7 +253,184 @@ export class OpStatement extends Statement {
         }
       }
     }
-    // ***
+  }
+
+  // called after symbols have been processed
+  //  TODO: make this part of assemble phases
+  postSymbols() {
+    if (!this.opExpression) {
+      return
+    }
+    switch (this.mode) {
+      case OpMode.NONE:
+      case OpMode.A:
+        // mode already checked
+        break
+      case OpMode.IMM:
+        // mode already checked
+        this.markConstants(this.opExpression)
+        break
+      case OpMode.ZP:
+      case OpMode.ZPX:
+      case OpMode.ZPY:
+        // will never be ZPAGE at this point
+        break
+      case OpMode.ABS:
+        if (this.opcode.BRAN) {
+          this.mode = OpMode.BRANCH
+          this.markCode(this.opExpression)
+          break
+        }
+        if (this.opNameLC == "jmp") {
+          this.markCode(this.opExpression)
+          break
+        }
+        if (this.opNameLC == "jsr") {
+          this.markSubroutine(this.opExpression)
+          break
+        }
+        // fall through
+      case OpMode.ABSX:
+      case OpMode.ABSY:
+        const size = this.opExpression.getSize() ?? 0
+        if (size == 1) {
+          // TODO: when downgrading, handle case where opcode
+          //  could be ABS but not ZP
+          this.mode = this.mode - OpMode.ABS + OpMode.ZP
+          this.markZPage(this.opExpression)
+        } else {
+          this.markData(this.opExpression)
+        }
+        // *** check resulting mode
+        break
+      case OpMode.IND:
+        // mode already checked
+        break
+      case OpMode.INDX:
+      case OpMode.INDY:
+        // mode already checked
+        this.markZPage(this.opExpression)
+        // *** mark as error if too large ***
+        break
+      case OpMode.BRANCH:
+        // will never be BRANCH at this point
+        break
+    }
+
+    // if opcode has label, label must be code
+    if (this.labelExp) {
+      this.markCode(this.labelExp)
+    }
+  }
+
+  private markData(expression: exp.Expression) {
+    const symExps: exp.SymbolExpression[] = []
+    this.recurseSyms(expression, symExps)
+    if (symExps.length == 1) {
+      const symbol = symExps[0].symbol
+      if (symbol) {
+        const value = symbol.resolve()
+        // *** do something special with Apple hardware addresses ***
+        if (value && value >= 0xC000 && value <= 0xCFFF) {
+          return
+        }
+        if (symbol.isConstant) {
+          symExps[0].setWarning("Symbol used as both data address and constant")
+        } else {
+          symbol.isData = true
+        }
+      }
+    }
+  }
+
+  private markCode(expression: exp.Expression) {
+    if (expression instanceof exp.SymbolExpression) {
+      if (expression.symbol) {
+        if (expression.symbol.isConstant) {
+          expression.setWarning("Symbol used as both constant and code label")
+        } else {
+          expression.symbol.isCode = true
+        }
+      }
+    }
+  }
+
+  private markSubroutine(expression: exp.Expression) {
+    if (expression instanceof exp.SymbolExpression) {
+      if (expression.symbol) {
+        if (expression.symbol.isConstant) {
+          expression.setWarning("Symbol used as both constant and JSR target")
+        } else {
+          expression.symbol.isSubroutine = true
+        }
+      }
+    }
+  }
+
+  private markZPage(expression: exp.Expression) {
+    const symExps: exp.SymbolExpression[] = []
+    this.recurseSyms(expression, symExps)
+    if (symExps.length == 1) {
+      const symbol = symExps[0].symbol
+      if (symbol) {
+        const size = symbol.getSize() ?? 0
+        if (size == 1) {
+          if (symbol.isConstant) {
+            symExps[0].setWarning("Symbol used as both ZPAGE and constant")
+          } else {
+            symbol.isZPage = true
+          }
+        }
+      }
+    }
+  }
+
+  private recurseSyms(expression: exp.Expression, symExps: exp.SymbolExpression[]) {
+    if (expression instanceof exp.SymbolExpression) {
+      symExps.push(expression)
+      return
+    }
+    if (expression instanceof exp.UnaryExpression) {
+      return
+    }
+    for (let i = 0; i < expression.children.length; i += 1) {
+      const node = expression.children[i]
+      if (node instanceof exp.Expression) {
+        this.recurseSyms(node, symExps)
+      }
+    }
+  }
+
+  private markConstants(expression: exp.Expression) {
+    if (expression instanceof exp.SymbolExpression) {
+      if (expression.symbol) {
+        const size = expression.symbol.getSize() ?? 0
+        if (size == 1) {
+          if (expression.symbol.isZPage) {
+            expression.setWarning("Symbol used as both ZPAGE and constant")
+          } else if (expression.symbol.isSubroutine) {
+            expression.setWarning("Symbol used as both JSR target and constant")
+          } else {
+            expression.symbol.isConstant = true
+          }
+        }
+      }
+      return
+    }
+    if (expression instanceof exp.UnaryExpression) {
+      const opType = expression.opType
+      if (opType == Op.LowByte
+          || opType == Op.HighByte
+          || opType == Op.BankByte) {
+        return
+      }
+    }
+    for (let i = 0; i < expression.children.length; i += 1) {
+      const node = expression.children[i]
+      if (node instanceof exp.Expression) {
+        this.markConstants(node)
+      }
+    }
   }
 }
 
@@ -329,8 +512,7 @@ export abstract class ConditionalStatement extends Statement {
   abstract applyConditional(conditional: Conditional): void
 
   parseTrailingOpenBrace(parser: Parser): boolean {
-    const opStr = this.opToken?.getString() ?? ""
-    if (opStr.startsWith("!")) {
+    if (this.opNameLC.startsWith("!")) {
       const res = parser.mustAddToken("{")
       if (res.index == 0) {
         // TODO: start new ACME group state
@@ -467,8 +649,7 @@ export class IfDefStatement extends ConditionalStatement {
 export class ElseStatement extends ConditionalStatement {
 
   parse(parser: Parser) {
-    const opStr = this.opToken?.getString() ?? ""
-    if (opStr == "}") {
+    if (this.opNameLC == "}") {
       const elseToken = parser.addNextToken()
       if (!elseToken) {
         parser.addMissingToken("expecting ELSE")
@@ -478,6 +659,7 @@ export class ElseStatement extends ConditionalStatement {
         elseToken.setError("Unexpected token, expecting ELSE")
         return
       }
+      elseToken.type = TokenType.Keyword
       const res = parser.mustAddToken("{")
       if (res.index == 0) {
         // TODO: start new ACME group state
@@ -584,6 +766,8 @@ export class EndIfStatement extends ConditionalStatement {
 // Storage
 //==============================================================================
 
+// *** mark label as storage ***
+
 // *** others ***
 
 //   LISA:  .DA <exp>[,<exp>]
@@ -605,6 +789,12 @@ class DataStatement extends Statement {
   }
 
   parse(parser: Parser) {
+
+    const symbol = this.labelExp?.symbol
+    if (symbol) {
+      symbol.isData = true
+    }
+
     while (true) {
       let token: Token | undefined
 
@@ -667,6 +857,11 @@ export class StorageStatement extends Statement {
 
   parse(parser: Parser) {
   
+    const symbol = this.labelExp?.symbol
+    if (symbol) {
+      symbol.isData = true
+    }
+
     let token: Token | undefined
 
     token = parser.mustGetNextToken("expecting storage size expression")
@@ -729,6 +924,12 @@ export class HexStatement extends Statement {
   private dataBytes: number[] = []
 
   parse(parser: Parser) {
+
+    const symbol = this.labelExp?.symbol
+    if (symbol) {
+      symbol.isData = true
+    }
+
     while (true) {
       let token = parser.addNextToken()
       if (!token) {
@@ -826,7 +1027,7 @@ export class VarStatement extends Statement {
 
   parse(parser: Parser) {
 
-    if (this.opToken?.getString() != "=") {
+    if (this.opNameLC != "=") {
       this.opToken?.setError("Expecting '='")
       return
     }
@@ -842,7 +1043,7 @@ export class OrgStatement extends Statement {
   private value?: exp.Expression
 
   parse(parser: Parser) {
-    if (this.opToken?.getString() == "*") {
+    if (this.opNameLC == "*") {
       const res = parser.mustAddToken("=")
       if (res.index < 0) {
         return
@@ -857,7 +1058,9 @@ export class OrgStatement extends Statement {
 export class EntryStatement extends Statement {
   parse(parser: Parser) {
     if (this.labelExp) {
-      this.labelExp.isEntryPoint = true
+      if (this.labelExp.symbol) {
+        this.labelExp.symbol.isEntryPoint = true
+      }
     } else {
       this.opToken?.setError("Label is required")
     }
@@ -930,6 +1133,16 @@ export class UsrStatement extends Statement {
 //  SBASM:  <name> .MA <params-list>
 
 export class MacroDefStatement extends Statement {
+  // *** mark macro label as macro type (MERLIN, ACME, SBASM) ***
+
+  parse(parser: Parser) {
+    const symbol = this.labelExp?.symbol
+    if (symbol) {
+      symbol.isMacro = true
+    }
+
+    // TODO: more here
+  }
 }
 
 

@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import { Parser } from "./parser"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
-import { Statement, Conditional, ConditionalStatement } from "./statements"
+import { Statement, Conditional, ConditionalStatement, OpStatement } from "./statements"
 import { Syntax, SyntaxMap } from "./syntax"
 
 export type RpwModule = {
@@ -204,32 +204,6 @@ export class Module {
       }
     }
   }
-
-  // addSymbol(symbol: Symbol): boolean {
-
-  //   if (!this.symbols.add(symbol)) {
-  //     if (!symbol.sourceFile.isShared) {
-  //   //   token.setError("Duplicate symbol")
-  //       return false
-  //     }
-  //     // *** shared symbol -- should use existing symbol? ***
-  //     return true
-  //   }
-
-  //   // if (!this.symbols.add(symbol)) {
-  //   //   token.setError("Duplicate symbol")
-  //   //   *** remove symbol from token? ***
-  //   //   // *** somehow link this symbol to the previous definition?
-  //   // } else {
-
-  //   // ***
-  //   return true
-  // }
-
-  // findSymbol(name: string, scope: string): Symbol | undefined {
-  //   // ***
-  //   return
-  // }
 }
 
 export class SourceFile {
@@ -339,12 +313,6 @@ export class Assembler {
           // must advance before parsing that may include a different file
           this.fileReader.state.curLineIndex += 1
 
-          // if (!this.conditional.isEnabled()) {
-          //   *** conditional checks
-          // }
-
-          // *** different parse behavior if handling macros or loops ***
-
           lineRecord.statement = parser.parseStatement(
             lineRecord.sourceFile,
             lineRecord.lineNumber,
@@ -378,22 +346,43 @@ export class Assembler {
       this.fileReader.pop()
     }
 
-    // *** parser and fileReader no longer needed ***
-
     // process all remaining symbols
     for (let i = 0; i < this.module.lineRecords.length; i += 1) {
       const statement = this.module.lineRecords[i].statement
       if (statement) {
         this.processSymbols(statement, false)
+
+        if (statement instanceof OpStatement) {
+          statement.postSymbols()
+        }
       }
     }
+
+    // *** problems here -- unused ZPAGE turned into constants
+    // For all symbols that aren't already marked ZPAGE,
+    //  mark any whose resolvable value fits in a byte as a constant
+    //
+    // TODO: only do this when a project is present
+    // for (const symbol of this.module.symbolMap.values()) {
+    //   if (!symbol.isZPage) {
+    //     const valueExp = symbol.getValue()
+    //     if (valueExp) {
+    //       const value = valueExp.resolve()
+    //       if (value != undefined) {
+    //         if (value >= -127 && value <= 255) {
+    //           symbol.isConstant = true
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
   }
 
   // *** put in module instead? ***
   // *** later, when scanning disabled lines, still process references ***
   private processSymbols(statement: Statement, firstPass: boolean) {
     // *** maybe just stop on error while walking instead of walking twice
-    if (!statement.hasError()) {
+    if (!statement.hasAnyError()) {
       statement.forEachExpression((expression) => {
         if (expression instanceof SymbolExpression) {
           const symExp = expression
@@ -436,12 +425,9 @@ export class Assembler {
     }
   }
 
-  // *** should file reader be part of parser instead? ***
-
   includeFile(fileName: string): boolean {
     const sourceFile = this.module.openSourceFile(fileName)
     if (!sourceFile) {
-      // *** error handling ***
       return false
     }
     this.fileReader.push(sourceFile)

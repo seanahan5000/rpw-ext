@@ -60,7 +60,7 @@
 //  ^#,<#,>#                               LISA
 //  +macro                           ACME
 
-import { Assembler, LineRecord, SourceFile } from "./assembler"
+import { Assembler, SourceFile } from "./assembler"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
 import { Syntax, SyntaxMap, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
@@ -308,12 +308,6 @@ export class Parser extends Tokenizer {
       if (!symValue) {
         statement.labelExp?.symbol?.setValue(new exp.PcExpression(), SymbolFrom.Statement)
       }
-
-      // *** if OpStatement
-        // *** walk all symbol expressions
-          // *** if immediate, mark low values as constant
-            // *** exclude low/high byte expressions
-          // if (ZP),Y mark as zpage -- only simple expressions or number constants
     }
 
     return statement
@@ -460,7 +454,7 @@ export class Parser extends Tokenizer {
             }
             // *** maybe macro invocation in first column? ***
             // *** must be whitespace/eol afterwards to be label?
-            token.type = TokenType.LocalLabelPrefix
+            token.type = TokenType.Label
             return this.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
           }
         }
@@ -596,7 +590,7 @@ export class Parser extends Tokenizer {
 
   parseLocal(token: Token, symbolType: SymbolType, isDefinition: boolean): exp.Expression {
     this.startExpression(token)
-    token.type = TokenType.LocalLabelPrefix
+    token.type = TokenType.Label
 
     let nextToken = this.addVeryNextToken()
     if (nextToken) {
@@ -605,7 +599,7 @@ export class Parser extends Tokenizer {
           nextToken.type != TokenType.DecNumber) {
         nextToken.setError("Invalid label name")
       } else {
-        nextToken.type = TokenType.LocalLabel
+        nextToken.type = TokenType.Label
       }
     } else {
       nextToken = this.addMissingToken("Missing local name")
@@ -621,7 +615,7 @@ export class Parser extends Tokenizer {
 
   parseLisaLocal(token: Token, isDefinition: boolean): exp.Expression {
     this.startExpression(token)
-    token.type = TokenType.LocalLabelPrefix
+    token.type = TokenType.Label
 
     let nextToken = this.addVeryNextToken()
     if (nextToken) {
@@ -629,7 +623,7 @@ export class Parser extends Tokenizer {
         if (nextToken.getString().length != 1) {
           nextToken.setError("Only single digit allowed")
         } else {
-          nextToken.type = TokenType.LocalLabel
+          nextToken.type = TokenType.Label
         }
       } else {
         nextToken.setError("Must be single decimal digit")

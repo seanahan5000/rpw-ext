@@ -191,9 +191,9 @@ class MerlinSyntax extends SyntaxDef {
       [ "dsk",    {}],
 
       // macros
-      [ "mac",    {}],
-      [ "eom",    {}],
-      [ "<<<",    {}],
+      [ "mac",    { create: () => { return new stm.MacroDefStatement() }}],
+      [ "eom",    { create: () => { return new stm.EndMacroDefStatement() }}],
+      [ "<<<",    { create: () => { return new stm.EndMacroDefStatement() }}],
 
       [ "dum",    {}],
       [ "dummy",  {}],
@@ -275,9 +275,9 @@ class DasmSyntax extends SyntaxDef {
       [ "include",    { create: () => { return new stm.IncludeStatement() }}],
 
       // macros
-      [ "mac",        {}],
-      [ "macro",      {}],
-      [ "endm",       {}],
+      [ "mac",        { create: () => { return new stm.MacroDefStatement() }}],
+      [ "macro",      { create: () => { return new stm.MacroDefStatement() }}],
+      [ "endm",       { create: () => { return new stm.EndMacroDefStatement() }}],
 
       [ "seg",        {}],
       [ "repeat",     {}],

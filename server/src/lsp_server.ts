@@ -8,7 +8,7 @@ import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import * as asm from "./asm/assembler"
 import * as exp from "./asm/expressions"
 import { Statement } from "./asm/statements"
-import { SymbolType, SymbolIs } from "./asm/symbols"
+import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 
 //------------------------------------------------------------------------------
@@ -27,10 +27,13 @@ export enum SemanticToken {
   label     = 6,
   macro     = 7,
 
-  opcode    = 8,
-  constant  = 9,
-  zpage     = 10,
-  var       = 11
+  function  = 8,
+  buffer    = 9,
+  opcode    = 10,
+  constant  = 11,
+  zpage     = 12,
+  var       = 13,
+  escape    = 14,
 }
 
 export enum SemanticModifier {
@@ -484,13 +487,13 @@ export class LspServer {
             // TODO: more here
 
             let item: lsp.CompletionItem
-            if (symbol.is == SymbolIs.Constant) {
+            if (symbol.isConstant) {
               if (!(includedTypes & 1)) {
                 return
               }
               item = lsp.CompletionItem.create(key)
               item.kind = lsp.CompletionItemKind.Constant
-            } else if (symbol.is == SymbolIs.ZPage) {
+            } else if (symbol.isZPage) {
               if (!(includedTypes & 2)) {
                 return
               }
@@ -840,113 +843,112 @@ export class LspServer {
     const state: SemanticState = { prevLine: 0, prevStart: 0, data: data }
     for (let i = startLine; i < endLine; i += 1) {
       state.prevStart = 0
+      // *** mark unused lines (inside disabled conditional) so they're dimmed ***
       this.semanticExpression(state, i, sourceFile.statements[i])
     }
     return { data }
   }
 
   private semanticExpression(state: SemanticState, lineNumber: number, expression: exp.Expression) {
-
     if (expression instanceof exp.SymbolExpression) {
       const symExp = expression
-      // let bits = 0
-      if (symExp.isDefinition) {
-        // *** check for unreferenced
-      }
-      // *** apply symbol modifier info to tokens ***
       for (let i = 0; i < symExp.children.length; i += 1) {
-        const child = symExp.children[i]
-        if (child instanceof Token) {
-          // ***
+        const token = symExp.children[i]
+        if (token instanceof Token) {
+          // *** get rid of Symbol check? ***
+          if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
+            let index = SemanticToken.invalid
+            let bits = 0
+            if (symExp.isLocalType()) {
+              index = SemanticToken.label
+              bits |= (1 << SemanticModifier.local)
+              if (symExp.symbol?.references.length == 0) {
+                bits |= (1 << SemanticModifier.unused)
+              }
+            } else if (symExp.symbol) {
+              if (symExp.symbol.isZPage) {
+                index = SemanticToken.zpage
+              } else if (symExp.symbol.isConstant) {
+                index = SemanticToken.constant
+              } else if (symExp.symbol.isMacro) {
+                index = SemanticToken.macro
+              } else if (symExp.symbol.isSubroutine) {
+                // *** maybe skip for locals? ***
+                index = SemanticToken.function
+              } else if (symExp.symbol.isData) {
+                index = SemanticToken.buffer
+              } else if (symExp.symbol.isCode) {
+                index = SemanticToken.label
+              }
+              if (symExp.symbol.isEntryPoint) {
+                index = SemanticToken.function    //*** only if still symbol?
+                bits |= (1 << SemanticModifier.external)
+              }
+              if (symExp.isDefinition) {
+                if (symExp.symbol.isEntryPoint) {
+                  // NOTE: for now, don't ever mark entry points as unused
+                  // TODO: revisit once entry points are linked project-wide
+                } else if (symExp.symbol.references.length == 0) {
+                  // *** only apply if within full project ???
+                  bits |= (1 << SemanticModifier.unused)
+                }
+              }
+            } else {
+              // TODO: what if label doesn't have symbol?
+              //  (assume it's already been marked with an error?)
+              continue
+            }
+            if (index == SemanticToken.invalid) {   // ***
+              continue
+            }
+            state.data.push(lineNumber - state.prevLine, token.start - state.prevStart, token.length, index, bits)
+            state.prevStart = token.start
+            state.prevLine = lineNumber
+          } else {
+            this.semanticToken(state, lineNumber, token)
+          }
         }
       }
-      // return
-    }
-
-    for (let i = 0; i < expression.children.length; i += 1) {
-      const child = expression.children[i]
-      if (child instanceof Token) {
-        this.semanticToken(state, lineNumber, child)
-      } else if (child instanceof exp.Expression) {
-        this.semanticExpression(state, lineNumber, child)
+    } else {
+      for (let i = 0; i < expression.children.length; i += 1) {
+        const child = expression.children[i]
+        if (child instanceof Token) {
+          this.semanticToken(state, lineNumber, child)
+        } else if (child instanceof exp.Expression) {
+          this.semanticExpression(state, lineNumber, child)
+        }
       }
     }
   }
 
-  // export enum SemanticToken {
-  //   invalid   = 0,
-  //   comment   = 1,
-  //   string    = 2,
-  //   number    = 3,
-  //   operator  = 4,
-  //   keyword   = 5,
-  //   label     = 6,
-  //   macro     = 7,
-
-  //   opcode    = 8,
-  //   constant  = 9,
-  //   zpage     = 10,
-  //   var       = 11
-  // }
-
-  // export enum SemanticModifier {
-  //   local     = 0,
-  //   global    = 1,
-  //   external  = 2,
-  //   unused    = 3
-  // }
-
   private semanticToken(state: SemanticState, lineNumber: number, token: Token) {
     let index = -1
     let bits = 0
-
     if (token.type == TokenType.Comment) {
       index = SemanticToken.comment
     } else if (token.type == TokenType.Keyword) {
       index = SemanticToken.keyword
     } else if (token.type == TokenType.Opcode) {
       index = SemanticToken.opcode
-    } else if (token.type == TokenType.Label
-        || token.type == TokenType.Symbol) {    // *** symbol should have been forced to Label already? ***
-      // if (token.symbol !== undefined) {
-      //   if (token.symbol.type === undefined) {
-          index = SemanticToken.label
-      //   } else if (token.symbol.type == SymbolType.Constant) {
-      //     index = SemanticToken.constant
-      //   } else if (token.symbol.type == SymbolType.ZPage) {
-      //     index = SemanticToken.zpage
-      //   }
-      //   // *** apply unused ***
-      //   // *** apply global and/or external ***
-      // }
-    } else if (token.type == TokenType.LocalLabel
-        || token.type == TokenType.LocalLabelPrefix) {
-      index = SemanticToken.label
-      bits |= (1 << SemanticModifier.local)
-      // *** apply unused ***
     } else if (token.type == TokenType.Operator) {
       index = SemanticToken.operator
     } else if (token.type == TokenType.Macro) {
       index = SemanticToken.macro
     } else if (token.type == TokenType.DecNumber
         || token.type == TokenType.HexNumber) {
-      // if ((statement instanceof xxx.OpStatement) && statement.type == "HEX") {
-      //   // TODO: maybe a different color for long HEX AAAAAAAA statements?
-      // } else {
-        index = SemanticToken.number
-      // }
-    } else if (token.type == TokenType.Variable
-      || token.type == TokenType.VariablePrefix) {
+      index = SemanticToken.number
+    } else if (token.type == TokenType.Variable) {
       index = SemanticToken.var
     } else if (token.type == TokenType.FileName) {
-      index = SemanticToken.string                  // TODO: something else
+      index = SemanticToken.string                  // TODO: something else?
     } else if (token.type == TokenType.String
-      || token.type == TokenType.Quote) {
+        || token.type == TokenType.Quote) {
       index = SemanticToken.string
+    } else if (token.type == TokenType.Escape) {
+      index = SemanticToken.escape
     } else {
       index = SemanticToken.invalid
     }
-
     if (index >= 0) {
       state.data.push(lineNumber - state.prevLine, token.start - state.prevStart, token.length, index, bits)
       state.prevStart = token.start

@@ -53,27 +53,21 @@ export enum TokenType {
   Null,         // *** necessary?
 
   Operator,
+  Symbol,
+  HexNumber,
+  DecNumber,
 
   String,
   Escape,
   Quote,
 
+  Opcode,
+  Keyword,
   Comment,
-  Symbol,
-  HexNumber,
-  DecNumber,
 
-  Opcode,   // *** implement
-  Keyword,  // *** implement
-  Macro,    // *** implement
-
+  Label,      // *** only used with locals?
+  Macro,      // *** phase this out
   Variable,
-  VariablePrefix,
-
-  Label,      // *** implement
-  LocalLabel, // *** implement
-  LocalLabelPrefix,
-
   FileName,   // *** TODO: or just use quoted string?
 
   Missing

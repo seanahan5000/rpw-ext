@@ -30,21 +30,27 @@ export enum SymbolFrom {
   // Macro
 }
 
-export enum SymbolIs {
-  Unknown   = 0,
-  Constant  = 1,    // 8-bit only? automatic in DUMMY 0?
-  ZPage     = 2,
-  // Address   = 3,
-  // External  = 4,
-  // Entry     = 5,
-}
-
 //------------------------------------------------------------------------------
 
 export class Symbol {
   public type: SymbolType
   public from = SymbolFrom.Unknown
-  public is = SymbolIs.Unknown
+
+  // NOTE: could pack these into bits
+  public isZPage = false
+  public isConstant = false     // 8-bit only? automatic in DUMMY 0?
+  public isSubroutine = false
+  public isData = false
+  public isCode = false
+
+  // set by ENT command
+  public isEntryPoint = false
+
+  // set by SUBROUTINE and .zone commands
+  public isZoneStart = false
+
+  // set by macro definition commands
+  public isMacro = false
 
   public definition: SymbolExpression
   public references: SymbolExpression[] = []
@@ -80,7 +86,7 @@ export class Symbol {
     return this.value?.getSize()
   }
 
-  // get symbol name with no scope, local prefix, or trailing ":"
+  // get symbol name without scope, local prefix, or trailing ":"
   //  (mainly used to rename symbols)
   getSimpleNameToken(): Token {
     let index = this.definition.children.length - 1
@@ -116,7 +122,7 @@ export class ScopeState {
         if (nameToken && !(nameToken instanceof Token)) {
           break
         }
-        if (!nameToken && !symExp.isZoneStart) {
+        if (!nameToken && !symExp.symbol?.isZoneStart) {
           break
         }
 
@@ -131,9 +137,9 @@ export class ScopeState {
         if (this.scopePath) {
           nameStr = this.scopePath + ":" + nameStr
         }
-        if (symExp.isDefinition) {
+        if (symExp.isDefinition && symExp.symbol) {
           this.cheapScope = nameStr
-          if (symExp.isZoneStart) {
+          if (symExp.symbol.isZoneStart) {
             this.zoneName = nameStr
           }
         }

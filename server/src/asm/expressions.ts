@@ -209,10 +209,6 @@ export class SymbolExpression extends Expression {
   public fullName?: string
   public symbol?: Symbol
 
-  // only apply when isDefinition is true
-  public isZoneStart = false
-  public isEntryPoint = false
-
   constructor(
       children: Node[],
       symbolType: SymbolType,
@@ -245,7 +241,7 @@ export class SymbolExpression extends Expression {
 //------------------------------------------------------------------------------
 
 export class UnaryExpression extends Expression {
-  private opType: Op
+  public opType: Op
   private arg: Expression
 
   constructor(opToken: Token, opType: Op, arg: Expression) {
@@ -395,7 +391,8 @@ export class BinaryExpression extends Expression {
   }
 
   getSize(): number | undefined {
-    // TODO: use resolved value to determine size? (value * value, for example)
+    // TODO: use resolved value to determine size? (value1 * value2, for example)
+    // *** comparisons and logical ops always drop to 1 byte ***
     let size: number | undefined
     let size1 = this.arg1.getSize()
     if (size1 !== undefined) {
