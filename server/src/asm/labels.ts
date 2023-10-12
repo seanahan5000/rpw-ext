@@ -1,5 +1,5 @@
 
-import { SourceFile } from "./assembler"
+import { SourceFile } from "./project"
 import { Symbol, SymbolType } from "./symbols"
 import { SymbolExpression } from "./expressions"
 import { Statement } from "./statements"

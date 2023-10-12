@@ -3,12 +3,12 @@ import * as lsp from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 import * as fs from 'fs';
 
-import { TextDocument } from 'vscode-languageserver-textdocument';
+import { TextDocument } from 'vscode-languageserver-textdocument'
+import { RpwProject, RpwModule, Project, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
-import * as asm from "./asm/assembler"
 import * as exp from "./asm/expressions"
 import { Statement } from "./asm/statements"
-import { SymbolType } from "./asm/symbols"
+import { SymbolType, Symbol } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 
 //------------------------------------------------------------------------------
@@ -174,7 +174,7 @@ export class LspDocuments {
 
 // *** fold some of this into asm.Project ***
 
-class LspProject extends asm.Project {
+class LspProject extends Project {
 
   private server: LspServer
   public temporary: boolean
@@ -249,7 +249,7 @@ export class LspServer {
     connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
   }
 
-  private getSourceFile(uri: string): asm.SourceFile | undefined {
+  private getSourceFile(uri: string): SourceFile | undefined {
     const filePath = pathFromUriString(uri)
     if (filePath) {
       return this.findSourceFile(filePath)
@@ -264,7 +264,7 @@ export class LspServer {
   }
 
   // *** just use a map lookup directly? ***
-  private findSourceFile(filePath: string): asm.SourceFile | undefined {
+  private findSourceFile(filePath: string): SourceFile | undefined {
     for (let i = 0; i < this.projects.length; i += 1) {
       const sourceFile = this.projects[i].findSourceFile(filePath)
       if (sourceFile) {
@@ -295,7 +295,7 @@ export class LspServer {
             continue;
           }
           const jsonData = fs.readFileSync(files[i], 'utf8');
-          const rpwProject = <asm.RpwProject>JSON.parse(jsonData)
+          const rpwProject = <RpwProject>JSON.parse(jsonData)
           // *** error handling ***
           const project = new LspProject(this, this.workspaceFolderPath)
           if (!project.loadProject(rpwProject)) {
@@ -355,7 +355,8 @@ export class LspServer {
         project = new LspProject(this, path.substring(0, index), temporary)
       }
     }
-    const rpwModule: asm.RpwModule = {
+    // *** redo this ***
+    const rpwModule: RpwModule = {
       start: fileName,
       srcbase: ""
     }
@@ -476,7 +477,7 @@ export class LspServer {
         if (includedTypes) {
           // *** exclude constants if in non-immediate opcode
           // *** watch out for errors and warnings?
-          sourceFile.module.symbolMap.forEach((symbol, key: string) => {
+          sourceFile.module.symbolMap.forEach((symbol: Symbol, key: string) => {
 
             if (symbol.type != SymbolType.Simple) {
               return
@@ -755,7 +756,7 @@ export class LspServer {
   }
 
   // TODO: consider a range of lines?
-  public updateDiagnostics(sourceFile: asm.SourceFile) {
+  public updateDiagnostics(sourceFile: SourceFile) {
 
     const diagnostics: lsp.Diagnostic[] = []
     const state: DiagnosticState = { lineNumber: 0, diagnostics }
@@ -838,7 +839,7 @@ export class LspServer {
     }
   }
 
-  private getSemanticTokens(sourceFile: asm.SourceFile, startLine: number, endLine: number): lsp.SemanticTokens {
+  private getSemanticTokens(sourceFile: SourceFile, startLine: number, endLine: number): lsp.SemanticTokens {
     const data: number[] = []
     const state: SemanticState = { prevLine: 0, prevStart: 0, data: data }
     for (let i = startLine; i < endLine; i += 1) {
@@ -958,7 +959,7 @@ export class LspServer {
 
 
   // TODO: move some of this into sourceFile?
-  private getCommentHeader(atFile: asm.SourceFile, atLine: number): string | undefined {
+  private getCommentHeader(atFile: SourceFile, atLine: number): string | undefined {
 
     // scan up from hover line looking for comment blocks
     let startLine = atLine

@@ -60,7 +60,8 @@
 //  ^#,<#,>#                               LISA
 //  +macro                           ACME
 
-import { Assembler, SourceFile } from "./assembler"
+import { SourceFile } from "./project"
+import { Assembler } from "./assembler"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
 import { Syntax, SyntaxMap, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"

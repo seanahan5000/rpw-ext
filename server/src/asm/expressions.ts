@@ -1,5 +1,5 @@
 
-import { SourceFile } from "./assembler"
+import { SourceFile } from "./project"
 import { Node, NodeRange, Token } from "./tokenizer"
 import { Op } from "./syntax"
 import { Symbol, SymbolType, isLocalType } from "./symbols"
