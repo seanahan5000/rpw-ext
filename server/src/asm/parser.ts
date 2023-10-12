@@ -61,7 +61,6 @@
 //  +macro                           ACME
 
 import { SourceFile } from "./project"
-import { Assembler } from "./assembler"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
 import { Opcodes6502 } from "./opcodes"
 import { Syntax, SyntaxMap, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
@@ -73,18 +72,13 @@ import * as stm from "./statements"
 
 export class Parser extends Tokenizer {
 
-  public assembler: Assembler
-
+  // valid for entire parseLines call
   public sourceFile: SourceFile | undefined
   public lineNumber: number = -1
 
+  // valid during a single parseStatement call
   public tokenExpSet: Node[] = []
   public tokenExpStack: Node[][] = []
-
-  constructor(assembler: Assembler) {
-    super()
-    this.assembler = assembler
-  }
 
   // push/pop the current expression to/from the expressionStack
   // *** move these ***
@@ -203,12 +197,20 @@ export class Parser extends Tokenizer {
     return expression
   }
 
-  parseStatement(sourceFile: SourceFile, lineNumber: number, sourceLine: string): stm.Statement {
-
-    // initialze for this statement parsing
-    this.setSourceLine(sourceLine)
+  public parseStatements(sourceFile: SourceFile, lines: string[]) {
+    const statements = []
     this.sourceFile = sourceFile
-    this.lineNumber = lineNumber
+    this.lineNumber = 0
+    while (this.lineNumber < lines.length) {
+      this.setSourceLine(lines[this.lineNumber])
+      statements.push(this.parseStatement())
+      this.lineNumber += 1
+    }
+    return statements
+  }
+
+  private parseStatement(): stm.Statement {
+
     this.tokenExpSet = []
     this.tokenExpStack = []
 
@@ -221,11 +223,13 @@ export class Parser extends Tokenizer {
 
     let labelExp = this.parseSymbol(true)
     let opToken: Token | undefined
+    let opNameLC = ""
 
     if (labelExp) {
       this.addExpression(labelExp)
       if (labelExp instanceof exp.VarExpression) {
         opToken = this.addNextToken()
+        opNameLC = opToken?.getString().toLowerCase() ?? ""
         statement = new stm.VarStatement()
       }
     }
@@ -233,7 +237,7 @@ export class Parser extends Tokenizer {
     if (!statement) {
       opToken = this.addNextToken()
       if (opToken) {
-        let opNameLC = opToken.getString().toLowerCase()
+        opNameLC = opToken.getString().toLowerCase()
 
         // ACME syntax uses '!' prefix for keywords and '+' for macro invocations
         if (opNameLC == "!" || opNameLC == "+") {
@@ -278,7 +282,7 @@ export class Parser extends Tokenizer {
       label = labelExp
     }
 
-    statement.init(sourceLine, opToken, this.endExpression(), label)
+    statement.init(this.sourceLine, opToken, opNameLC, this.endExpression(), label)
     statement.parse(this)
 
     // handle extra tokens
@@ -314,18 +318,18 @@ export class Parser extends Tokenizer {
     return statement
   }
 
-  private parseOpcode(token: Token, statementTypeLC: string): stm.Statement | undefined {
+  private parseOpcode(opToken: Token, opNameLC: string): stm.Statement | undefined {
 
-    let opcode = (Opcodes6502 as {[key: string]: any})[statementTypeLC]
+    let opcode = (Opcodes6502 as {[key: string]: any})[opNameLC]
     if (opcode !== undefined) {
-      token.type = TokenType.Opcode
+      opToken.type = TokenType.Opcode
       return new stm.OpStatement(opcode)
     }
 
     let keyword: any
     for (let i = 1; i < SyntaxDefs.length; i += 1) {
       if (!this.syntax || i == this.syntax) {
-        const k = SyntaxDefs[i].keywordMap.get(statementTypeLC)
+        const k = SyntaxDefs[i].keywordMap.get(opNameLC)
         if (k !== undefined) {
           keyword = k
           // *** count match ***
@@ -339,7 +343,7 @@ export class Parser extends Tokenizer {
       }
     }
     if (keyword) {
-      token.type = TokenType.Keyword
+      opToken.type = TokenType.Keyword
       if (keyword.create) {
         return keyword.create()
       }
@@ -347,15 +351,15 @@ export class Parser extends Tokenizer {
       return
     }
 
-    if (token.type == TokenType.Operator) {
-      token.setError("Unexpected token")
+    if (opToken.type == TokenType.Operator) {
+      opToken.setError("Unexpected token")
       return
     }
 
-    const firstChar = statementTypeLC[0]
+    const firstChar = opNameLC[0]
 
     if (firstChar == "!" || firstChar == ".") {
-      token.setError("Unknown keyword")
+      opToken.setError("Unknown keyword")
       return
     }
 
@@ -365,7 +369,7 @@ export class Parser extends Tokenizer {
       // TODO: look through known macros first
     }
 
-    token.type = TokenType.Macro
+    opToken.type = TokenType.Macro
     return new stm.MacroStatement()
   }
 

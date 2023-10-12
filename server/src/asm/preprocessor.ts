@@ -1,19 +1,74 @@
 
 import { SourceFile, Module, LineRecord } from "./project"
-import { Parser } from "./parser"
-import { ScopeState } from "./symbols"
+import { Statement, ConditionalStatement, OpStatement, IncludeStatement } from "./statements"
+import { ScopeState, SymbolFrom } from "./symbols"
 import { SymbolExpression } from "./expressions"
-import { Statement, Conditional, ConditionalStatement, OpStatement } from "./statements"
 
+//------------------------------------------------------------------------------
 
-// *** where are vscode column markers? ***
-// *** check my keyboard shortcuts ***
+type ConditionalState = {
+  enableCount: number,
+  satisfied: boolean,
+  statement?: ConditionalStatement
+}
 
+export class Conditional {
+  private enableCount = 1
+  private satisfied = true
+  public statement?: ConditionalStatement
+  private stack: ConditionalState[] = []
 
-// *** Project class should hold all Modules for entire project, in build order
-  // also tracks ENT linkage between them
+  public push(): boolean {
+    // set an arbitrary limit on stack size to catch infinite recursion
+    if (this.stack.length > 255) {
+      return false
+    }
+    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied, statement: this.statement})
+    this.enableCount -= 1
+    this.satisfied = false
+    this.statement = undefined
+    return true
+  }
 
-// *** Module class should hold all files and symbols for one ASM.* module
+  public pull(): boolean {
+    if (this.stack.length == 0) {
+      return false
+    }
+    const state = this.stack.pop()
+    if (state) {
+      this.enableCount = state.enableCount
+      this.satisfied = state.satisfied
+      this.statement = state.statement
+    }
+    return true
+  }
+
+  public setSatisfied(satisfied: boolean) {
+    this.satisfied = satisfied
+  }
+
+  public isSatisfied(): boolean {
+    return this.satisfied
+  }
+
+  public enable() {
+    this.enableCount += 1
+  }
+
+  public disable() {
+    this.enableCount -= 1
+  }
+
+  public isEnabled(): boolean {
+    return this.enableCount > 0
+  }
+
+  public isComplete(): boolean {
+    return this.stack.length == 0
+  }
+}
+
+//------------------------------------------------------------------------------
 
 type FileStateEntry = {
   file: SourceFile | undefined
@@ -61,36 +116,25 @@ class FileReader {
 
 //------------------------------------------------------------------------------
 
-// *** guess syntax by watching keywords? ***
-// *** include file step should move outside of parsing pass
-  // *** needs to be affected by conditionals ***
-// *** if statement parsing fails with general syntax, try again using likelySyntax
-
-export class Assembler {
+export class Preprocessor {
 
   public module: Module
-  private scopeState: ScopeState
-
-  //*** more default file handling behavior ***
-  private fileReader: FileReader = new FileReader()
+  private fileReader = new FileReader()
+  private conditional = new Conditional()
+  private scopeState = new ScopeState()
 
   constructor(module: Module) {
     this.module = module
-    this.scopeState = new ScopeState()
   }
 
-  // pass 0: parse all source files
-
-  parse(fileName: string) {
+  preprocess(fileName: string): LineRecord[] | undefined {
+    const lineRecords: LineRecord[] = []
 
     if (!this.includeFile(fileName)) {
-      // *** handle error ***
+      // *** error messaging?
+      return
     }
 
-    const conditional = new Conditional()
-
-    // *** this is ugly ***
-    const parser = new Parser(this)
     while (this.fileReader.state.file) {
       do {
         while (this.fileReader.state.curLineIndex < this.fileReader.state.endLineIndex) {
@@ -101,36 +145,35 @@ export class Assembler {
             statement: undefined
           }
 
+          lineRecord.statement = this.fileReader.state.file.statements[lineRecord.lineNumber]
+          // *** mark statement as used to detect multiple references? ***
+
           // must advance before parsing that may include a different file
           this.fileReader.state.curLineIndex += 1
-
-          lineRecord.statement = parser.parseStatement(
-            lineRecord.sourceFile,
-            lineRecord.lineNumber,
-            this.fileReader.state.file.lines[lineRecord.lineNumber])
 
           if (lineRecord.statement instanceof ConditionalStatement) {
             // need symbol references hooked up before resolving conditional expression
             this.processSymbols(lineRecord.statement, true)
-            lineRecord.statement.applyConditional(conditional)
+            lineRecord.statement.applyConditional(this.conditional)
           } else {
-            if (!conditional.isEnabled()) {
+            if (!this.conditional.isEnabled()) {
               lineRecord.statement = new Statement()
             } else {
+              if (lineRecord.statement instanceof IncludeStatement) {
+                lineRecord.statement.preprocess(this)
+              }
               this.processSymbols(lineRecord.statement, true)
             }
           }
 
-          // *** error handling ***
+          // don't add new statement if shared file already has one
           if (lineRecord.sourceFile.statements.length == lineRecord.lineNumber) {
             if (lineRecord.statement) {
               lineRecord.sourceFile.statements.push(lineRecord.statement)
-            } else {
-              // *** filler? ***
             }
           }
 
-          lineRecord.sourceFile.module.lineRecords.push(lineRecord)
+          lineRecords.push(lineRecord)
         }
         this.fileReader.state.curLineIndex = this.fileReader.state.startLineIndex;
       } while (--this.fileReader.state.loopCount > 0)
@@ -138,8 +181,8 @@ export class Assembler {
     }
 
     // process all remaining symbols
-    for (let i = 0; i < this.module.lineRecords.length; i += 1) {
-      const statement = this.module.lineRecords[i].statement
+    for (let lineRecord of lineRecords) {
+      const statement = lineRecord.statement
       if (statement) {
         this.processSymbols(statement, false)
 
@@ -149,24 +192,17 @@ export class Assembler {
       }
     }
 
-    // *** problems here -- unused ZPAGE turned into constants
-    // For all symbols that aren't already marked ZPAGE,
-    //  mark any whose resolvable value fits in a byte as a constant
-    //
-    // TODO: only do this when a project is present
-    // for (const symbol of this.module.symbolMap.values()) {
-    //   if (!symbol.isZPage) {
-    //     const valueExp = symbol.getValue()
-    //     if (valueExp) {
-    //       const value = valueExp.resolve()
-    //       if (value != undefined) {
-    //         if (value >= -127 && value <= 255) {
-    //           symbol.isConstant = true
-    //         }
-    //       }
-    //     }
-    //   }
-    // }
+    return lineRecords
+  }
+
+  includeFile(fileName: string): boolean {
+    const sourceFile = this.module.openSourceFile(fileName)
+    if (!sourceFile) {
+      return false
+    }
+    sourceFile.parseStatements()
+    this.fileReader.push(sourceFile)
+    return true
   }
 
   // *** put in module instead? ***
@@ -192,7 +228,31 @@ export class Assembler {
                   return
                 }
                 if (symExp.symbol) {
-                  this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+                  const sharedSym = this.module.project.sharedSymbols.get(symExp.fullName)
+                  if (symExp.symbol.isEntryPoint) {
+                    if (sharedSym) {
+                      symExp.setError("Duplicate entrypoint")
+                      sharedSym.definition.setError("Duplicate entrypoint")
+                      return
+                    }
+                    symExp.symbol.fullName = symExp.fullName
+                    this.module.project.sharedSymbols.set(symExp.fullName, symExp.symbol)
+                    this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+                  } else {
+                    if (sharedSym) {
+                      // this definition matches a shared symbol, so it's probably from an EXT file
+                      if (symExp.symbol.from != SymbolFrom.Equate) {
+                        symExp.setError("Label conflict with entrypoint")
+                        return
+                      }
+                      if (sharedSym.fullName) {
+                        this.module.symbolMap.set(sharedSym.fullName, sharedSym)
+                      }
+                    } else {
+                      symExp.symbol.fullName = symExp.fullName
+                      this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+                    }
+                  }
                 }
               }
             } else if (!symExp.symbol) {
@@ -214,15 +274,6 @@ export class Assembler {
         }
       })
     }
-  }
-
-  includeFile(fileName: string): boolean {
-    const sourceFile = this.module.openSourceFile(fileName)
-    if (!sourceFile) {
-      return false
-    }
-    this.fileReader.push(sourceFile)
-    return true
   }
 }
 

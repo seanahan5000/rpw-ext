@@ -177,22 +177,20 @@ export class LspDocuments {
 class LspProject extends Project {
 
   private server: LspServer
-  public temporary: boolean
 
-  constructor(server: LspServer, rootDir: string, temporary = false) {
-    super(rootDir)
+  constructor(server: LspServer) {
+    super()
     this.server = server
-    this.temporary = temporary
   }
 
-  getFileContents(path: string): string | undefined {
+  getFileContents(fullPath: string): string | undefined {
     // look through open documents first
-    const document = this.server.documents.get(path)
+    const document = this.server.documents.get(fullPath)
     if (document) {
       return document.getText()
     }
     // if no open document, got look in file system
-    return super.getFileContents(path)
+    return super.getFileContents(fullPath)
   }
 
   // updateDiagnostics() {
@@ -275,48 +273,49 @@ export class LspServer {
 
   onInitialize(params: lsp.InitializeParams): void {
 
-    const n = 1;
+    const n = 1
     while (n) {
-      console.log();  // ***
+      console.log()  // ***
     }
 
     if (params.workspaceFolders) {
       // *** walk each folder -- or don't support multiple folders ***
-      const workspaceFolder = params.workspaceFolders[0];
+      const workspaceFolder = params.workspaceFolders[0]
       // move to this.workspaceFolderPath
-      this.workspaceFolderPath = pathFromUriString(workspaceFolder.uri) || "";
+      this.workspaceFolderPath = pathFromUriString(workspaceFolder.uri) || ""
       if (fs.existsSync(this.workspaceFolderPath)) {
 
-        const files = fs.readdirSync(this.workspaceFolderPath);
+        const files = fs.readdirSync(this.workspaceFolderPath)
 
         // first scan for .rpw-project file
-        for (let i = 0; i < files.length; i += 1) {
-          if (files[i].toLowerCase().indexOf(".rpw-project") == -1) {
-            continue;
+        for (let file of files) {
+          if (file.toLowerCase().indexOf(".rpw-project") == -1) {
+            continue
           }
-          const jsonData = fs.readFileSync(files[i], 'utf8');
+          const jsonData = fs.readFileSync(file, 'utf8')
           const rpwProject = <RpwProject>JSON.parse(jsonData)
           // *** error handling ***
-          const project = new LspProject(this, this.workspaceFolderPath)
-          if (!project.loadProject(rpwProject)) {
+
+          const project = new LspProject(this)
+          if (!project.loadProject(this.workspaceFolderPath, rpwProject)) {
             // *** error handling ***
           }
           this.projects.push(project)
-          break;
+          break
         }
 
         // if no project, scan for ASM.* files
-        if (this.projects.length == 0) {
-          for (let i = 0; i < files.length; i += 1) {
-            if (files[i].toUpperCase().indexOf("ASM.") != 0) {
-              continue
-            }
-            if (!this.addFileProject(files[i], false)) {
-              // *** error handling ***
-            }
-            break
-          }
-        }
+        // if (this.projects.length == 0) {
+        //   for (let i = 0; i < files.length; i += 1) {
+        //     if (files[i].toUpperCase().indexOf("ASM.") != 0) {
+        //       continue
+        //     }
+        //     if (!this.addFileProject(files[i], false)) {
+        //       // *** error handling ***
+        //     }
+        //     break
+        //   }
+        // }
       }
     }
 
@@ -339,37 +338,34 @@ export class LspServer {
     // this.connection.sendNotification("workspace/semanticTokens/refresh")
   }
 
+  // build a tempory project given a file path
   private addFileProject(path: string, temporary: boolean): LspProject | undefined {
-    let project: LspProject
     let fileName: string
+    let directory: string
     if (path.indexOf(this.workspaceFolderPath) == 0) {
       fileName = path.substring(this.workspaceFolderPath.length + 1)
-      project = new LspProject(this, this.workspaceFolderPath, temporary)
+      directory = this.workspaceFolderPath
     } else {
       const index = path.lastIndexOf("/")
       if (index == -1) {
         fileName = path
-        project = new LspProject(this, path, temporary)
+        directory = "."
       } else {
         fileName = path.substring(index + 1)
-        project = new LspProject(this, path.substring(0, index), temporary)
+        directory = path.substring(0, index)
       }
     }
-    // *** redo this ***
-    const rpwModule: RpwModule = {
-      start: fileName,
-      srcbase: ""
-    }
-    if (!project.loadModule(rpwModule)) {
-      // *** error handling ***
-      return
-    }
+    let rpwProject: RpwProject = {}
+    rpwProject.modules = []
+    rpwProject.modules.push({src: fileName})
+    const project = new LspProject(this)
+    project.loadProject(directory, rpwProject, true)
     this.projects.push(project)
     return project
   }
 
   onDidOpenTextDocument(params: lsp.DidOpenTextDocumentParams): void {
-    const filePath = pathFromUriString(params.textDocument.uri);
+    const filePath = pathFromUriString(params.textDocument.uri)
     if (filePath) {
       if (this.documents.open(filePath, params.textDocument)) {
         const document = this.documents.get(filePath)
@@ -511,7 +507,7 @@ export class LspServer {
             // *** item.detail = "detail text"
             // *** item.labelDetails = { detail: " label det", description: "label det desc" }
 
-            item.data = { filePath: symbol.definition.sourceFile?.path, line: symbol.definition.lineNumber }
+            item.data = { filePath: symbol.definition.sourceFile?.fullPath, line: symbol.definition.lineNumber }
             completions.push(item)
           })
         }
@@ -649,6 +645,7 @@ export class LspServer {
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro definitions
+      // TODO: support include/PUT files
       if (res && res.expression instanceof exp.SymbolExpression) {
         const symExp = res.expression
         let symbol = symExp.symbol
@@ -661,7 +658,7 @@ export class LspServer {
             }
             // TODO: is there value in using lsp.DefinitionLink instead of just lsp.Definition?
             let targetLink: lsp.DefinitionLink = {
-              targetUri: URI.file(symbol.definition.sourceFile.path).toString(),
+              targetUri: URI.file(symbol.definition.sourceFile.fullPath).toString(),
               targetRange: range,
               targetSelectionRange: range
             }
@@ -684,7 +681,7 @@ export class LspServer {
           const expRange = symExp.getRange()
           if (expRange && symExp.sourceFile) {
             let location: lsp.Location = {
-              uri: URI.file(symExp.sourceFile.path).toString(),
+              uri: URI.file(symExp.sourceFile.fullPath).toString(),
               range: {
                 start: { line: symExp.lineNumber, character: expRange.start },
                 end: { line: symExp.lineNumber, character: expRange.end }
@@ -734,7 +731,7 @@ export class LspServer {
             fileEdits.forEach((value, key) => {
               const sourceFile = key
               const lineEdits = value
-              const uri = uriFromPath(sourceFile.path)
+              const uri = uriFromPath(sourceFile.fullPath)
               const textEdits = changes[uri] || (changes[uri] = [])
               for (let i = 0; i < lineEdits.length; i += 1) {
                 const lineEdit = lineEdits[i]
@@ -768,7 +765,7 @@ export class LspServer {
     }
 
     this.connection.sendDiagnostics({
-      uri: URI.file(sourceFile.path).toString(),
+      uri: URI.file(sourceFile.fullPath).toString(),
       diagnostics: diagnostics })
   }
 

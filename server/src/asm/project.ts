@@ -2,22 +2,33 @@
 import * as fs from 'fs'
 import { Syntax, SyntaxMap } from "./syntax"
 import { Statement } from "./statements"
-import { Assembler } from "./assembler"
+import { Preprocessor } from "./preprocessor"
+import { Parser } from "./parser"
 import { Symbol } from "./symbols"
+
+function fixBackslashes(inString: string): string {
+  return inString.replace(/\\/g, '/')
+}
 
 //------------------------------------------------------------------------------
 
 export type RpwModule = {
-  // *** fix these ***
-  srcbase: string,
-  start: string
+  src?: string
 }
 
 export type RpwProject = {
-  // *** fix these ***
   syntax?: string,
-  modules: RpwModule[]
+  upperCase?: boolean,
+  tabSize?: number,
+  tabStops?: number[],
+  srcDir?: string,
+  includes?: string[],
+  modules?: RpwModule[]
 }
+
+// *** add fileSuffix? ".S" for merlin, for example ***
+
+//------------------------------------------------------------------------------
 
 export type LineRecord = {
   sourceFile: SourceFile,
@@ -26,23 +37,27 @@ export type LineRecord = {
   // TODO: isVisible?
 }
 
-//------------------------------------------------------------------------------
 
 export class SourceFile {
 
   public module: Module
-  public path: string
+  public fullPath: string     // fully specified path and name
   public lines: string[]
-  public isShared: boolean
-
-  // statements for just this file, one per line
   public statements: Statement[] = []
+  // TODO: displayName for progress/error messages?
 
-  constructor(module: Module, path: string, lines: string[]) {
+  constructor(module: Module, fullPath: string, lines: string[]) {
     this.module = module
-    this.path = path
+    this.fullPath = fullPath
     this.lines = lines
-    this.isShared = false
+  }
+
+  parseStatements(): Statement[] {
+    if (!this.statements.length) {
+      const parser = new Parser()
+      this.statements = parser.parseStatements(this, this.lines)
+    }
+    return this.statements
   }
 }
 
@@ -50,66 +65,195 @@ export class SourceFile {
 
 export class Project {
 
-  public rootDir: string
-  protected syntax = Syntax.UNKNOWN
+  public syntax = Syntax.UNKNOWN
+  public upperCase: boolean = false
+  public tabSize = 4
+  public tabStops = [0, 16, 20, 40]
+  public includes: string[] = []
+
   protected modules: Module[] = []
 
-  constructor(rootDir: string) {
-    this.rootDir = rootDir
-  }
+  public rootDir = "."
+  public srcDir: string = ""
 
-  loadProject(rpwProject: RpwProject): boolean {
-    if (!rpwProject.modules) {
-      return false
+  public temporary = false
+
+  // state that needs to be reset upon update
+  public sharedFiles: SourceFile[] = []
+  public sharedSymbols = new Map<string, Symbol>()
+
+  loadProject(extRootDir: string, rpwProject: RpwProject, temporary = false): boolean {
+
+    this.temporary = temporary
+
+    let rootDir = fixBackslashes(extRootDir)
+    if (rootDir.endsWith("/")) {
+      rootDir = rootDir.substring(0, rootDir.length - 1)
     }
-    for (let i = 0; i < rpwProject.modules.length; i += 1) {
-      if (!this.loadModule(rpwProject.modules[i])) {
-        return false
-      }
+    if (rootDir.length > 0) {
+      this.rootDir = rootDir
     }
 
     if (rpwProject.syntax) {
       this.syntax = SyntaxMap.get(rpwProject.syntax.toUpperCase()) ?? Syntax.UNKNOWN
       // TODO: error if syntax match not found?
     }
-    return true
-  }
 
-  loadModule(rpwModule: RpwModule): boolean {
-    if (!rpwModule.start) {
-      // *** error handling ***
+    this.upperCase = rpwProject.upperCase ?? false
+    this.tabSize = rpwProject.tabSize ?? 4
+
+    // process tabStops
+    if (rpwProject.tabStops && rpwProject.tabStops.length) {
+      const tabStops = [0]
+      let prevStop = 0
+      for (let nextStop of rpwProject.tabStops) {
+        if (nextStop > prevStop) {
+          tabStops.push(nextStop)
+        }
+        prevStop = nextStop
+      }
+      if (tabStops.length >= 4) {
+        this.tabStops = tabStops
+      }
+    }
+
+    // rootDir + / + rpwProject.srcDir
+    this.srcDir = this.buildFullDirName(rpwProject.srcDir)
+
+    if (rpwProject.includes) {
+      for (let include of rpwProject.includes) {
+        let incName = fixBackslashes(include)
+        if (incName[0] == "/") {
+          incName = incName.substring(1)
+        }
+        let fullIncName = this.srcDir + "/" + incName
+        // TODO: generalize for all platforms (this is merlin-only)
+        // TODO: call through an overridable method
+        if (!fs.existsSync(fullIncName)) {
+          fullIncName = fullIncName + ".S"
+          if (!fs.existsSync(fullIncName)) {
+            continue
+          }
+        }
+        this.includes.push(fullIncName)
+      }
+    }
+
+    if (!rpwProject.modules) {
       return false
     }
-    this.modules.push(new Module(this, rpwModule))
+    for (let module of rpwProject.modules) {
+      if (module.src) {
+        let srcPath = ""
+        let srcName = fixBackslashes(module.src)
+        const lastSlash = srcName.lastIndexOf("/")
+        if (lastSlash != -1) {
+          srcPath = srcName.substring(0, lastSlash)
+          srcName = srcName.substring(lastSlash + 1)
+          if (srcPath.indexOf("/") != 0) {
+            srcPath = "/" + srcPath
+          }
+        }
+
+        this.modules.push(new Module(this, srcPath, srcName))
+      }
+    }
+
     return true
   }
 
   update() {
-    for (let i = 0; i < this.modules.length; i += 1) {
-      this.modules[i].update()
+    this.sharedFiles = []
+    this.sharedSymbols = new Map<string, Symbol>()
+    for (let module of this.modules) {
+      module.update()
     }
   }
 
-  // can be overridden to get contents from elsewhere
-  getFileContents(path: string): string | undefined {
-    if (fs.existsSync(path)) {
-      return fs.readFileSync(path, 'utf8')
+  // overridden to get contents from elsewhere
+  getFileContents(fullPath: string): string | undefined {
+    if (fs.existsSync(fullPath)) {
+      return fs.readFileSync(fullPath, 'utf8')
     }
   }
 
-  getFileLines(path: string): string[] | undefined {
-    let text = this.getFileContents(path)
+  // path here is relative to the srcDir
+  getFileLines(fullPath: string): string[] | undefined {
+    let text = this.getFileContents(fullPath)
     if (text) {
       return text.split(/\r?\n/)
     }
   }
 
+  // turn rpwProject.srcDir, for example, into /rootDir/srcDir
+  private buildFullDirName(dirName: string | undefined): string {
+    if (dirName) {
+      dirName = fixBackslashes(dirName)
+      if (dirName.startsWith("./")) {
+        dirName = dirName.substring(2)
+      } else if (dirName.startsWith(".")) {
+        dirName = dirName.substring(1)
+      }
+      if (dirName.endsWith("/")) {
+        dirName = dirName.substring(1, dirName.length)
+      }
+      if (dirName != "") {
+        if (!dirName.startsWith("/")) {
+          dirName = this.rootDir + "/" + dirName
+        }
+        return dirName
+      }
+    }
+    return this.rootDir
+  }
+
+  // Called by module to create/open a shared or unique file.
+  //
+  //  If the same file is opened multiple times without being defined
+  //  as a shared include file, multiple instances of the same file
+  //  contents will be created.
+
+  openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
+    if (!fs.existsSync(fullPath)) {
+      fullPath = fullPath + ".S"
+      if (!fs.existsSync(fullPath)) {
+        return
+      }
+    }
+
+    const isShared = this.includes.indexOf(fullPath) != -1
+    if (isShared) {
+      for (let sourceFile of this.sharedFiles) {
+        if (sourceFile.fullPath == fullPath) {
+          return sourceFile
+        }
+      }
+    }
+
+    let lines = this.getFileLines(fullPath)
+    if (!lines) {
+      return
+    }
+
+    const sourceFile = new SourceFile(module, fullPath, lines)
+    if (isShared) {
+      this.sharedFiles.push(sourceFile)
+    }
+
+    module.sourceFiles.push(sourceFile)
+    // *** should the sourceFile be parsed right away, here? ***
+    return sourceFile
+  }
+
   // NOTE: only returns first match
-  findSourceFile(path: string): SourceFile | undefined {
-    for (let i = 0; i < this.modules.length; i += 1) {
-      const sourceFile = this.modules[i].findSourceFile(path)
-      if (sourceFile) {
-        return sourceFile
+  findSourceFile(fullPath: string): SourceFile | undefined {
+    // NOTE: shared files are included in each module's files,
+    //  so no need to search this.sharedFiles
+    for (let module of this.modules) {
+      for (let sourceFile of module.sourceFiles) {
+        if (sourceFile.fullPath == fullPath) {
+          return sourceFile
+        }
       }
     }
   }
@@ -120,8 +264,8 @@ export class Project {
 export class Module {
 
   public project: Project
-  private sourceDir: string
-  private startFile: string
+  private srcPath: string     // always in the form "/path" or ""
+  private srcName: string     // always just the file name (*** without suffix?)
   public symbolMap = new Map<string, Symbol>
 
   //*** separate list of exported symbols (also in this.symbols)
@@ -131,27 +275,33 @@ export class Module {
 
   // TODO: vars list?
 
-  // list of files used to assemble this module, in include order,
-  //  possibly containing multiple SourceFiles that reference the same text document
-  // *** maintain list of unique files ***
+  // list of files used to assemble this module, in include order
   public sourceFiles: SourceFile[] = []
 
   // list of all statements for the module, in assembly order, including macro expansions
   public lineRecords: LineRecord[] = []
 
-  constructor(project: Project, rpwModule: RpwModule) {
+  constructor(project: Project, srcPath: string, srcName: string) {
     this.project = project
-    // *** sanitize these paths ***
-    this.sourceDir = rpwModule.srcbase
-    this.startFile = rpwModule.start
+    this.srcPath = srcPath
+    this.srcName = srcName
   }
 
   update() {
     this.sourceFiles = []
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
-    let asm = new Assembler(this)
-    asm.parse(this.startFile)
+  
+    // let asm = new Assembler(this)
+    // asm.parse(this.srcName)
+
+    let prep = new Preprocessor(this)
+    const lineRecords = prep.preprocess(this.srcName)
+    if (!lineRecords) {
+      // *** error handling ***
+      return
+    }
+    this.lineRecords = lineRecords
 
     // link up all symbols
     // TODO: move to assembler?
@@ -177,49 +327,14 @@ export class Module {
     // }
   }
 
-  private buildFullSourcePath(fileName: string): string {
-    let fullPath = this.project.rootDir
-    // TODO: bother with both?
-    if (fileName[0] != "\\" && fileName[0] != "/") {
-      if (this.sourceDir != "") {
-        fullPath += "/" + this.sourceDir
-      }
+  // extFileName comes from any PUT/include statement in any source code
+  openSourceFile(extFileName: string): SourceFile | undefined {
+    let fileName = fixBackslashes(extFileName)
+    if (fileName[0] != "/") {
+      fileName = this.srcPath + "/" + fileName
     }
-    if (fileName[0] != "\\" && fileName[0] != "/") {
-      fullPath += "/"
-    }
-
-    fullPath += fileName
-    // TODO: normalize slashes?
-    return fullPath
-  }
-
-  openSourceFile(fileName: string): SourceFile | undefined {
-    let basePath = this.buildFullSourcePath(fileName)
-    let fullPath = basePath + ".S"
-    let lines = this.project.getFileLines(fullPath)
-    if (!lines) {
-      fullPath = basePath
-      lines = this.project.getFileLines(fullPath)
-      if (!lines) {
-        // *** error handling ***
-        return
-      }
-    }
-    const sourceFile = new SourceFile(this, fullPath, lines)
-    // *** skip duplicates? ***
-    this.sourceFiles.push(sourceFile)
-    return sourceFile
-  }
-
-  // NOTE: only returns first match
-  // *** shared? ***
-  findSourceFile(path: string): SourceFile | undefined {
-    for (let i = 0; i < this.sourceFiles.length; i += 1) {
-      if (this.sourceFiles[i].path == path) {
-        return this.sourceFiles[i]
-      }
-    }
+    let fullPath = this.project.srcDir + fileName
+    return this.project.openSourceFile(this, fullPath)
   }
 }
 

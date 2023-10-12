@@ -12,10 +12,6 @@ export enum SymbolType {
   ZoneLocal   = 3,  // scoped to SUBROUTINE or !zone
   AnonLocal   = 4,  // ++ or --
   LisaLocal   = 5,  // ^# def, <# or ># ref
-
-  // Macro          // local inside of macro?
-  // Global
-  // External
 }
 
 export function isLocalType(symbolType: SymbolType): boolean {

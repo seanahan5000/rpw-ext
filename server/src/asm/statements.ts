@@ -1,6 +1,7 @@
 
 import * as exp from "./expressions"
 import { Parser } from "./parser"
+import { Preprocessor, Conditional } from "./preprocessor"
 import { SymbolFrom, SymbolType } from "./symbols"
 import { Syntax, Op } from "./syntax"
 import { Node, Token, TokenType } from "./tokenizer"
@@ -15,13 +16,13 @@ export class Statement extends exp.Expression {
   public opToken?: Token
   public opNameLC = ""
 
-  init(sourceLine: string, opToken: Token | undefined,
+  init(sourceLine: string, opToken: Token | undefined, opNameLC: string,
       children: Node[], labelExp?: exp.SymbolExpression) {
     this.sourceLine = sourceLine
     this.opToken = opToken
     this.children = children
     this.labelExp = labelExp
-    this.opNameLC = opToken?.getString().toLowerCase() ?? ""
+    this.opNameLC = opNameLC
   }
 
   parse(parser: Parser) {
@@ -258,63 +259,62 @@ export class OpStatement extends Statement {
   // called after symbols have been processed
   //  TODO: make this part of assemble phases
   postSymbols() {
-    if (!this.opExpression) {
-      return
-    }
-    switch (this.mode) {
-      case OpMode.NONE:
-      case OpMode.A:
-        // mode already checked
-        break
-      case OpMode.IMM:
-        // mode already checked
-        this.markConstants(this.opExpression)
-        break
-      case OpMode.ZP:
-      case OpMode.ZPX:
-      case OpMode.ZPY:
-        // will never be ZPAGE at this point
-        break
-      case OpMode.ABS:
-        if (this.opcode.BRAN) {
-          this.mode = OpMode.BRANCH
-          this.markCode(this.opExpression)
+    if (this.opExpression) {
+      switch (this.mode) {
+        case OpMode.NONE:
+        case OpMode.A:
+          // mode already checked
           break
-        }
-        if (this.opNameLC == "jmp") {
-          this.markCode(this.opExpression)
+        case OpMode.IMM:
+          // mode already checked
+          this.markConstants(this.opExpression)
           break
-        }
-        if (this.opNameLC == "jsr") {
-          this.markSubroutine(this.opExpression)
+        case OpMode.ZP:
+        case OpMode.ZPX:
+        case OpMode.ZPY:
+          // will never be ZPAGE at this point
           break
-        }
-        // fall through
-      case OpMode.ABSX:
-      case OpMode.ABSY:
-        const size = this.opExpression.getSize() ?? 0
-        if (size == 1) {
-          // TODO: when downgrading, handle case where opcode
-          //  could be ABS but not ZP
-          this.mode = this.mode - OpMode.ABS + OpMode.ZP
+        case OpMode.ABS:
+          if (this.opcode.BRAN) {
+            this.mode = OpMode.BRANCH
+            this.markCode(this.opExpression)
+            break
+          }
+          if (this.opNameLC == "jmp") {
+            this.markCode(this.opExpression)
+            break
+          }
+          if (this.opNameLC == "jsr") {
+            this.markSubroutine(this.opExpression)
+            break
+          }
+          // fall through
+        case OpMode.ABSX:
+        case OpMode.ABSY:
+          const size = this.opExpression.getSize() ?? 0
+          if (size == 1) {
+            // TODO: when downgrading, handle case where opcode
+            //  could be ABS but not ZP
+            this.mode = this.mode - OpMode.ABS + OpMode.ZP
+            this.markZPage(this.opExpression)
+          } else {
+            this.markData(this.opExpression)
+          }
+          // *** check resulting mode
+          break
+        case OpMode.IND:
+          // mode already checked
+          break
+        case OpMode.INDX:
+        case OpMode.INDY:
+          // mode already checked
           this.markZPage(this.opExpression)
-        } else {
-          this.markData(this.opExpression)
-        }
-        // *** check resulting mode
-        break
-      case OpMode.IND:
-        // mode already checked
-        break
-      case OpMode.INDX:
-      case OpMode.INDY:
-        // mode already checked
-        this.markZPage(this.opExpression)
-        // *** mark as error if too large ***
-        break
-      case OpMode.BRANCH:
-        // will never be BRANCH at this point
-        break
+          // *** mark as error if too large ***
+          break
+        case OpMode.BRANCH:
+          // will never be BRANCH at this point
+          break
+      }
     }
 
     // if opcode has label, label must be code
@@ -437,72 +437,6 @@ export class OpStatement extends Statement {
 //==============================================================================
 // Conditionals
 //==============================================================================
-
-// TODO: should this move somewhere else?
-
-type ConditionalState = {
-  enableCount: number,
-  satisfied: boolean,
-  statement?: ConditionalStatement
-}
-
-export class Conditional {
-  private enableCount = 1
-  private satisfied = true
-  public statement?: ConditionalStatement
-  private stack: ConditionalState[] = []
-
-  public push(): boolean {
-    // set an arbitrary limit on stack size to catch infinite recursion
-    if (this.stack.length > 255) {
-      return false
-    }
-    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied, statement: this.statement})
-    this.enableCount -= 1
-    this.satisfied = false
-    this.statement = undefined
-    return true
-  }
-
-  public pull(): boolean {
-    if (this.stack.length == 0) {
-      return false
-    }
-    const state = this.stack.pop()
-    if (state) {
-      this.enableCount = state.enableCount
-      this.satisfied = state.satisfied
-      this.statement = state.statement
-    }
-    return true
-  }
-
-  public setSatisfied(satisfied: boolean) {
-    this.satisfied = satisfied
-  }
-
-  public isSatisfied(): boolean {
-    return this.satisfied
-  }
-
-  public enable() {
-    this.enableCount += 1
-  }
-
-  public disable() {
-    this.enableCount -= 1
-  }
-
-  public isEnabled(): boolean {
-    return this.enableCount > 0
-  }
-
-  public isComplete(): boolean {
-    return this.stack.length == 0
-  }
-}
-
-//------------------------------------------------------------------------------
 
 export abstract class ConditionalStatement extends Statement {
 
@@ -977,11 +911,24 @@ export class HexStatement extends Statement {
 //==============================================================================
 
 export class IncludeStatement extends Statement {
+
+  private fileName?: string
+  private fileNameToken?: Token
+
   parse(parser: Parser) {
     const token = parser.mustPushNextFileName()
     const fileName = token.getString()
-    if (fileName != "" && !parser.assembler.includeFile(fileName)) {
-      token.setError("File not found")
+    if (fileName != "") {       // *** check for missing token
+      this.fileName = fileName
+      this.fileNameToken = token
+    }
+  }
+
+  preprocess(prep: Preprocessor) {
+    if (this.fileName) {
+      if (!prep.includeFile(this.fileName)) {
+        this.fileNameToken?.setError("File not found")
+      }
     }
   }
 }
