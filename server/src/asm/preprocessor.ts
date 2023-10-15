@@ -157,6 +157,8 @@ export class Preprocessor {
             lineRecord.statement.applyConditional(this.conditional)
           } else {
             if (!this.conditional.isEnabled()) {
+              // TODO: reconcile lineRecord and statement use on disabled lines
+              lineRecord.statement.enabled = false
               lineRecord.statement = new Statement()
             } else {
               if (lineRecord.statement instanceof IncludeStatement) {
@@ -181,14 +183,12 @@ export class Preprocessor {
     }
 
     // process all remaining symbols
+    const symUtils = new SymbolUtils()
     for (let lineRecord of lineRecords) {
       const statement = lineRecord.statement
       if (statement) {
         this.processSymbols(statement, false)
-
-        if (statement instanceof OpStatement) {
-          statement.postSymbols()
-        }
+        statement.postProcessSymbols(symUtils)
       }
     }
 
@@ -259,6 +259,7 @@ export class Preprocessor {
               const foundSym = this.module.symbolMap.get(symExp.fullName)
               if (foundSym) {
                 symExp.symbol = foundSym
+                symExp.symbolType = foundSym.type
                 symExp.fullName = foundSym.fullName
                 // *** don't add reference if line is in macro def?
                 foundSym.addReference(symExp)
@@ -273,6 +274,124 @@ export class Preprocessor {
           }
         }
       })
+    }
+  }
+}
+
+//------------------------------------------------------------------------------
+
+import * as exp from "./expressions"
+import { Op } from "./syntax"
+
+export class SymbolUtils {
+
+  markData(expression: exp.Expression) {
+    const symExps: exp.SymbolExpression[] = []
+    this.recurseSyms(expression, symExps)
+    if (symExps.length == 1) {
+      const symbol = symExps[0].symbol
+      if (symbol) {
+        const value = symbol.resolve()
+        // *** do something special with Apple hardware addresses ***
+        if (value && value >= 0xC000 && value <= 0xCFFF) {
+          return
+        }
+        if (symbol.isConstant) {
+          symExps[0].setWarning("Symbol used as both data address and constant")
+        } else {
+          symbol.isData = true
+        }
+      }
+    }
+  }
+
+  markCode(expression: exp.Expression) {
+    if (expression instanceof exp.SymbolExpression) {
+      if (expression.symbol) {
+        if (expression.symbol.isConstant) {
+          expression.setWarning("Symbol used as both constant and code label")
+        } else {
+          expression.symbol.isCode = true
+        }
+      }
+    }
+  }
+
+  markSubroutine(expression: exp.Expression) {
+    if (expression instanceof exp.SymbolExpression) {
+      if (expression.symbol) {
+        if (expression.symbol.isConstant) {
+          expression.setWarning("Symbol used as both constant and JSR target")
+        } else {
+          expression.symbol.isSubroutine = true
+        }
+      }
+    }
+  }
+
+  markZPage(expression: exp.Expression) {
+    const symExps: exp.SymbolExpression[] = []
+    this.recurseSyms(expression, symExps)
+    if (symExps.length == 1) {
+      const symbol = symExps[0].symbol
+      if (symbol) {
+        const size = symbol.getSize() ?? 0
+        if (size == 1) {
+          if (symbol.isConstant) {
+            symExps[0].setWarning("Symbol used as both ZPAGE and constant")
+          } else {
+            symbol.isZPage = true
+          }
+        }
+      }
+    }
+  }
+
+  recurseSyms(expression: exp.Expression, symExps: exp.SymbolExpression[]) {
+    if (expression instanceof exp.SymbolExpression) {
+      symExps.push(expression)
+      return
+    }
+    if (expression instanceof exp.UnaryExpression) {
+      return
+    }
+    for (let i = 0; i < expression.children.length; i += 1) {
+      const node = expression.children[i]
+      if (node instanceof exp.Expression) {
+        this.recurseSyms(node, symExps)
+      }
+    }
+  }
+
+  markConstants(expression: exp.Expression) {
+    if (expression instanceof exp.SymbolExpression) {
+      if (expression.symbol) {
+        const size = expression.symbol.getSize() ?? 0
+        if (size == 1) {
+          if (expression.symbol.isZPage) {
+            expression.setWarning("Symbol used as both ZPAGE and constant")
+          } else if (expression.symbol.isSubroutine) {
+            expression.setWarning("Symbol used as both JSR target and constant")
+          } else {
+            expression.symbol.isConstant = true
+          }
+        }
+      }
+      return
+    }
+    if (expression instanceof exp.UnaryExpression) {
+      const opType = expression.opType
+      if (opType == Op.LowByte
+          || opType == Op.HighByte
+          || opType == Op.BankByte) {
+        return
+      }
+    }
+    for (let i = 0; i < expression.children.length; i += 1) {
+      const node = expression.children[i]
+      if (node instanceof exp.Expression) {
+        this.markConstants(node)
+      }
     }
   }
 }

@@ -257,6 +257,11 @@ class MerlinSyntax extends SyntaxDef {
 //  Precedence:
 //    https://github.com/dasm-assembler/dasm/blob/master/docs/dasm.pdf
 //    Page 24, 25
+//
+//  All directives (and incidentally also the mnemonics) can be prefixed with
+//  a dot "." or a crosshatch "#" for compatibility with other assemblers. So,
+//  ".IF" is the same as "IF" and "#IF".
+//
 //------------------------------------------------------------------------------
 
 class DasmSyntax extends SyntaxDef {
@@ -381,6 +386,10 @@ class AcmeSyntax extends SyntaxDef {
       [ "!source",    {}],
       [ "!to",        {}],
 
+      // macros
+      [ "!mac",       { create: () => { return new stm.MacroDefStatement() }}],
+      [ "!macro",     { create: () => { return new stm.MacroDefStatement() }}],
+
       // data storage
       [ "!byte",      { create: () => { return new stm.ByteDataStatement() }}],
       [ "!word",      { create: () => { return new stm.WordDataStatement() }}],
@@ -470,6 +479,13 @@ class Ca65Syntax extends SyntaxDef {
 
     this.keywordMap = new Map<string, KeywordDef>([
       [ ".org",     { create: () => { return new stm.OrgStatement() }}],
+
+      // macros
+      [ ".mac",       { create: () => { return new stm.MacroDefStatement() }}],
+      [ ".macro",     { create: () => { return new stm.MacroDefStatement() }}],
+      [ ".endmac",    { create: () => { return new stm.EndMacroDefStatement() }}],
+      [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() }}],
+
       // ***
     ])
 

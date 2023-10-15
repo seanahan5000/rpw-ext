@@ -67,7 +67,8 @@
 			"fontStyle": ""
 		},
 		"function.external": {
-			"foreground": "#e6994c",			// hsl(30,75,60)	*** preferred
+			// "foreground": "#e6994c",			// hsl(30,75,60)	*** preferred
+			"foreground": "#ce9178",
 			"fontStyle": ""
 		},
 		// *** function.unused *** not possible? ***

@@ -119,6 +119,11 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
   for (let i = startLine; i < endLine; i += 1) {
     const statement = sourceFile.statements[i]
 
+    // for now, cancel completely when conditionals are involved
+    if (!statement.enabled) {
+      return
+    }
+
     // cancel completely if a statement has an error
     if (statement.hasError()) {
       return

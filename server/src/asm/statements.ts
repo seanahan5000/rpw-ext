@@ -1,7 +1,7 @@
 
 import * as exp from "./expressions"
 import { Parser } from "./parser"
-import { Preprocessor, Conditional } from "./preprocessor"
+import { Preprocessor, Conditional, SymbolUtils } from "./preprocessor"
 import { SymbolFrom, SymbolType } from "./symbols"
 import { Syntax, Op } from "./syntax"
 import { Node, Token, TokenType } from "./tokenizer"
@@ -11,18 +11,19 @@ import { Node, Token, TokenType } from "./tokenizer"
 export class Statement extends exp.Expression {
 
   public sourceLine: string = ""
-
   public labelExp?: exp.SymbolExpression
-  public opToken?: Token
+  public opExp?: exp.Expression
   public opNameLC = ""
+  public enabled = true
 
-  init(sourceLine: string, opToken: Token | undefined, opNameLC: string,
-      children: Node[], labelExp?: exp.SymbolExpression) {
-    this.sourceLine = sourceLine
-    this.opToken = opToken
+  init(sourceLine: string, children: Node[],
+      labelExp?: exp.SymbolExpression,
+      opExp?: exp.Expression) {
     this.children = children
+    this.sourceLine = sourceLine
     this.labelExp = labelExp
-    this.opNameLC = opNameLC
+    this.opExp = opExp
+    this.opNameLC = this.opExp?.getString() ?? ""
   }
 
   parse(parser: Parser) {
@@ -35,6 +36,9 @@ export class Statement extends exp.Expression {
         this.children.push(expression)
       }
     }
+  }
+
+  postProcessSymbols(symUtils: SymbolUtils) {
   }
 
   // TODO: should any statement need resolve() or getSize()?
@@ -53,6 +57,7 @@ export class ZoneStatement extends Statement {
 
   parse(parser: Parser) {
     if (!this.labelExp) {
+      // insert implied label
       this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
         parser.sourceFile, parser.lineNumber)
       this.children.unshift(this.labelExp)
@@ -110,7 +115,7 @@ export class OpStatement extends Statement {
     let str = token?.getString().toLowerCase() ?? ""
     if (str == "") {
       if (this.opcode.NONE === undefined) {
-        this.opToken?.setError("Mode not allowed for this opcode")
+        this.opExp?.setError("Mode not allowed for this opcode")
       }
       this.mode = OpMode.NONE
     } else if (token) {
@@ -258,7 +263,7 @@ export class OpStatement extends Statement {
 
   // called after symbols have been processed
   //  TODO: make this part of assemble phases
-  postSymbols() {
+  postProcessSymbols(symUtils: SymbolUtils) {
     if (this.opExpression) {
       switch (this.mode) {
         case OpMode.NONE:
@@ -267,7 +272,7 @@ export class OpStatement extends Statement {
           break
         case OpMode.IMM:
           // mode already checked
-          this.markConstants(this.opExpression)
+          symUtils.markConstants(this.opExpression)
           break
         case OpMode.ZP:
         case OpMode.ZPX:
@@ -277,15 +282,15 @@ export class OpStatement extends Statement {
         case OpMode.ABS:
           if (this.opcode.BRAN) {
             this.mode = OpMode.BRANCH
-            this.markCode(this.opExpression)
+            symUtils.markCode(this.opExpression)
             break
           }
           if (this.opNameLC == "jmp") {
-            this.markCode(this.opExpression)
+            symUtils.markCode(this.opExpression)
             break
           }
           if (this.opNameLC == "jsr") {
-            this.markSubroutine(this.opExpression)
+            symUtils.markSubroutine(this.opExpression)
             break
           }
           // fall through
@@ -296,9 +301,9 @@ export class OpStatement extends Statement {
             // TODO: when downgrading, handle case where opcode
             //  could be ABS but not ZP
             this.mode = this.mode - OpMode.ABS + OpMode.ZP
-            this.markZPage(this.opExpression)
+            symUtils.markZPage(this.opExpression)
           } else {
-            this.markData(this.opExpression)
+            symUtils.markData(this.opExpression)
           }
           // *** check resulting mode
           break
@@ -308,7 +313,7 @@ export class OpStatement extends Statement {
         case OpMode.INDX:
         case OpMode.INDY:
           // mode already checked
-          this.markZPage(this.opExpression)
+          symUtils.markZPage(this.opExpression)
           // *** mark as error if too large ***
           break
         case OpMode.BRANCH:
@@ -319,117 +324,7 @@ export class OpStatement extends Statement {
 
     // if opcode has label, label must be code
     if (this.labelExp) {
-      this.markCode(this.labelExp)
-    }
-  }
-
-  private markData(expression: exp.Expression) {
-    const symExps: exp.SymbolExpression[] = []
-    this.recurseSyms(expression, symExps)
-    if (symExps.length == 1) {
-      const symbol = symExps[0].symbol
-      if (symbol) {
-        const value = symbol.resolve()
-        // *** do something special with Apple hardware addresses ***
-        if (value && value >= 0xC000 && value <= 0xCFFF) {
-          return
-        }
-        if (symbol.isConstant) {
-          symExps[0].setWarning("Symbol used as both data address and constant")
-        } else {
-          symbol.isData = true
-        }
-      }
-    }
-  }
-
-  private markCode(expression: exp.Expression) {
-    if (expression instanceof exp.SymbolExpression) {
-      if (expression.symbol) {
-        if (expression.symbol.isConstant) {
-          expression.setWarning("Symbol used as both constant and code label")
-        } else {
-          expression.symbol.isCode = true
-        }
-      }
-    }
-  }
-
-  private markSubroutine(expression: exp.Expression) {
-    if (expression instanceof exp.SymbolExpression) {
-      if (expression.symbol) {
-        if (expression.symbol.isConstant) {
-          expression.setWarning("Symbol used as both constant and JSR target")
-        } else {
-          expression.symbol.isSubroutine = true
-        }
-      }
-    }
-  }
-
-  private markZPage(expression: exp.Expression) {
-    const symExps: exp.SymbolExpression[] = []
-    this.recurseSyms(expression, symExps)
-    if (symExps.length == 1) {
-      const symbol = symExps[0].symbol
-      if (symbol) {
-        const size = symbol.getSize() ?? 0
-        if (size == 1) {
-          if (symbol.isConstant) {
-            symExps[0].setWarning("Symbol used as both ZPAGE and constant")
-          } else {
-            symbol.isZPage = true
-          }
-        }
-      }
-    }
-  }
-
-  private recurseSyms(expression: exp.Expression, symExps: exp.SymbolExpression[]) {
-    if (expression instanceof exp.SymbolExpression) {
-      symExps.push(expression)
-      return
-    }
-    if (expression instanceof exp.UnaryExpression) {
-      return
-    }
-    for (let i = 0; i < expression.children.length; i += 1) {
-      const node = expression.children[i]
-      if (node instanceof exp.Expression) {
-        this.recurseSyms(node, symExps)
-      }
-    }
-  }
-
-  private markConstants(expression: exp.Expression) {
-    if (expression instanceof exp.SymbolExpression) {
-      if (expression.symbol) {
-        const size = expression.symbol.getSize() ?? 0
-        if (size == 1) {
-          if (expression.symbol.isZPage) {
-            expression.setWarning("Symbol used as both ZPAGE and constant")
-          } else if (expression.symbol.isSubroutine) {
-            expression.setWarning("Symbol used as both JSR target and constant")
-          } else {
-            expression.symbol.isConstant = true
-          }
-        }
-      }
-      return
-    }
-    if (expression instanceof exp.UnaryExpression) {
-      const opType = expression.opType
-      if (opType == Op.LowByte
-          || opType == Op.HighByte
-          || opType == Op.BankByte) {
-        return
-      }
-    }
-    for (let i = 0; i < expression.children.length; i += 1) {
-      const node = expression.children[i]
-      if (node instanceof exp.Expression) {
-        this.markConstants(node)
-      }
+      symUtils.markCode(this.labelExp)
     }
   }
 }
@@ -521,6 +416,12 @@ export class IfStatement extends ConditionalStatement {
     if (value != 0) {
       conditional.setSatisfied(true)
       conditional.enable()
+    }
+  }
+
+  postProcessSymbols(symUtils: SymbolUtils): void {
+    if (this.expression) {
+      symUtils.markConstants(this.expression)
     }
   }
 }
@@ -663,6 +564,12 @@ export class ElseIfStatement extends ConditionalStatement {
       conditional.disable()
     }
   }
+
+  postProcessSymbols(symUtils: SymbolUtils): void {
+    if (this.expression) {
+      symUtils.markConstants(this.expression)
+    }
+  }
 }
 
 
@@ -715,6 +622,7 @@ class DataStatement extends Statement {
 
   protected dataSize: number
   protected swapEndian: boolean
+  protected dataElements: exp.Expression[] = []
 
   constructor(dataSize: number, swapEndian = false) {
     super()
@@ -748,12 +656,13 @@ class DataStatement extends Statement {
 
       // *** token could be "," here ***
 
-      let expression = parser.addNextExpression(token)
+      const expression = parser.addNextExpression(token)
       if (!expression) {
         // *** what happens to token?
         break
       }
 
+      this.dataElements.push(expression)
       if (parser.mustAddToken(["", ","]).index <= 0) {
         break
       }
@@ -764,6 +673,12 @@ class DataStatement extends Statement {
 export class ByteDataStatement extends DataStatement {
   constructor() {
     super(1)
+  }
+
+  postProcessSymbols(symUtils: SymbolUtils) {
+    for (let expression of this.dataElements) {
+      symUtils.markConstants(expression)
+    }
   }
 }
 
@@ -924,9 +839,9 @@ export class IncludeStatement extends Statement {
     }
   }
 
-  preprocess(prep: Preprocessor) {
+  preprocess(preprocessor: Preprocessor) {
     if (this.fileName) {
-      if (!prep.includeFile(this.fileName)) {
+      if (!preprocessor.includeFile(this.fileName)) {
         this.fileNameToken?.setError("File not found")
       }
     }
@@ -959,7 +874,7 @@ export class EquStatement extends Statement {
 
   parse(parser: Parser) {
     if (!this.labelExp) {
-      this.opToken?.setError("Missing label")
+      parser.insertMissingLabel()
       return
     }
 
@@ -975,7 +890,7 @@ export class VarStatement extends Statement {
   parse(parser: Parser) {
 
     if (this.opNameLC != "=") {
-      this.opToken?.setError("Expecting '='")
+      this.opExp?.setError("Expecting '='")
       return
     }
 
@@ -1009,7 +924,7 @@ export class EntryStatement extends Statement {
         this.labelExp.symbol.isEntryPoint = true
       }
     } else {
-      this.opToken?.setError("Label is required")
+      parser.insertMissingLabel()
     }
   }
 }
@@ -1070,25 +985,75 @@ export class UsrStatement extends Statement {
 // Macros
 //==============================================================================
 
-// MERLIN:  <name> MAC    (label required)
-//   DASM:  MAC <name>    (no label allowed)
-//          MACRO <name>
-//   ACME:  <name> !macro {
-//   CA65:  .mac <name>
-//          .macro <name>
+// MERLIN:  <name> MAC           (label required)
+//   DASM:         MAC <name>    (no label allowed)
+//                 MACRO <name>
+//   ACME:  !macro <name> [<params-list>] {
+//   CA65:         .mac <name>
+//                 .macro <name>
 //   LISA:
-//  SBASM:  <name> .MA <params-list>
+//  SBASM:  <name> .MA [<params-list>]
 
 export class MacroDefStatement extends Statement {
-  // *** mark macro label as macro type (MERLIN, ACME, SBASM) ***
+
+  public macroName?: exp.SymbolExpression
 
   parse(parser: Parser) {
-    const symbol = this.labelExp?.symbol
-    if (symbol) {
-      symbol.isMacro = true
+
+    if (this.labelExp) {
+      if (parser.syntax == Syntax.DASM
+          || parser.syntax == Syntax.ACME
+          || parser.syntax == Syntax.CA65) {
+        this.labelExp.setError("Label not allowed")
+      } else if (this.labelExp.isLocalType()) {
+        this.labelExp.setError("Local label not allowed")
+      } else {
+        this.macroName = this.labelExp
+        this.macroName.symbolType = SymbolType.Macro
+        if (this.macroName.symbol) {
+          this.macroName.symbol.type = SymbolType.Macro
+        }
+      }
+    } else if (parser.syntax == Syntax.MERLIN) {
+      /*|| parser.syntax == Syntax.SBASM*/
+      parser.insertMissingLabel()
     }
 
-    // TODO: more here
+    // TODO: rewrite/split this logic to be clearer
+    if (parser.syntax != Syntax.MERLIN) {
+      let token = parser.getNextToken()
+      if (token) {
+        // macro name
+        if (token.type == TokenType.Symbol
+            || token.type == TokenType.HexNumber) {
+          const isDefinition = true
+          this.macroName = new exp.SymbolExpression([token], SymbolType.Macro,
+            isDefinition, parser.sourceFile, parser.lineNumber)
+          parser.addExpression(this.macroName)
+          token = parser.getNextToken()
+        }
+        if (token) {
+          if (token.getString() == "{") {
+            if (!this.macroName) {
+              token.setError("Unexpected token, expected macro name")
+            } else if (parser.syntax && parser.syntax != Syntax.ACME) {
+              token.setError("Unexpected token")
+            }
+            parser.addToken(token)
+          } else {
+            // TODO: parse params
+          }
+        } else if (parser.syntax == Syntax.ACME) {
+          parser.addMissingToken("opening brace expected")
+        }
+      } else {
+        if (parser.syntax == Syntax.DASM
+            || parser.syntax == Syntax.ACME
+            || parser.syntax == Syntax.CA65) {
+          parser.addMissingToken("macro name expected")
+        }
+      }
+    }
   }
 }
 
@@ -1103,16 +1068,34 @@ export class MacroDefStatement extends Statement {
 //  SBASM:  <name> .EM
 
 export class EndMacroDefStatement extends Statement {
+
+  parse(parser: Parser) {
+    // *** enforce label or not ***
+  }
 }
 
 //------------------------------------------------------------------------------
 
 // TODO: probably needs to be split by syntax
 
-// *** macro invoke, not definition ***
-export class MacroStatement extends Statement {
+export class MacroInvokeStatement extends Statement {
+
+  public macroName?: exp.SymbolExpression
 
   parse(parser: Parser) {
+
+    if (this.opNameLC.startsWith("+")) {
+      // *** maybe make parser.parseOpcode smarter instead? ***
+      if (!parser.syntax || parser.syntax == Syntax.ACME) {
+        // *** split into two tokens and replace in this.children
+        // *** this.opToken becomes second new token
+      } else {
+        // *** force error ***
+      }
+    }
+
+    // *** create symExpression from opToken
+    // *** replace opToken in this.children
 
     while (true) {
       let token = parser.getNextToken()
@@ -1121,8 +1104,6 @@ export class MacroStatement extends Statement {
       }
 
       const str = token.getString()
-
-      // *** special case () for NajaText ? ***
 
       // *** merlin-only ***
       // *** not on first pass ***

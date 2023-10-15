@@ -4,9 +4,9 @@ import { URI } from 'vscode-uri';
 import * as fs from 'fs';
 
 import { TextDocument } from 'vscode-languageserver-textdocument'
-import { RpwProject, RpwModule, Project, SourceFile } from "./asm/project"
+import { RpwProject, Project, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
-import * as exp from "./asm/expressions"
+import { Expression, SymbolExpression } from "./asm/expressions"
 import { Statement } from "./asm/statements"
 import { SymbolType, Symbol } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
@@ -257,7 +257,10 @@ export class LspServer {
   private getStatement(uri: string, lineNumber: number): Statement | undefined {
     const sourceFile = this.getSourceFile(uri)
     if (sourceFile) {
-      return sourceFile.statements[lineNumber]
+      const statement = sourceFile.statements[lineNumber]
+      if (statement && statement.enabled) {
+        return statement
+      }
     }
   }
 
@@ -328,7 +331,7 @@ export class LspServer {
   }
 
   // *** think about cancellation token support ***
-  private updateProjects(diagnostics = false) {
+  public updateProjects(diagnostics = false) {
     for (let i = 0; i < this.projects.length; i += 1) {
       this.projects[i].update()
       // TODO: something else?
@@ -445,7 +448,7 @@ export class LspServer {
       const sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
         const statement = sourceFile.statements[params.position.line]
-        if (statement) {
+        if (statement && statement.enabled) {
 
           // *** if token missed, look for token just before/after it ***
 
@@ -595,19 +598,21 @@ export class LspServer {
     let sourceFile = this.getSourceFile(params.textDocument.uri)
     if (sourceFile) {
       // TODO: could support folding macro definitions
-      sourceFile.statements.forEach(statement => {
-        const nextConditional = (statement as any).nextConditional
-        if (nextConditional && sourceFile) {
-          const startLine = sourceFile.statements.indexOf(statement)
-          const endLine = sourceFile.statements.indexOf(nextConditional) - 1
-          if (startLine < endLine) {
-            const range: lsp.FoldingRange = {
-              startLine, endLine
+      for (let statement of sourceFile.statements) {
+        if (statement.enabled) {
+          const nextConditional = (statement as any).nextConditional
+          if (nextConditional && sourceFile) {
+            const startLine = sourceFile.statements.indexOf(statement)
+            const endLine = sourceFile.statements.indexOf(nextConditional) - 1
+            if (startLine < endLine) {
+              const range: lsp.FoldingRange = {
+                startLine, endLine
+              }
+              foldingRanges.push(range)
             }
-            foldingRanges.push(range)
           }
         }
-      })
+      }
     }
     return foldingRanges
   }
@@ -617,10 +622,10 @@ export class LspServer {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
-      if (res && res.expression instanceof exp.SymbolExpression) {
+      if (res && res.expression instanceof SymbolExpression) {
         const hoverExp = res.expression
         // TODO: if hovering over macro invocation, show macro contents
-        if (hoverExp instanceof exp.SymbolExpression) {
+        if (hoverExp instanceof SymbolExpression) {
           if (hoverExp.isDefinition) {
             // *** show value of symbol, if resolved
           } else if (hoverExp.symbol) {
@@ -646,7 +651,7 @@ export class LspServer {
       const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro definitions
       // TODO: support include/PUT files
-      if (res && res.expression instanceof exp.SymbolExpression) {
+      if (res && res.expression instanceof SymbolExpression) {
         const symExp = res.expression
         let symbol = symExp.symbol
         if (symbol) {
@@ -674,22 +679,24 @@ export class LspServer {
     const locations: lsp.Location[] = []
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
-      // TODO: support macros definitions and references
-      const symbol = statement?.labelExp?.symbol
-      if (symbol) {
-        symbol.references.forEach(symExp => {
-          const expRange = symExp.getRange()
-          if (expRange && symExp.sourceFile) {
-            let location: lsp.Location = {
-              uri: URI.file(symExp.sourceFile.fullPath).toString(),
-              range: {
-                start: { line: symExp.lineNumber, character: expRange.start },
-                end: { line: symExp.lineNumber, character: expRange.end }
+      const res = statement.findExpressionAt(params.position.character)
+      if (res && res.expression instanceof SymbolExpression) {
+        const symbol = res.expression.symbol
+        if (symbol) {
+          symbol.references.forEach(symExp => {
+            const expRange = symExp.getRange()
+            if (expRange && symExp.sourceFile) {
+              let location: lsp.Location = {
+                uri: URI.file(symExp.sourceFile.fullPath).toString(),
+                range: {
+                  start: { line: symExp.lineNumber, character: expRange.start },
+                  end: { line: symExp.lineNumber, character: expRange.end }
+                }
               }
+              locations.push(location)
             }
-            locations.push(location)
-          }
-        })
+          })
+        }
       }
     }
     return locations
@@ -700,7 +707,7 @@ export class LspServer {
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro rename
-      if (res && res.expression instanceof exp.SymbolExpression) {
+      if (res && res.expression instanceof SymbolExpression) {
         const symExp = res.expression
         let symbol = symExp.symbol
         if (symbol) {
@@ -720,7 +727,7 @@ export class LspServer {
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
       // TODO: support macro rename
-      if (res && res.expression instanceof exp.SymbolExpression) {
+      if (res && res.expression instanceof SymbolExpression) {
         const symExp = res.expression
         let symbol = symExp.symbol
         if (symbol) {
@@ -758,10 +765,13 @@ export class LspServer {
     const diagnostics: lsp.Diagnostic[] = []
     const state: DiagnosticState = { lineNumber: 0, diagnostics }
 
-    for (let i = 0; i < sourceFile.statements.length; i += 1) {
-      const statement = sourceFile.statements[i]
-      state.lineNumber = i
-      this.diagnoseExpression(state, statement)
+    let lineNumber = 0
+    for (let statement of sourceFile.statements) {
+      if (statement.enabled) {
+        state.lineNumber = lineNumber
+        this.diagnoseExpression(state, statement)
+      }
+      lineNumber += 1
     }
 
     this.connection.sendDiagnostics({
@@ -769,14 +779,14 @@ export class LspServer {
       diagnostics: diagnostics })
   }
 
-  private diagnoseExpression(state: DiagnosticState, expression: exp.Expression) {
+  private diagnoseExpression(state: DiagnosticState, expression: Expression) {
     if (expression.errorType != NodeErrorType.None) {
       this.diagnoseNode(state, expression)
       return
     }
     for (let i = 0; i < expression.children.length; i += 1) {
       const node = expression.children[i]
-      if (node instanceof exp.Expression) {
+      if (node instanceof Expression) {
         this.diagnoseExpression(state, node)
       } else {
         this.diagnoseNode(state, node)
@@ -840,15 +850,18 @@ export class LspServer {
     const data: number[] = []
     const state: SemanticState = { prevLine: 0, prevStart: 0, data: data }
     for (let i = startLine; i < endLine; i += 1) {
-      state.prevStart = 0
-      // *** mark unused lines (inside disabled conditional) so they're dimmed ***
-      this.semanticExpression(state, i, sourceFile.statements[i])
+      const statement = sourceFile.statements[i]
+      if (statement.enabled) {
+        state.prevStart = 0
+        // *** mark unused lines (inside disabled conditional) so they're dimmed ***
+        this.semanticExpression(state, i, statement)
+      }
     }
     return { data }
   }
 
-  private semanticExpression(state: SemanticState, lineNumber: number, expression: exp.Expression) {
-    if (expression instanceof exp.SymbolExpression) {
+  private semanticExpression(state: SemanticState, lineNumber: number, expression: Expression) {
+    if (expression instanceof SymbolExpression) {
       const symExp = expression
       for (let i = 0; i < symExp.children.length; i += 1) {
         const token = symExp.children[i]
@@ -864,12 +877,12 @@ export class LspServer {
                 bits |= (1 << SemanticModifier.unused)
               }
             } else if (symExp.symbol) {
-              if (symExp.symbol.isZPage) {
+              if (symExp.symbol.type == SymbolType.Macro) {
+                index = SemanticToken.macro
+              } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage
               } else if (symExp.symbol.isConstant) {
                 index = SemanticToken.constant
-              } else if (symExp.symbol.isMacro) {
-                index = SemanticToken.macro
               } else if (symExp.symbol.isSubroutine) {
                 // *** maybe skip for locals? ***
                 index = SemanticToken.function
@@ -912,7 +925,7 @@ export class LspServer {
         const child = expression.children[i]
         if (child instanceof Token) {
           this.semanticToken(state, lineNumber, child)
-        } else if (child instanceof exp.Expression) {
+        } else if (child instanceof Expression) {
           this.semanticExpression(state, lineNumber, child)
         }
       }

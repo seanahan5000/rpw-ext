@@ -66,7 +66,7 @@ export enum TokenType {
   Comment,
 
   Label,      // *** only used with locals?
-  Macro,      // *** phase this out
+  Macro,
   Variable,
   FileName,   // *** TODO: or just use quoted string?
 

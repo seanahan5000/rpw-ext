@@ -5,13 +5,15 @@ import { Expression, SymbolExpression} from "./expressions"
 //------------------------------------------------------------------------------
 
 export enum SymbolType {
-  Simple      = 0,
-  Scoped      = 1,  // explicit scope, fully specified
+  Macro       = 0,
 
-  CheapLocal  = 2,  // scoped to previous non-local
-  ZoneLocal   = 3,  // scoped to SUBROUTINE or !zone
-  AnonLocal   = 4,  // ++ or --
-  LisaLocal   = 5,  // ^# def, <# or ># ref
+  Simple      = 1,
+  Scoped      = 2,  // explicit scope, fully specified
+
+  CheapLocal  = 3,  // scoped to previous non-local
+  ZoneLocal   = 4,  // scoped to SUBROUTINE or !zone
+  AnonLocal   = 5,  // ++ or --
+  LisaLocal   = 6,  // ^# def, <# or ># ref
 }
 
 export function isLocalType(symbolType: SymbolType): boolean {
@@ -44,9 +46,6 @@ export class Symbol {
 
   // set by SUBROUTINE and .zone commands
   public isZoneStart = false
-
-  // set by macro definition commands
-  public isMacro = false
 
   public definition: SymbolExpression
   public references: SymbolExpression[] = []
@@ -109,9 +108,19 @@ export class ScopeState {
 
   private anonCounts = new Array(20).fill(0)
 
-  setSymbolExpression(symExp: SymbolExpression): string {
+  setSymbolExpression(symExp: SymbolExpression): string | undefined {
 
     switch (symExp.symbolType) {
+
+      case SymbolType.Macro: {
+        let nameToken = symExp.children[0]
+        let nameStr = nameToken?.getString() ?? ""
+        if (nameStr == "+") {
+          nameToken = symExp.children[1]
+          nameStr = nameToken?.getString() ?? ""
+        }
+        return nameStr
+      }
 
       case SymbolType.Simple: {
         const nameToken = symExp.children[0]

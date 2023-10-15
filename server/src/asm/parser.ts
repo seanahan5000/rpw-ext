@@ -77,26 +77,27 @@ export class Parser extends Tokenizer {
   public lineNumber: number = -1
 
   // valid during a single parseStatement call
-  public tokenExpSet: Node[] = []
-  public tokenExpStack: Node[][] = []
+  public nodeSet: Node[] = []
+  public nodeSetStack: Node[][] = []
+  public labelExp?: exp.SymbolExpression
 
   // push/pop the current expression to/from the expressionStack
   // *** move these ***
 
   public startExpression(token?: Token) {
-    this.tokenExpStack.push(this.tokenExpSet)
-    this.tokenExpSet = []
+    this.nodeSetStack.push(this.nodeSet)
+    this.nodeSet = []
     if (token) {
       this.addToken(token)
     }
   }
 
   public endExpression(): Node[] {
-    const result = this.tokenExpSet
-    const prevSet = this.tokenExpStack.pop()
+    const result = this.nodeSet
+    const prevSet = this.nodeSetStack.pop()
     // NOTE: don't pop the last set because that's the statement itself
     if (prevSet) {
-      this.tokenExpSet = prevSet
+      this.nodeSet = prevSet
     }
     return result
   }
@@ -104,7 +105,7 @@ export class Parser extends Tokenizer {
   // push tokens and expression onto the current parent expression
 
   addToken(token: Token) {
-    this.tokenExpSet.push(token)
+    this.nodeSet.push(token)
   }
 
   mustAddNextToken(expectMsg: string): Token {
@@ -180,7 +181,7 @@ export class Parser extends Tokenizer {
   }
 
   addExpression(expression: exp.Expression) {
-    this.tokenExpSet.push(expression)
+    this.nodeSet.push(expression)
   }
 
   mustAddNextExpression(token?: Token): exp.Expression {
@@ -201,6 +202,7 @@ export class Parser extends Tokenizer {
     const statements = []
     this.sourceFile = sourceFile
     this.lineNumber = 0
+    // *** macro begin/end tracking ***
     while (this.lineNumber < lines.length) {
       this.setSourceLine(lines[this.lineNumber])
       statements.push(this.parseStatement())
@@ -209,80 +211,44 @@ export class Parser extends Tokenizer {
     return statements
   }
 
+
   private parseStatement(): stm.Statement {
 
-    this.tokenExpSet = []
-    this.tokenExpStack = []
-
+    this.nodeSet = []
+    this.nodeSetStack = []
+    this.labelExp = undefined
     let statement: stm.Statement | undefined
 
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
 
-    // *** check for keywords first ***
-
-    let labelExp = this.parseSymbol(true)
-    let opToken: Token | undefined
-    let opNameLC = ""
-
-    if (labelExp) {
-      this.addExpression(labelExp)
-      if (labelExp instanceof exp.VarExpression) {
-        opToken = this.addNextToken()
-        opNameLC = opToken?.getString().toLowerCase() ?? ""
-        statement = new stm.VarStatement()
+    let symVarExp = this.parseSymbol(true)
+    if (symVarExp) {
+      this.addExpression(symVarExp)
+      if (symVarExp instanceof exp.SymbolExpression) {
+        this.labelExp = symVarExp
+      } else if (symVarExp instanceof exp.VarExpression) {
+        statement = this.initStatement(new stm.VarStatement(), this.getNextToken())
       }
     }
-
     if (!statement) {
-      opToken = this.addNextToken()
-      if (opToken) {
-        opNameLC = opToken.getString().toLowerCase()
-
-        // ACME syntax uses '!' prefix for keywords and '+' for macro invocations
-        if (opNameLC == "!" || opNameLC == "+") {
-          if (!this.syntax || this.syntax == Syntax.ACME) {
-            const nextToken = this.getVeryNextToken()
-            if (nextToken) {
-              opToken.end = nextToken.end
-              opToken.type = TokenType.Symbol
-              opNameLC = opToken.getString().toLowerCase()
-            }
-          }
-        }
-
-        if (opNameLC == "}") {
-          // ACME syntax ends conditionals, zones, and other blocks with '}'
-          if (!this.syntax || this.syntax == Syntax.ACME) {
-            const elseToken = this.peekNextToken()
-            if (elseToken) {
-              if (elseToken.getString().toLowerCase() == "else") {
-                statement = new stm.ElseStatement()
-              }
-            } else {
-              // TODO: end correct current group type (!if, !zone, etc.)
-              statement = new stm.EndIfStatement()
-            }
-          }
-        }
-
+      const token = this.getNextToken()
+      if (token) {
+        statement = this.parseKeyword(token)
         if (!statement) {
-          statement = this.parseOpcode(opToken, opNameLC)
+          statement = this.parseOpcode(token)
+          if (!statement) {
+            statement = this.parseMacroInvoke(token)
+            if (!statement) {
+              token.setError("Unexpected token")
+              statement = this.initStatement(new stm.Statement(), token)
+            }
+          }
         }
+      } else {
+        statement = this.initStatement(new stm.Statement())
       }
     }
-
-    if (!statement) {
-      statement = new stm.Statement()
-    }
-
-    // *** TODO: won't be needed once VarExpressions have been handled above
-    let label: exp.SymbolExpression | undefined
-    if (labelExp && labelExp instanceof exp.SymbolExpression) {
-      label = labelExp
-    }
-
-    statement.init(this.sourceLine, opToken, opNameLC, this.endExpression(), label)
     statement.parse(this)
 
     // handle extra tokens
@@ -318,59 +284,112 @@ export class Parser extends Tokenizer {
     return statement
   }
 
-  private parseOpcode(opToken: Token, opNameLC: string): stm.Statement | undefined {
+  private parseKeyword(token: Token): stm.Statement | undefined {
+    let statement: stm.Statement | undefined
+    let keywordLC = token.getString().toLowerCase()
 
-    let opcode = (Opcodes6502 as {[key: string]: any})[opNameLC]
-    if (opcode !== undefined) {
-      opToken.type = TokenType.Opcode
-      return new stm.OpStatement(opcode)
-    }
-
-    let keyword: any
-    for (let i = 1; i < SyntaxDefs.length; i += 1) {
-      if (!this.syntax || i == this.syntax) {
-        const k = SyntaxDefs[i].keywordMap.get(opNameLC)
-        if (k !== undefined) {
-          keyword = k
-          // *** count match ***
-          // *** track likelySyntax by keyword matches in only one syntax
-          // *** could change likelySyntax for each line?
-          if (this.syntax) {
-            break
+    // ACME syntax uses '!' prefix for keywords
+    if (keywordLC == "!") {
+      if (!this.syntax || this.syntax == Syntax.ACME) {
+        const nextToken = this.getVeryNextToken()
+        if (nextToken) {
+          token.end = nextToken.end
+          token.type = TokenType.Symbol
+          keywordLC = token.getString().toLowerCase()
+        }
+      }
+    } else if (keywordLC == "}") {
+      // ACME syntax ends conditionals, zones, and other blocks with '}'
+      if (!this.syntax || this.syntax == Syntax.ACME) {
+        const elseToken = this.peekNextToken()
+        if (elseToken) {
+          if (elseToken.getString().toLowerCase() == "else") {
+            statement = new stm.ElseStatement()
           }
-          // when syntax unknown, keep matching so match counts are balanced
+        } else {
+          // TODO: end correct current group type (!if, !zone, etc.)
+          statement = new stm.EndIfStatement()
         }
       }
     }
-    if (keyword) {
-      opToken.type = TokenType.Keyword
-      if (keyword.create) {
-        return keyword.create()
+
+    if (!statement) {
+      let keyword: any
+      for (let i = 1; i < SyntaxDefs.length; i += 1) {
+        if (!this.syntax || i == this.syntax) {
+          const k = SyntaxDefs[i].keywordMap.get(keywordLC)
+          if (k !== undefined) {
+            keyword = k
+            // *** count match ***
+            // *** track likelySyntax by keyword matches in only one syntax
+            // *** could change likelySyntax for each line?
+            if (this.syntax) {
+              break
+            }
+            // when syntax unknown, keep matching so match counts are balanced
+          }
+        }
       }
-      // *** if no create, then keyword not associated with a statement was found
-      return
+      if (keyword) {
+        token.type = TokenType.Keyword
+        if (keyword.create) {
+          statement = keyword.create()
+        } else {
+          // TODO: remove this and make all syntax table entries create the correct type
+          statement = new stm.Statement()
+        }
+      }
     }
 
-    if (opToken.type == TokenType.Operator) {
-      opToken.setError("Unexpected token")
-      return
+    if (statement) {
+      return this.initStatement(statement, token)
     }
+  }
 
-    const firstChar = opNameLC[0]
 
-    if (firstChar == "!" || firstChar == ".") {
-      opToken.setError("Unknown keyword")
-      return
+  private parseOpcode(token: Token): stm.Statement | undefined {
+    let opNameLC = token.getString().toLowerCase()
+    let opcode = (Opcodes6502 as {[key: string]: any})[opNameLC]
+    if (opcode !== undefined) {
+      token.type = TokenType.Opcode
+      return this.initStatement(new stm.OpStatement(opcode), token)
     }
+  }
 
-    if (firstChar == "+") {
-      // *** intentional macro invocation
-    } else {
-      // TODO: look through known macros first
+  private parseMacroInvoke(token: Token): stm.Statement | undefined {
+    this.startExpression()
+    if (token.getString() == "+") {
+      this.addToken(token)
+      if (!this.syntax || this.syntax == Syntax.ACME) {
+        token.type = TokenType.Macro
+        const nextToken = this.getVeryNextToken()
+        if (nextToken) {
+          token = nextToken
+          token.type = TokenType.Macro
+        } else {
+          token.setError("Expecting macro name")
+        }
+      } else {
+        token.setError("Unexpected token")
+      }
     }
+    this.addToken(token)
+    if (token.type != TokenType.Symbol && token.type != TokenType.HexNumber) {
+      token.setError("Unexpected token")
+    }
+    const symExp = this.newSymbolExpression(this.endExpression(), SymbolType.Macro, false)
+    return this.initStatement(new stm.MacroInvokeStatement(), symExp)
+  }
 
-    opToken.type = TokenType.Macro
-    return new stm.MacroStatement()
+  private initStatement(statement: stm.Statement, opTokenExp?: Token | exp.Expression) {
+    if (opTokenExp) {
+      if (opTokenExp instanceof Token) {
+        opTokenExp = new exp.Expression([opTokenExp])
+      }
+      this.addExpression(opTokenExp)
+    }
+    statement.init(this.sourceLine, this.endExpression(), this.labelExp, opTokenExp)
+    return statement
   }
 
   // *** keep count of local types and directive matches to determine syntax ***
@@ -576,6 +595,12 @@ export class Parser extends Tokenizer {
   public newSymbolExpression(children: Node[],
       symbolType: SymbolType, isDefinition: boolean): exp.SymbolExpression {
     return new exp.SymbolExpression(children, symbolType, isDefinition, this.sourceFile, this.lineNumber)
+  }
+
+  public insertMissingLabel() {
+    const missingToken = new Token(this.sourceLine, 0, 0, TokenType.Missing)
+    missingToken.setError("Label required")
+    this.nodeSet.unshift(missingToken)
   }
 
   private pushTrailingColon() {
