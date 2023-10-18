@@ -8,7 +8,7 @@ import { Node, Token, TokenType } from "./tokenizer"
 
 //------------------------------------------------------------------------------
 
-export class Statement extends exp.Expression {
+export abstract class Statement extends exp.Expression {
 
   public sourceLine: string = ""
   public labelExp?: exp.SymbolExpression
@@ -23,7 +23,7 @@ export class Statement extends exp.Expression {
     this.sourceLine = sourceLine
     this.labelExp = labelExp
     this.opExp = opExp
-    this.opNameLC = this.opExp?.getString() ?? ""
+    this.opNameLC = this.opExp?.getString().toLowerCase() ?? ""
   }
 
   parse(parser: Parser) {
@@ -42,6 +42,10 @@ export class Statement extends exp.Expression {
   }
 
   // TODO: should any statement need resolve() or getSize()?
+}
+
+
+export class GenericStatement extends Statement {
 }
 
 //------------------------------------------------------------------------------
@@ -74,7 +78,7 @@ export class ZoneStatement extends Statement {
 // Opcodes
 //==============================================================================
 
-enum OpMode {
+export enum OpMode {
   NONE,
   A,
   IMM,
@@ -92,8 +96,8 @@ enum OpMode {
 
 export class OpStatement extends Statement {
 
-  private opcode: any
-  private mode: OpMode = OpMode.NONE
+  public opcode: any
+  public mode: OpMode = OpMode.NONE
   private opExpression?: exp.Expression
 
   constructor(opcode: any) {
@@ -111,6 +115,9 @@ export class OpStatement extends Statement {
     } else {
       token = parser.getNextToken()
     }
+
+    // NOTE: Guess at and set this.mode early so it's available
+    //  while generating code completion options.
 
     let str = token?.getString().toLowerCase() ?? ""
     if (str == "") {
@@ -152,43 +159,42 @@ export class OpStatement extends Statement {
         parser.addToken(token)
         // *** check opcode has this address mode ***
         token.type = TokenType.Opcode
+        this.mode = OpMode.IND
         this.opExpression = parser.mustAddNextExpression()
 
         let res = parser.mustAddToken([",", ")"], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
-
+          this.mode = OpMode.INDX
           res = parser.mustAddToken("x", TokenType.Opcode)
           if (res.index == 0 && res.token) {
             if (this.opcode.INDX === undefined) {
               res.token.setError("Indirect mode not allowed for this opcode")
             }
-            this.mode = OpMode.INDX
             token.type = TokenType.Opcode
             parser.mustAddToken(")", TokenType.Opcode)
           }
           return
 
         } else if (res.index == 1) {        // (exp) or (exp),Y
-
+          this.mode = OpMode.INDY
           let nextToken = parser.addNextToken()
           if (!nextToken) {
+            this.mode = OpMode.IND
             if (this.opcode.IND === undefined) {
               token.setError("Indirect mode not allowed for this opcode")
             }
-            this.mode = OpMode.IND
           } else {
             token = nextToken
             str = token.getString()
             if (str == ",") {
               token.type = TokenType.Opcode
               token = parser.mustAddNextToken("expecting 'Y'")
-              str = token.getString().toLowerCase()  
+              str = token.getString().toLowerCase()
               if (str == "y") {
                 if (this.opcode.INDY === undefined) {
                   token.setError("Indirect mode not allowed for this opcode")
                 }
                 token.type = TokenType.Opcode
-                this.mode = OpMode.INDY
               } else if (str == "x") {
                 token.setError("Invalid mode, expecting 'Y'")
               } else if (str != "") {
@@ -705,7 +711,7 @@ export class StorageStatement extends Statement {
   }
 
   parse(parser: Parser) {
-  
+
     const symbol = this.labelExp?.symbol
     if (symbol) {
       symbol.isData = true

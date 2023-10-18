@@ -1,6 +1,6 @@
 
 import { SourceFile, Module, LineRecord } from "./project"
-import { Statement, ConditionalStatement, OpStatement, IncludeStatement } from "./statements"
+import { Statement, ConditionalStatement, GenericStatement, IncludeStatement } from "./statements"
 import { ScopeState, SymbolFrom } from "./symbols"
 import { SymbolExpression } from "./expressions"
 
@@ -159,7 +159,7 @@ export class Preprocessor {
             if (!this.conditional.isEnabled()) {
               // TODO: reconcile lineRecord and statement use on disabled lines
               lineRecord.statement.enabled = false
-              lineRecord.statement = new Statement()
+              lineRecord.statement = new GenericStatement()
             } else {
               if (lineRecord.statement instanceof IncludeStatement) {
                 lineRecord.statement.preprocess(this)

@@ -48,13 +48,6 @@
 				"configuration": "./language-configuration.json"
 			}
 		],
-		"themes": [
-			{
-				"label": "RPW",
-				"uiTheme": "vs-dark",
-				"path": "./themes/rpw-color-theme.json"
-			}
-		],
 		"menus": {
 			"editor/context": [
 				{
@@ -97,6 +90,29 @@
 				"command": "rpw65.delIndent",
 				"key": "backspace",
 				"when": "resourceLangId == rpw65 && editorTextFocus"
+			}
+		],
+		"semanticTokenScopes": [
+			{
+				"scopes": {
+					"comment": ["comment"],
+					"string": ["string"],
+					"escape": ["constant.character.escape"],
+					"opcode": ["keyword"],
+					"constant": ["keyword.control"],
+					"zpage": ["entity.name.variable"],
+					"label": ["entity.name.function"],
+					"label.local": ["entity.other.attribute"],
+					"function": ["entity.name.function"],
+					"function.external": ["meta.embedded.assembly"],
+					"macro": ["entity.name.type"],
+					"buffer": ["variable.other.constant"],
+					"keyword": ["keyword.control"],
+					"operator": ["keyword.other"],
+					"number": ["constant.numeric"],
+					"var": ["support.variable"],
+					"invalid": ["invalid"]
+				}
 			}
 		]
 	},

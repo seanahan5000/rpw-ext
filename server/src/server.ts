@@ -97,7 +97,7 @@ connection.onInitialize((params: InitializeParams) => {
 				"constant",  // 11
 				"zpage",     // 12
 				"var",       // 13
-				"escape"     // 14
+				"escape",    // 14
 
 				// "comment.line.semicolon.rpw65"
 				// "keyword.control.opcode.rpw65"
@@ -119,8 +119,7 @@ connection.onInitialize((params: InitializeParams) => {
 			tokenModifiers: [
 				"local",
 				"global",
-				"external",
-				"unused"
+				"external"
 
 				// 'declaration',
 				// 'static',

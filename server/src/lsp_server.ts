@@ -8,8 +8,9 @@ import { RpwProject, Project, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, SymbolExpression } from "./asm/expressions"
 import { Statement } from "./asm/statements"
-import { SymbolType, Symbol } from "./asm/symbols"
+import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
+import { Completions, getCommentHeader } from "./lsp_utils"
 
 //------------------------------------------------------------------------------
 
@@ -39,8 +40,7 @@ export enum SemanticToken {
 export enum SemanticModifier {
   local     = 0,
   global    = 1,
-  external  = 2,
-  unused    = 3
+  external  = 2
 }
 
 //------------------------------------------------------------------------------
@@ -265,7 +265,7 @@ export class LspServer {
   }
 
   // *** just use a map lookup directly? ***
-  private findSourceFile(filePath: string): SourceFile | undefined {
+  findSourceFile(filePath: string): SourceFile | undefined {
     for (let i = 0; i < this.projects.length; i += 1) {
       const sourceFile = this.projects[i].findSourceFile(filePath)
       if (sourceFile) {
@@ -431,110 +431,34 @@ export class LspServer {
 
   // *** how to suppress default completion values from file? ***
 
-  async onCompletion(params: lsp.CompletionParams, token?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
-    const completions: lsp.CompletionItem[] = []
-    const isIncomplete = false
+  async onCompletion(params: lsp.CompletionParams, cancelToken?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
 
-    // figure out where in the line we are
-      // if operation/keyword known, choose possible symbols
-        // if JMP/JSR, list globals
-        // if Bcc, list locals, nearby globals
-        // if opcode is immediate (#), list constants
-        // if #> or #<, list globals, large constants
+    let sourceFile: SourceFile | undefined
+    let statement: Statement | undefined
 
-    let includedTypes = 7 //0
     const filePath = pathFromUriString(params.textDocument.uri)
     if (filePath) {
-      const sourceFile = this.findSourceFile(filePath)
+      sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
-        const statement = sourceFile.statements[params.position.line]
-        if (statement && statement.enabled) {
-
-          // *** if token missed, look for token just before/after it ***
-
-          const res = statement.findExpressionAt(params.position.character)
-          if (res) {
-            // no completions if in comments
-            if (res.token.type != TokenType.Comment) {
-
-              // if after opcode, allow items by op type
-              // const hitIndex = statement.tokens.indexOf(token)
-              // for (let i = 0; i < statement.tokens.length; i += 1) {
-              //   const t = statement.tokens[i]
-              // }
-
-              // *** do something with position too? ***
-                // before/after opcode
-                // inside comment
-              // *** filter zpage/const/address ***
-            }
-          }
-        } else {
-          // ***
-        }
-
-        if (includedTypes) {
-          // *** exclude constants if in non-immediate opcode
-          // *** watch out for errors and warnings?
-          sourceFile.module.symbolMap.forEach((symbol: Symbol, key: string) => {
-
-            if (symbol.type != SymbolType.Simple) {
-              return
-            }
-
-            // *** consider adding source file name where found, in details ***
-
-            // TODO: more here
-
-            let item: lsp.CompletionItem
-            if (symbol.isConstant) {
-              if (!(includedTypes & 1)) {
-                return
-              }
-              item = lsp.CompletionItem.create(key)
-              item.kind = lsp.CompletionItemKind.Constant
-            } else if (symbol.isZPage) {
-              if (!(includedTypes & 2)) {
-                return
-              }
-              item = lsp.CompletionItem.create(key)
-              item.kind = lsp.CompletionItemKind.Variable
-            } else {
-              if (!(includedTypes & 4)) {
-                return
-              }
-              item = lsp.CompletionItem.create(key)
-              item.kind = lsp.CompletionItemKind.Function
-            }
-
-            // *** item.detail = "detail text"
-            // *** item.labelDetails = { detail: " label det", description: "label det desc" }
-
-            item.data = { filePath: symbol.definition.sourceFile?.fullPath, line: symbol.definition.lineNumber }
-            completions.push(item)
-          })
+        const s = sourceFile.statements[params.position.line]
+        if (s && s.enabled) {
+          statement = s
         }
       }
     }
+    if (!sourceFile || !statement) {
+      // *** this is preventing all completions, including defaults ***
+      return lsp.CompletionList.create([], false)
+    }
 
+    const comp = new Completions()
+    const completions = comp.scan(sourceFile, statement, params.position.character)
+    const isIncomplete = false
     return lsp.CompletionList.create(completions, isIncomplete)
   }
 
   async onCompletionResolve(item: lsp.CompletionItem, token?: lsp.CancellationToken): Promise<lsp.CompletionItem> {
-    if (item.data.filePath) {
-      const sourceFile = this.findSourceFile(item.data.filePath)
-      if (sourceFile) {
-        if (item.kind == lsp.CompletionItemKind.Function) {
-          const header = this.getCommentHeader(sourceFile, item.data.line)
-          if (header) {
-            item.documentation = { kind: "markdown", value: header }
-          }
-        } else {
-          // *** something for constants and vars ***
-        }
-      }
-    }
-    return item
+    return Completions.resolve(this, item)
   }
 
   async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
@@ -632,7 +556,7 @@ export class LspServer {
             const defExp = hoverExp.symbol?.definition
             if (defExp && defExp.sourceFile) {
               // *** also show value, if resolved
-              let header = this.getCommentHeader(defExp.sourceFile, defExp.lineNumber)
+              let header = getCommentHeader(defExp.sourceFile, defExp.lineNumber)
               if (header) {
                 return { contents: header }
               }
@@ -649,7 +573,6 @@ export class LspServer {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
-      // TODO: support macro definitions
       // TODO: support include/PUT files
       if (res && res.expression instanceof SymbolExpression) {
         const symExp = res.expression
@@ -674,7 +597,6 @@ export class LspServer {
     }
   }
 
-  // TODO: if symbol is an entry point, walk all modules of project
   async onReferences(params: lsp.ReferenceParams, token?: lsp.CancellationToken): Promise<lsp.Location[]> {
     const locations: lsp.Location[] = []
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
@@ -706,15 +628,14 @@ export class LspServer {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
-      // TODO: support macro rename
       if (res && res.expression instanceof SymbolExpression) {
         const symExp = res.expression
         let symbol = symExp.symbol
         if (symbol) {
-          const token = symbol.getSimpleNameToken()
+          const token = symbol.getSimpleNameToken(symExp)
           let range: lsp.Range = {
-            start: { line: symbol.definition.lineNumber, character: token.start },
-            end: { line: symbol.definition.lineNumber, character: token.end }
+            start: { line: symExp.lineNumber, character: token.start },
+            end: { line: symExp.lineNumber, character: token.end }
           }
           return { range, placeholder: token.getString() }
         }
@@ -726,12 +647,11 @@ export class LspServer {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
-      // TODO: support macro rename
       if (res && res.expression instanceof SymbolExpression) {
         const symExp = res.expression
         let symbol = symExp.symbol
         if (symbol) {
-          // *** make sure new name won't cause duplicate label problems ***
+          // TODO: make sure new name won't cause duplicate label problems
           const fileEdits = renameSymbol(symbol, params.newName)
           if (fileEdits) {
             const changes: lsp.WorkspaceEdit['changes'] = {}
@@ -759,18 +679,36 @@ export class LspServer {
     }
   }
 
-  // TODO: consider a range of lines?
+  //----------------------------------------------------------------------------
+
   public updateDiagnostics(sourceFile: SourceFile) {
 
     const diagnostics: lsp.Diagnostic[] = []
     const state: DiagnosticState = { lineNumber: 0, diagnostics }
 
-    let lineNumber = 0
-    for (let statement of sourceFile.statements) {
-      if (statement.enabled) {
-        state.lineNumber = lineNumber
-        this.diagnoseExpression(state, statement)
+    for (let lineNumber = 0; lineNumber < sourceFile.statements.length; ) {
+
+      const statement = sourceFile.statements[lineNumber]
+
+      // collect diabled lines into a single DiagnosticTag.Unnecessary range
+      if (!statement.enabled) {
+        let endLine = lineNumber
+        while (++endLine < sourceFile.statements.length) {
+          if (sourceFile.statements[endLine].enabled) {
+            break
+          }
+        }
+        const range = lsp.Range.create(lineNumber, 0, endLine, 0)
+        const diag = lsp.Diagnostic.create(range, "Disabled by conditional")
+        diag.tags = [lsp.DiagnosticTag.Unnecessary]
+        diag.severity = lsp.DiagnosticSeverity.Hint
+        diagnostics.push(diag)
+        lineNumber = endLine
+        continue
       }
+
+      state.lineNumber = lineNumber
+      this.diagnoseExpression(state, statement)
       lineNumber += 1
     }
 
@@ -784,6 +722,27 @@ export class LspServer {
       this.diagnoseNode(state, expression)
       return
     }
+
+    // mark unused symbols as DiagnosticTag.Unnecessary
+    if (expression instanceof SymbolExpression) {
+      if (expression.isDefinition) {
+        const symbol = expression.symbol
+        if (symbol && symbol.references.length == 0) {
+          const expRange = expression.getRange()
+          if (expRange) {
+            const diagRange = lsp.Range.create(
+              state.lineNumber, expRange.start,
+              state.lineNumber, expRange.end)
+            const diag = lsp.Diagnostic.create(diagRange, "Unused label")
+            diag.tags = [lsp.DiagnosticTag.Unnecessary]
+            diag.severity = lsp.DiagnosticSeverity.Hint
+            state.diagnostics.push(diag)
+            // fall through in case children have errors
+          }
+        }
+      }
+    }
+
     for (let i = 0; i < expression.children.length; i += 1) {
       const node = expression.children[i]
       if (node instanceof Expression) {
@@ -812,21 +771,17 @@ export class LspServer {
 
       const nodeRange = node.getRange()
       if (nodeRange) {
-        const lspDiagnostic: lsp.Diagnostic = {
-          range: {
-            start: { line: state.lineNumber, character: nodeRange.start },
-            end: { line: state.lineNumber, character: Math.max(nodeRange.end, nodeRange.start + 1) }
-          },
-          message: node.errorMessage ?? "",
-          severity: severity
-          // code:,
-          // source:,
-          // relatedInformation:,
-        }
-        state.diagnostics.push(lspDiagnostic)
+        const diagRange = lsp.Range.create(
+          state.lineNumber, nodeRange.start,
+          state.lineNumber, Math.max(nodeRange.end, nodeRange.start + 1)
+        )
+        const diag = lsp.Diagnostic.create(diagRange, node.errorMessage ?? "", severity)
+        state.diagnostics.push(diag)
       }
     }
   }
+
+  //----------------------------------------------------------------------------
 
   async onSemanticTokensFull(params: lsp.SemanticTokensParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
     const sourceFile = this.getSourceFile(params.textDocument.uri)
@@ -853,7 +808,6 @@ export class LspServer {
       const statement = sourceFile.statements[i]
       if (statement.enabled) {
         state.prevStart = 0
-        // *** mark unused lines (inside disabled conditional) so they're dimmed ***
         this.semanticExpression(state, i, statement)
       }
     }
@@ -873,9 +827,6 @@ export class LspServer {
             if (symExp.isLocalType()) {
               index = SemanticToken.label
               bits |= (1 << SemanticModifier.local)
-              if (symExp.symbol?.references.length == 0) {
-                bits |= (1 << SemanticModifier.unused)
-              }
             } else if (symExp.symbol) {
               if (symExp.symbol.type == SymbolType.Macro) {
                 index = SemanticToken.macro
@@ -894,15 +845,6 @@ export class LspServer {
               if (symExp.symbol.isEntryPoint) {
                 index = SemanticToken.function    //*** only if still symbol?
                 bits |= (1 << SemanticModifier.external)
-              }
-              if (symExp.isDefinition) {
-                if (symExp.symbol.isEntryPoint) {
-                  // NOTE: for now, don't ever mark entry points as unused
-                  // TODO: revisit once entry points are linked project-wide
-                } else if (symExp.symbol.references.length == 0) {
-                  // *** only apply if within full project ???
-                  bits |= (1 << SemanticModifier.unused)
-                }
               }
             } else {
               // TODO: what if label doesn't have symbol?
@@ -967,54 +909,7 @@ export class LspServer {
     }
   }
 
-
-  // TODO: move some of this into sourceFile?
-  private getCommentHeader(atFile: SourceFile, atLine: number): string | undefined {
-
-    // scan up from hover line looking for comment blocks
-    let startLine = atLine
-    while (startLine > 0) {
-      startLine -= 1
-      const token = atFile.statements[startLine].children[0]
-
-      // include empty statements
-      if (token == undefined) {
-        continue
-      }
-
-      // stop when first non-comment statement found
-      if (!(token instanceof Token) || token.type != TokenType.Comment) {
-        startLine += 1
-        break
-      }
-    }
-
-    while (startLine < atLine) {
-      const sourceLine = atFile.statements[startLine].sourceLine;
-      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-        break;
-      }
-      startLine += 1;
-    }
-
-    while (atLine > startLine) {
-      const sourceLine = atFile.statements[atLine - 1].sourceLine;
-      if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-        break;
-      }
-      atLine -= 1;
-    }
-
-    if (startLine != atLine) {
-      let header = "```  \n"
-      for (let i = startLine; i < atLine; i += 1) {
-        const statement = atFile.statements[i]
-        header += statement.sourceLine + "  \n"
-      }
-      header += "```"
-      return header
-    }
-  }
+  //----------------------------------------------------------------------------
 }
 
 //------------------------------------------------------------------------------

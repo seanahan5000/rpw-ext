@@ -83,11 +83,11 @@ export class Symbol {
 
   // get symbol name without scope, local prefix, or trailing ":"
   //  (mainly used to rename symbols)
-  getSimpleNameToken(): Token {
-    let index = this.definition.children.length - 1
-    let token = this.definition.children[index]
+  getSimpleNameToken(symExp: SymbolExpression): Token {
+    let index = symExp.children.length - 1
+    let token = symExp.children[index]
     if (index > 0 && token.getString() == ":") {
-      token = this.definition.children[index - 1]
+      token = symExp.children[index - 1]
     }
     return <Token>token
   }

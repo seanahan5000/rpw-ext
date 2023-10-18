@@ -61,7 +61,6 @@ export type KeywordDef = {
 }
 
 export class SyntaxDef {
-// *** maps instead ***
   public keywordMap: Map<string, KeywordDef> = new Map<string, KeywordDef>()
   public unaryOpMap: Map<string, OpDef> = new Map<string, OpDef>()
   public binaryOpMap: Map<string, OpDef> = new Map<string, OpDef>()

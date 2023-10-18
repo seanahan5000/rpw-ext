@@ -35,7 +35,7 @@ class EditCollection {
 
 export function renameSymbol(symbol: Symbol, newName: string): FileEdits | undefined {
   let edits = new EditCollection()
-  const oldName = symbol.getSimpleNameToken().getString()
+  const oldName = symbol.getSimpleNameToken(symbol.definition).getString()
   renameSymbolDefAndRefs(symbol, oldName, newName, edits)
   return edits.fileEdits.size ? edits.fileEdits : undefined
 }
@@ -141,7 +141,7 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
       continue
     }
 
-    const oldName = symbol.getSimpleNameToken().getString()
+    const oldName = symbol.getSimpleNameToken(statement.labelExp).getString()
     if (!isSimpleLocal(oldName)) {
       continue
     }

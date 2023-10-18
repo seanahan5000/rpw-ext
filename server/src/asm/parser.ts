@@ -241,12 +241,12 @@ export class Parser extends Tokenizer {
             statement = this.parseMacroInvoke(token)
             if (!statement) {
               token.setError("Unexpected token")
-              statement = this.initStatement(new stm.Statement(), token)
+              statement = this.initStatement(new stm.GenericStatement(), token)
             }
           }
         }
       } else {
-        statement = this.initStatement(new stm.Statement())
+        statement = this.initStatement(new stm.GenericStatement())
       }
     }
     statement.parse(this)
@@ -336,7 +336,7 @@ export class Parser extends Tokenizer {
           statement = keyword.create()
         } else {
           // TODO: remove this and make all syntax table entries create the correct type
-          statement = new stm.Statement()
+          statement = new stm.GenericStatement()
         }
       }
     }
