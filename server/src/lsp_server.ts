@@ -39,7 +39,7 @@ export enum SemanticToken {
 
 export enum SemanticModifier {
   local     = 0,
-  global    = 1,
+  global    = 1,      // TODO: make use of this?
   external  = 2
 }
 
@@ -189,17 +189,9 @@ class LspProject extends Project {
     if (document) {
       return document.getText()
     }
-    // if no open document, got look in file system
+    // if no open document, go look in file system
     return super.getFileContents(fullPath)
   }
-
-  // updateDiagnostics() {
-  //   this.modules.forEach(module => {
-  //     module.sourceFiles.forEach(sourceFile => {
-  //       this.server.updateDiagnostics(sourceFile)
-  //     })
-  //   })
-  // }
 }
 
 //------------------------------------------------------------------------------
@@ -323,11 +315,6 @@ export class LspServer {
     }
 
     this.updateProjects()
-
-    // *** send diagnostics on all updated files (just once) ***
-    // for (let i = 0; i < this.projects.length; i += 1) {
-    //   this.projects[i].updateDiagnostics()
-    // }
   }
 
   // *** think about cancellation token support ***
@@ -429,8 +416,6 @@ export class LspServer {
     }
   }
 
-  // *** how to suppress default completion values from file? ***
-
   async onCompletion(params: lsp.CompletionParams, cancelToken?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
 
     let sourceFile: SourceFile | undefined
@@ -447,12 +432,17 @@ export class LspServer {
       }
     }
     if (!sourceFile || !statement) {
-      // *** this is preventing all completions, including defaults ***
       return lsp.CompletionList.create([], false)
     }
 
     const comp = new Completions()
-    const completions = comp.scan(sourceFile, statement, params.position.character)
+    let completions = comp.scan(sourceFile, statement, params.position.character)
+    if (!completions) {
+      // return a fake completion that will prevent default suggestions
+      let item = lsp.CompletionItem.create("_")
+      item.kind = lsp.CompletionItemKind.Text
+      completions = [item]
+    }
     const isIncomplete = false
     return lsp.CompletionList.create(completions, isIncomplete)
   }
@@ -541,7 +531,6 @@ export class LspServer {
     return foldingRanges
   }
 
-  // TODO: if symbol is an entry point, walk all modules of project
   async onHover(params: lsp.TextDocumentPositionParams, token?: lsp.CancellationToken): Promise<lsp.Hover> {
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
@@ -733,7 +722,7 @@ export class LspServer {
             const diagRange = lsp.Range.create(
               state.lineNumber, expRange.start,
               state.lineNumber, expRange.end)
-            const diag = lsp.Diagnostic.create(diagRange, "Unused label")
+            const diag = lsp.Diagnostic.create(diagRange, "Unreferenced label")
             diag.tags = [lsp.DiagnosticTag.Unnecessary]
             diag.severity = lsp.DiagnosticSeverity.Hint
             state.diagnostics.push(diag)
@@ -741,6 +730,8 @@ export class LspServer {
           }
         }
       }
+
+      // TODO: for any duplicate symbol, add information link back to definition
     }
 
     for (let i = 0; i < expression.children.length; i += 1) {

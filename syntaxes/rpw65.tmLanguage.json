@@ -1,32 +1,132 @@
 {
-	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-	"name": "RPW 6502",
-	"patterns": [
-		{
-			"include": "#keywords"
-		},
-		{
-			"include": "#strings"
-		}
-	],
-	"repository": {
-		"keywords": {
-			"patterns": [{
-				"name": "keyword.control.rpw65",
-				"match": "\\b(if|while|for|return)\\b"
-			}]
-		},
-		"strings": {
-			"name": "string.quoted.double.rpw65",
-			"begin": "\"",
-			"end": "\"",
-			"patterns": [
-				{
-					"name": "constant.character.escape.rpw65",
-					"match": "\\\\."
-				}
-			]
-		}
-	},
-	"scopeName": "source.rpw65"
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "source.rpw65",
+  "name": "rpw65",
+  "patterns": [
+    {
+      "include": "#keywords-merlin"
+    },
+    {
+      "include": "#mnemonics-6502"
+    },
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.rpw65",
+          "begin": "^;",
+          "end": "\\n"
+        },
+        {
+          "name": "comment.line.rpw65",
+          "begin": "\\s;",
+          "end": "\\n"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.rpw65",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "include": "#string-character-escape"
+            }
+          ]
+        }
+      ]
+    },
+    "string-character-escape": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.rpw65",
+          "match": "\\[n]"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.hexadecimal.rpw65",
+          "match": "\\$\\h+"
+        },
+        {
+          "name": "constant.numeric.integer.binary.rpw65",
+          "match": "%[01]+"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.rpw65",
+          "match": "\\-?\\d+"
+        }
+      ]
+    },
+    "keywords-merlin": {
+      "patterns": [
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:EQU|ORG|ERR|XC|ENT)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:PUT|USE|SAV|DSK)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:MAC|EOM|DUM|DUMMY|DEND|USR|LUP)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:DB|DFB|DDB|DW|DA|DS|HEX)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:ASC|DCI|REV|STR)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:DO|ELSE|FIN)\\s"
+        }
+      ]
+    },
+    "mnemonics-6502": {
+      "patterns": [
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:LDA|LDX|LDY|STA|STX|STY)\\s"
+        },
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:TAX|TAY|TXA|TYA|TSX|TXS|PHA|PHP|PLA|PLP)\\s"
+        },
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:AND|EOR|ORA|BIT|ADC|SBC|CMP|CPX|CPY)\\s"
+        },
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:INC|INX|INY|DEC|DEX|DEY|ASL|LSR|ROL|ROR)\\s"
+        },
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:JMP|JSR|RTS|BCC|BCS|BEQ|BMI|BNE|BPL|BVC|BVS)\\s"
+        },
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:CLC|CLD|CLI|CLV|SEC|SED|SEI|BRK|NOP|RTI)\\s"
+        }
+      ]
+    }
+  }
 }

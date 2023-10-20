@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-// TODO: get these from settings
+// TODO: get these from settings or pass them in
 // NOTE: code assumes first column is always 0
 const tabColumns: number[] = [ 0, 16, 20, 40 ];
 
@@ -19,9 +19,9 @@ function findCommentStart(lineText: string): number {
 	while (commentStart < lineText.length) {
 		const c = lineText[commentStart];
 		if (c == ";" && (prevChar == " " || prevChar == "\t" || prevChar == "")) {
-			break; 
+			break
 		} else if (c == "*" && prevChar == "") {
-			break;
+			break
 		}
 		prevChar = c;
 		commentStart += 1;
@@ -29,16 +29,15 @@ function findCommentStart(lineText: string): number {
 	return commentStart;
 }
 
-function findTextStart(lineText: string): number {
-	let textStart = 0;
+function findTextStart(lineText: string, textStart = 0): number {
 	while (textStart < lineText.length) {
-		const c = lineText[textStart];
+		const c = lineText[textStart]
 		if (c != " " && c != "\t") {
-			break;
+			break
 		}
-		textStart += 1;
+		textStart += 1
 	}
-	return textStart;
+	return textStart
 }
 
 // get tab column *before* current position or 0 if at start
@@ -81,20 +80,32 @@ function getNextTabColumn(ch: number): number {
 	// use first non-space to pick stop
 
 export async function tabIndentCmd(shift: boolean) {
-	const editor = vscode.window.activeTextEditor;
+	const editor = vscode.window.activeTextEditor
+	const oldSelections = editor.selections
+	const newSelections: vscode.Selection[] = []
+
 	editor.edit(edit => {
-		for (let i = 0; i < editor.selections.length; i += 1) {
-			const selection = editor.selections[i];
-			const startLine = selection.start.line;
-			let endLine = selection.end.line;
+		for (let selection of oldSelections) {
+			const startLine = selection.start.line
+			let endLine = selection.end.line
 			if (shift) {
 				if (startLine != endLine && selection.end.character == 0) {
 					endLine -= 1;
 				}
 				for (let line = startLine; line <= endLine; line += 1) {
 					const lineText = getLineText(editor, line);
-					const textStart = findTextStart(lineText);
-					const startChar = getPrevTabColumn(textStart);
+					const textStart = findTextStart(lineText)
+					let startChar
+					if (shift) {
+						// shift-tab ignores tabstops so misalignment is possible
+						let delta = textStart % 4
+						if (delta == 0 && textStart > 0) {
+							delta = 4
+						}
+						startChar = textStart - delta
+					} else {
+						startChar = getPrevTabColumn(textStart)
+					}
 					const range = new vscode.Range(line, startChar, line, textStart);
 					edit.delete(range);
 				}
@@ -113,24 +124,28 @@ export async function tabIndentCmd(shift: boolean) {
 				// if selection is empty or is only part of a single line,
 				//	treat as a normal tab
 				if (startLine == endLine) {
-					const ch = selection.start.character;
-					const lineText = getLineText(editor, startLine);
-					const commentStart = findCommentStart(lineText);
-					let end: number;
+					const ch = selection.start.character
+					const lineText = getLineText(editor, startLine)
+					let commentStart = findCommentStart(lineText)
+					let end: number
 					if (ch <= commentStart) {
-						end = getNextTabColumn(ch);
+						end = getNextTabColumn(ch)
+						// consume whitespace to align next text to next tab column
+						const textStart = findTextStart(lineText, selection.end.character)
+						selection = new vscode.Selection(startLine, ch, startLine, textStart)
 					} else {
-						end = ch + (4 - (ch % 4));
+						end = ch + (4 - (ch % 4))
 					}
-					let indent = "".padEnd(end - ch, " ");
+					let indent = "".padEnd(end - ch, " ")
 					// if tabbing to comment column, also add ";"
-					// *** keep this? ***
 					if (end == tabColumns[tabColumns.length - 1]) {
 						if (ch + 1 == lineText.length) {
-							indent += ";";
+							indent += ";"
+							end += 1
 						}
 					}
-					edit.replace(selection, indent);
+					edit.replace(selection, indent)
+					selection = new vscode.Selection(startLine, end, startLine, end)
 				} else {
 					for (let line = startLine; line < endLine; line += 1) {
 						const lineText = getLineText(editor, line);
@@ -138,12 +153,16 @@ export async function tabIndentCmd(shift: boolean) {
 						const end = getNextTabColumn(textStart);
 						const position = new vscode.Position(line, textStart);
 						const indent = "".padEnd(end - textStart, " ");
-						edit.insert(position, indent);
+						edit.insert(position, indent)
+						selection = new vscode.Selection(startLine, end, startLine, end)
 					}
 				}
 			}
+
+			newSelections.push(new vscode.Selection(selection.anchor, selection.active))
 		}
-	});
+	})
+	editor.selections = newSelections
 }
 
 // partial line, delete selection
@@ -191,4 +210,40 @@ export async function delIndentCmd() {
 			}
 		}
 	});
+}
+
+export async function arrowIndentCmd(left: boolean) {
+	const moveBy = { to: left ? "left" : "right", by: "character", value: 1 }
+	const editor = vscode.window.activeTextEditor
+	const sel = editor.selections[0]
+	if (sel.start.line == sel.end.line) {
+		const lineText = getStartLineText(editor)
+		const commentStart = findCommentStart(lineText);
+		const ch = left ? sel.start.character : sel.end.character
+		let pos = ch
+		if (left) {
+			if (ch <= commentStart) {
+				const stop = getPrevTabColumn(ch)
+				while (pos > stop) {
+					if (lineText[pos - 1] != " ") {
+						break
+					}
+					pos -= 1
+				}
+				moveBy.value = Math.max(ch - pos, 1)
+			}
+		} else {
+			if (ch < commentStart) {
+				const stop = getNextTabColumn(ch)
+				while (pos < stop) {
+					if (lineText[pos] != " ") {
+						break
+					}
+					pos += 1
+				}
+				moveBy.value = Math.max(pos - ch, 1)
+			}
+		}
+	}
+	vscode.commands.executeCommand("cursorMove", moveBy)
 }

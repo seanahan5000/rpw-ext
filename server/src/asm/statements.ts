@@ -143,6 +143,16 @@ export class OpStatement extends Statement {
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
         this.opExpression = parser.mustAddNextExpression()
+
+        // temporary hack while upgrading Naja sources to new graphics
+        // *** put a switch around this ***
+        if (this.opNameLC == "ora") {
+          const value = this.opExpression.resolve()
+          if (value == 0x20 || value == 0x40) {
+            this.opExpression.setWarning("FIXME")
+          }
+        }
+
       } else if (str == "/") {			// same as "#>"
         parser.addToken(token)
         if (this.opcode.IMM === undefined) {

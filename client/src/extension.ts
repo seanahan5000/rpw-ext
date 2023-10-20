@@ -44,10 +44,12 @@ export function activate(context: vscode.ExtensionContext) {
 	client = new LanguageClient('rpw65', 'RPW 6502', serverOptions, clientOptions);
 	client.start();		// also starts server
 
-	context.subscriptions.push(vscode.commands.registerCommand("rpw65.renumberLocals", renumberCmd));
-	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabIndent", () => { cmd.tabIndentCmd(false); }));
-	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabOutdent", () => { cmd.tabIndentCmd(true); }));
-	context.subscriptions.push(vscode.commands.registerCommand("rpw65.delIndent", cmd.delIndentCmd));
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.renumberLocals", renumberCmd))
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabIndent", () => { cmd.tabIndentCmd(false) }))
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabOutdent", () => { cmd.tabIndentCmd(true) }))
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.delIndent", cmd.delIndentCmd))
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.leftArrowIndent", () => { cmd.arrowIndentCmd(true) }))
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.rightArrowIndent", () => { cmd.arrowIndentCmd(false) }))
 }
 
 export function deactivate(): Thenable<void> | undefined {

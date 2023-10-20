@@ -48,6 +48,13 @@
 				"configuration": "./language-configuration.json"
 			}
 		],
+		"grammars": [
+			{
+				"language": "rpw65",
+				"scopeName": "source.rpw65",
+				"path": "./syntaxes/rpw65.tmLanguage.json"
+			}
+		],
 		"menus": {
 			"editor/context": [
 				{
@@ -75,7 +82,7 @@
 				"title": "Return Indentation"
 			}
 		],
-		"keybindings":[
+		"keybindings": [
 			{
 				"command": "rpw65.tabIndent",
 				"key": "tab",
@@ -89,6 +96,16 @@
 			{
 				"command": "rpw65.delIndent",
 				"key": "backspace",
+				"when": "resourceLangId == rpw65 && editorTextFocus"
+			},
+			{
+				"command": "rpw65.leftArrowIndent",
+				"key": "left",
+				"when": "resourceLangId == rpw65 && editorTextFocus"
+			},
+			{
+				"command": "rpw65.rightArrowIndent",
+				"key": "right",
 				"when": "resourceLangId == rpw65 && editorTextFocus"
 			}
 		],

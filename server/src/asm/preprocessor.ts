@@ -1,7 +1,7 @@
 
 import { SourceFile, Module, LineRecord } from "./project"
-import { Statement, ConditionalStatement, GenericStatement, IncludeStatement } from "./statements"
-import { ScopeState, SymbolFrom } from "./symbols"
+import { Statement, ConditionalStatement, GenericStatement, IncludeStatement, MacroInvokeStatement } from "./statements"
+import { ScopeState, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression } from "./expressions"
 
 //------------------------------------------------------------------------------
@@ -223,16 +223,22 @@ export class Preprocessor {
               if (firstPass) {
                 const foundSym = this.module.symbolMap.get(symExp.fullName)
                 if (foundSym) {
-                  symExp.setError("Duplicate label")
-                  foundSym.definition.setError("Duplicate label")
+                  symExp.setError("Duplicate symbol (use Go To Definition)")
+                  // turn symExp into a reference to the original symbol
+                  symExp.symbol = foundSym
+                  symExp.isDefinition = false
+                  foundSym.addReference(symExp)
                   return
                 }
                 if (symExp.symbol) {
                   const sharedSym = this.module.project.sharedSymbols.get(symExp.fullName)
                   if (symExp.symbol.isEntryPoint) {
                     if (sharedSym) {
-                      symExp.setError("Duplicate entrypoint")
-                      sharedSym.definition.setError("Duplicate entrypoint")
+                      symExp.setError("Duplicate entrypoint (use Go To Definition)")
+                      // turn symExp into a reference to the original symbol
+                      symExp.symbol = sharedSym
+                      symExp.isDefinition = false
+                      sharedSym.addReference(symExp)
                       return
                     }
                     symExp.symbol.fullName = symExp.fullName
@@ -242,7 +248,11 @@ export class Preprocessor {
                     if (sharedSym) {
                       // this definition matches a shared symbol, so it's probably from an EXT file
                       if (symExp.symbol.from != SymbolFrom.Equate) {
-                        symExp.setError("Label conflict with entrypoint")
+                        symExp.setError("Symbol conflict with entrypoint (use Go To Definition)")
+                        // turn symExp into a reference to the original symbol
+                        symExp.symbol = sharedSym
+                        symExp.isDefinition = false
+                        sharedSym.addReference(symExp)
                         return
                       }
                       if (sharedSym.fullName) {
@@ -261,13 +271,14 @@ export class Preprocessor {
                 symExp.symbol = foundSym
                 symExp.symbolType = foundSym.type
                 symExp.fullName = foundSym.fullName
-                // *** don't add reference if line is in macro def?
                 foundSym.addReference(symExp)
-              } else if (!firstPass) {
-                // *** should also set error if this is part of a project
-                //  *** but not a standalone file
-                if (symExp.isLocalType()) {
-                  symExp.setError("Label not found")
+              } else {
+                if (symExp.isLocalType() || !this.module.project.temporary) {
+                  if (symExp.symbolType == SymbolType.Macro) {
+                    symExp.setError("Unknown macro or opcode")
+                  } else if (!firstPass) {
+                    symExp.setError("Symbol not found")
+                  }
                 }
               }
             }

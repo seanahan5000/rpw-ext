@@ -64,12 +64,20 @@ export class Completions {
   addData = 0
   addUnclassified = 0
 
-  // *** return CompletionList instead? ***
   scan(sourceFile: SourceFile, statement: Statement, position: number): lsp.CompletionItem[] | undefined {
 
     let loc: Loc | undefined
     const labelRange = statement. labelExp?.getRange()
     const opRange = statement.opExp?.getRange()
+
+    // no completions when in comment
+    for (let token of statement.children) {
+      if (token instanceof Token && token.type == TokenType.Comment) {
+        if (position >= token.start) {
+          return
+        }
+      }
+    }
 
     if (statement.opExp && opRange) {
       if (statement.labelExp && labelRange) {
@@ -323,8 +331,7 @@ export class Completions {
       }
     }
 
-    // *** return empty or undefined? ***
-    return completions
+    return completions.length ? completions : undefined
   }
 
   // *** resolve completion item ***
