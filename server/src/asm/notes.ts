@@ -1,9 +1,27 @@
 
-// - prevent opcode PLA autocompleting to PLANET, for example
-// - show comment header on Pict macro completion suggestions
-// - show all completions on invoked completion
+// *** is tmLanguage syntax hiliting broken? *** (comments) ***
 
-// "LDA #ARM_EVEN_UN+1" should give expression out of range!
+// X rename locals of ":LOOP0" doesn't work
+// X rename variable overwriting trailing "),Y"
+// X adjust sort order so SCREENL appears before SCREENH, etc.
+// X show comment header on Pict macro completion suggestions
+
+// X for opcode statement args, already starting with "(", offer "zpage),Y" completion
+// X make "(" a trigger character for zpage on opstatements
+// X add locals of current zone into completions, add ":" trigger character
+// ? show all completions on invoked completion
+
+// X "LDA #ARM_EVEN_UN+1" should give expression out of range!
+// X catch/complain about more STX ABS,Y erros
+
+// - show file name instead of "details" in completion
+
+// - fix more dbug/CodeMirror syntax colors
+// - more tmLanguage hiliting, including other syntax keywords
+
+// - fix TXT, TXC, TXI hiliting
+
+// - fix watch tab width (in dbug)
 
 // - when a file goes from inside a project to out, fully rebuild
 //  (comment out a file in an ASM. file, for example)
@@ -16,13 +34,8 @@
 
 // - convert tabs to spaces to tab columns work enough to fix tabs
 
-// - weird double error on file not found, once in project
-    // because of bad info in "asm6502 build error info"
-
 // - scan back from storage opcodes to mark labels as data
 //   (So "LABEL HEX" split into two lines still works)
-
-// - more tmLanguage hiliting, including other syntax keywords
 
 
 // editor tab size
@@ -152,9 +165,7 @@
 
 //  - make syntax hiliting work on .lst files?
 
-//  - logic to maintain columns while typing (comment-only?)
-
-// *** don't show error on file-not-found for single files
+//  X logic to maintain columns while typing (comment-only?)
 
 
 

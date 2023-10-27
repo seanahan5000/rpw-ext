@@ -12,7 +12,7 @@ export abstract class Statement extends exp.Expression {
 
   public sourceLine: string = ""
   public labelExp?: exp.SymbolExpression
-  public opExp?: exp.Expression
+  public opExp?: exp.Expression         // FIXME: easy to confuse with opExpression
   public opNameLC = ""
   public enabled = true
 
@@ -98,7 +98,7 @@ export class OpStatement extends Statement {
 
   public opcode: any
   public mode: OpMode = OpMode.NONE
-  private opExpression?: exp.Expression
+  private expression?: exp.Expression
 
   constructor(opcode: any) {
     super()
@@ -138,25 +138,25 @@ export class OpStatement extends Statement {
       } else if (str == "#") {
         parser.addToken(token)
         if (this.opcode.IMM === undefined) {
-          token.setError("Immediate mode not allowed for this opcode")
+          this.opExp?.setError("Opcode does not support this addressing mode")
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
-        this.opExpression = parser.mustAddNextExpression()
+        this.expression = parser.mustAddNextExpression()
 
         // temporary hack while upgrading Naja sources to new graphics
         // *** put a switch around this ***
         if (this.opNameLC == "ora") {
-          const value = this.opExpression.resolve()
+          const value = this.expression.resolve()
           if (value == 0x20 || value == 0x40) {
-            this.opExpression.setWarning("FIXME")
+            this.expression.setWarning("FIXME")
           }
         }
 
       } else if (str == "/") {			// same as "#>"
         parser.addToken(token)
         if (this.opcode.IMM === undefined) {
-          token.setError("Immediate mode not allowed for this opcode")
+          this.opExp?.setError("Opcode does not support this addressing mode")
         } else if (parser.syntax && parser.syntax != Syntax.LISA) {
           // *** don't bother with this message ***
           token.setError("Syntax specific to LISA assembler")
@@ -164,13 +164,13 @@ export class OpStatement extends Statement {
         }
         this.mode = OpMode.IMM
         // *** this loses the implied ">" operation
-        this.opExpression = parser.mustAddNextExpression()
+        this.expression = parser.mustAddNextExpression()
       } else if (str == "(") {
         parser.addToken(token)
         // *** check opcode has this address mode ***
         token.type = TokenType.Opcode
         this.mode = OpMode.IND
-        this.opExpression = parser.mustAddNextExpression()
+        this.expression = parser.mustAddNextExpression()
 
         let res = parser.mustAddToken([",", ")"], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
@@ -178,7 +178,7 @@ export class OpStatement extends Statement {
           res = parser.mustAddToken("x", TokenType.Opcode)
           if (res.index == 0 && res.token) {
             if (this.opcode.INDX === undefined) {
-              res.token.setError("Indirect mode not allowed for this opcode")
+              this.opExp?.setError("Opcode does not support this addressing mode")
             }
             token.type = TokenType.Opcode
           }
@@ -191,7 +191,7 @@ export class OpStatement extends Statement {
           if (!nextToken) {
             this.mode = OpMode.IND
             if (this.opcode.IND === undefined) {
-              token.setError("Indirect mode not allowed for this opcode")
+              this.opExp?.setError("Opcode does not support this addressing mode")
             }
           } else {
             token = nextToken
@@ -201,7 +201,7 @@ export class OpStatement extends Statement {
               res = parser.mustAddToken("y", TokenType.Opcode)
               if (res.index == 0 && res.token) {
                 if (this.opcode.INDY === undefined) {
-                  token.setError("Indirect mode not allowed for this opcode")
+                  this.opExp?.setError("Opcode does not support this addressing mode")
                 }
               }
             } else {
@@ -242,7 +242,7 @@ export class OpStatement extends Statement {
           }
         }
 
-        this.opExpression = parser.mustAddNextExpression(token)
+        this.expression = parser.mustAddNextExpression(token)
 
         token = parser.addNextToken()
         if (!token) {
@@ -271,10 +271,43 @@ export class OpStatement extends Statement {
     }
   }
 
+  // TODO: what is the TypeScript magic to avoid this?
+  private checkMode(): boolean {
+    switch (this.mode) {
+      case OpMode.NONE:
+        return this.opcode.NONE !== undefined
+      case OpMode.A:
+        return this.opcode.A !== undefined
+      case OpMode.IMM:
+        return this.opcode.IMM !== undefined
+      case OpMode.ZP:
+        return this.opcode.ZP !== undefined
+      case OpMode.ZPX:
+        return this.opcode.ZPX !== undefined
+      case OpMode.ZPY:
+        return this.opcode.ZPY !== undefined
+      case OpMode.ABS:
+        return this.opcode.ABS !== undefined
+      case OpMode.ABSX:
+        return this.opcode.ABSX !== undefined
+      case OpMode.ABSY:
+        return this.opcode.ABSY !== undefined
+      case OpMode.IND:
+        return this.opcode.IND !== undefined
+      case OpMode.INDX:
+        return this.opcode.INDX !== undefined
+      case OpMode.INDY:
+        return this.opcode.INDY !== undefined
+      case OpMode.BRANCH:
+        return this.opcode.BRANCH !== undefined
+    }
+    return false
+  }
+
   // called after symbols have been processed
   //  TODO: make this part of assemble phases
   postProcessSymbols(symUtils: SymbolUtils) {
-    if (this.opExpression) {
+    if (this.expression) {
       switch (this.mode) {
         case OpMode.NONE:
         case OpMode.A:
@@ -282,7 +315,13 @@ export class OpStatement extends Statement {
           break
         case OpMode.IMM:
           // mode already checked
-          symUtils.markConstants(this.opExpression)
+          symUtils.markConstants(this.expression)
+          const immValue = this.expression.resolve()
+          if (immValue !== undefined) {
+            if (immValue > 255) {
+              this.expression.setWarning("Immediate value will be truncated")
+            }
+          }
           break
         case OpMode.ZP:
         case OpMode.ZPX:
@@ -292,30 +331,33 @@ export class OpStatement extends Statement {
         case OpMode.ABS:
           if (this.opcode.BRAN) {
             this.mode = OpMode.BRANCH
-            symUtils.markCode(this.opExpression)
+            symUtils.markCode(this.expression)
             break
           }
           if (this.opNameLC == "jmp") {
-            symUtils.markCode(this.opExpression)
+            symUtils.markCode(this.expression)
             break
           }
           if (this.opNameLC == "jsr") {
-            symUtils.markSubroutine(this.opExpression)
+            symUtils.markSubroutine(this.expression)
             break
           }
           // fall through
         case OpMode.ABSX:
         case OpMode.ABSY:
-          const size = this.opExpression.getSize() ?? 0
+          const size = this.expression.getSize() ?? 0
           if (size == 1) {
             // TODO: when downgrading, handle case where opcode
             //  could be ABS but not ZP
             this.mode = this.mode - OpMode.ABS + OpMode.ZP
-            symUtils.markZPage(this.opExpression)
+            symUtils.markZPage(this.expression)
           } else {
-            symUtils.markData(this.opExpression)
+            symUtils.markData(this.expression)
           }
-          // *** check resulting mode
+          if (!this.checkMode()) {
+            // TODO: put this on an args expression instead
+            this.opExp?.setError("Opcode does not support this addressing mode")
+          }
           break
         case OpMode.IND:
           // mode already checked
@@ -323,8 +365,13 @@ export class OpStatement extends Statement {
         case OpMode.INDX:
         case OpMode.INDY:
           // mode already checked
-          symUtils.markZPage(this.opExpression)
-          // *** mark as error if too large ***
+          symUtils.markZPage(this.expression)
+          const value = this.expression.resolve()
+          if (value !== undefined) {
+            if (value > 255) {
+              this.expression.setError("Expression too large for addressing mode")
+            }
+          }
           break
         case OpMode.BRANCH:
           // will never be BRANCH at this point

@@ -7,6 +7,7 @@ import { Statement, OpStatement, OpMode } from "./asm/statements"
 import { Opcodes6502 } from "./asm/opcodes"
 import { SyntaxDefs } from "./asm/syntax"
 import { SymbolType } from "./asm/symbols"
+import { getLocalRange } from "./asm/labels"
 
 //------------------------------------------------------------------------------
 
@@ -62,14 +63,18 @@ export class Completions {
   addZpage = 0
   addCode = 0
   addData = 0
+  addLocals = 0
   addUnclassified = 0
 
-  scan(sourceFile: SourceFile, statement: Statement, position: number): lsp.CompletionItem[] | undefined {
+  scan(sourceFile: SourceFile, lineNumber: number, position: number): lsp.CompletionItem[] | undefined {
 
     let loc: Loc | undefined
-    const labelRange = statement. labelExp?.getRange()
+    const statement = sourceFile.statements[lineNumber]
+    const labelRange = statement.labelExp?.getRange()
     const opRange = statement.opExp?.getRange()
     let checkXY = false
+    let checkInd = false
+    let appendIndY = false
 
     // no completions when in comment
     for (let token of statement.children) {
@@ -79,6 +84,8 @@ export class Completions {
         }
       }
     }
+
+    const prevChar = statement.sourceLine[position - 1] ?? ""
 
     if (statement.opExp && opRange) {
       if (statement.labelExp && labelRange) {
@@ -112,21 +119,22 @@ export class Completions {
       loc = Loc.afterLabel
     }
 
+    let index = 0
     if (loc == Loc.inLabel) {
       // use default completions
       // TODO: addKeywords if syntax supports them in column 0
     } else if (loc == Loc.afterLabel) {
       // new opcode completions
-      this.addMacros = 1
-      this.addKeywords = 2
-      this.addOpcodes = 3
+      this.addMacros = ++index
+      this.addKeywords = ++index
+      this.addOpcodes = ++index
     } else if (loc == Loc.beforeOpcode) {
       // use default completions
     } else if (loc == Loc.inOpcode) {
       // might depend on statement type
-      this.addMacros = 1
-      this.addKeywords = 2
-      this.addOpcodes = 3
+      this.addMacros = ++index
+      this.addKeywords = ++index
+      this.addOpcodes = ++index
     } else if (loc == Loc.afterOpcode || loc == Loc.inArgs) {
       // initial args completions
       if (statement instanceof OpStatement) {
@@ -138,12 +146,12 @@ export class Completions {
             // NOTE: nothing has been typed yet to assign a mode,
             //  so everything is possible at this point
             if (statement.opNameLC == "jsr" || statement.opNameLC == "jmp") {
-              this.addCode = 1
-              this.addUnclassified = 2
+              this.addCode = ++index
+              this.addUnclassified = ++index
             } else {
-              this.addZpage = 1
-              this.addData = 2
-              this.addUnclassified = 3
+              this.addZpage = ++index
+              this.addData = ++index
+              this.addUnclassified = ++index
             }
           }
         } else {
@@ -153,70 +161,80 @@ export class Completions {
               // TODO: how to force none?
               break
             case OpMode.IMM:
-              this.addConstants = 1
-              this.addUnclassified = 2
+              this.addConstants = ++index
+              this.addUnclassified = ++index
               // TODO: how to limit these to just #< and #> ?
-              this.addData = 3
-              this.addCode = 4
+              this.addData = ++index
+              this.addCode = ++index
               break
             case OpMode.ZP:
-              this.addZpage = 1
-              this.addUnclassified = 3
+              this.addZpage = ++index
+              this.addUnclassified = ++index
               break
             case OpMode.ABS:
               if (statement.opNameLC == "jsr" || statement.opNameLC == "jmp") {
-                this.addCode = 1
-                this.addUnclassified = 2
+                // TODO: handle both zone and cheap locals
+                if (prevChar == ":") {
+                  this.addLocals = ++index
+                } else {
+                  this.addCode = ++index
+                  this.addUnclassified = ++index
+                }
               } else {
-                this.addZpage = 1
-                this.addData = 2
-                this.addUnclassified = 3
+                this.addZpage = ++index
+                this.addData = ++index
+                this.addUnclassified = ++index
               }
               break
             case OpMode.ZPX:
             case OpMode.ZPY:
             case OpMode.ABSX:
             case OpMode.ABSY:
-              this.addData = 1
-              this.addZpage = 2
-              this.addUnclassified = 3
+              this.addData = ++index
+              this.addZpage = ++index
+              this.addUnclassified = ++index
               checkXY = true
               break
             case OpMode.IND:
-              this.addZpage = 1
-              this.addData = 2
-              this.addUnclassified = 3
+              this.addZpage = ++index
+              this.addData = ++index
+              this.addUnclassified = ++index
+              checkInd = true
               break
             case OpMode.INDX:
             case OpMode.INDY:
-              this.addZpage = 1
-              this.addUnclassified = 2
+              this.addZpage = ++index
+              this.addUnclassified = ++index
               checkXY = true
               break
             case OpMode.BRANCH:
               // TODO: constrain to only close-by code
-              // TODO: could also include in zone locals
-              this.addCode = 1
-              this.addUnclassified = 2
+              // TODO: handle both zone and cheap locals
+              if (prevChar == ":") {
+                this.addLocals = ++index
+              } else {
+                this.addCode = ++index
+                this.addUnclassified = ++index
+              }
               break
           }
         }
       } else {
         // TODO: need better auto completes based on keyword
         // TODO: better completes for macros
-        this.addConstants = 1
-        this.addZpage = 2
-        this.addData = 3
-        this.addCode = 4
-        this.addUnclassified = 5
+        this.addConstants = ++index
+        this.addZpage = ++index
+        this.addData = ++index
+        this.addCode = ++index
+        this.addUnclassified = ++index
       }
     } else if (loc == Loc.beforeArgs || loc == Loc.afterArgs) {
       // TODO: make this much smarter using expression evaluation state
-      this.addConstants = 1
-      this.addZpage = 2
-      this.addData = 3
-      this.addCode = 4
-      this.addUnclassified = 5
+      this.addConstants = ++index
+      this.addZpage = ++index
+      this.addData = ++index
+      this.addCode = ++index
+      this.addUnclassified = ++index
     }
 
     // if "X" or "Y" at the end of an indirect opcode triggered
@@ -235,6 +253,10 @@ export class Completions {
           }
           break
         }
+      }
+    } else if (checkInd) {
+      if (prevChar == "(") {
+        appendIndY = true
       }
     }
 
@@ -306,8 +328,28 @@ export class Completions {
           if (!this.addZpage) {
             continue
           }
-          item = lsp.CompletionItem.create(key)
-          item.sortText = `${this.addZpage}_${key}`
+
+          // Reorder ZPAGE pointer names that end in L(ow) and H(igh),
+          //  so that the L name comes first -- better default for (DATAL),Y
+          // TODO: tie to Naja-only setting?
+          const lastIndex = key.length - 1
+          let lastChar = key[lastIndex].toLowerCase()
+          if (lastChar == "l") {
+            lastChar = "h"
+          } else if (lastChar == "h") {
+            lastChar = "l"
+          }
+          const sortKey = key.substring(0, lastIndex) + lastChar + key.substring(lastIndex)
+
+          let keyText = key
+          if (appendIndY) {
+            keyText = keyText + "),y"
+            if (sourceFile.module.project.upperCase) {
+              keyText = keyText.toUpperCase()
+            }
+          }
+          item = lsp.CompletionItem.create(keyText)
+          item.sortText = `${this.addZpage}_${sortKey}`
           item.kind = lsp.CompletionItemKind.Variable
         } else if (symbol.isData) {
           if (!this.addData) {
@@ -346,16 +388,37 @@ export class Completions {
         // *** item.labelDetails = { detail: " label det", description: "label det desc" }
 
         // *** consider adding source file name where found, in details ***
+        item.detail = "details" // TODO: kind? filename?, etc?
 
         item.data = { filePath: symbol.definition.sourceFile?.fullPath, line: symbol.definition.lineNumber }
         completions.push(item)
       }
     }
 
+    // scan for locals near given statement
+    // TODO: do both cheap and zone locals based on trigger character
+    if (this.addLocals) {
+      const symbolType = SymbolType.CheapLocal
+      const range = getLocalRange(sourceFile, lineNumber, symbolType)
+      for (let i = range.startLine; i < range.endLine; i += 1) {
+        const symExp = sourceFile.statements[i].labelExp
+        if (symExp) {
+          const symbol = symExp.symbol
+          if (symbol && symbol.type == symbolType) {
+            const token = symbol.getSimpleNameToken(symExp)
+            const localName = token.getString()
+            const item = lsp.CompletionItem.create(localName)
+            item.sortText = `${this.addLocals}_${localName}`
+            item.kind = lsp.CompletionItemKind.Function
+            completions.push(item)
+          }
+        }
+      }
+    }
+
     return completions.length ? completions : undefined
   }
 
-  // *** resolve completion item ***
   static resolve(server: LspServer, item: lsp.CompletionItem): lsp.CompletionItem {
     if (item.data && item.data.filePath) {
       const sourceFile = server.findSourceFile(item.data.filePath)

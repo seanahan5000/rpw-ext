@@ -48,47 +48,38 @@ export function renumberLocals(sourceFile: SourceFile, startLine: number, endLin
   return edits.fileEdits.size ? edits.fileEdits : undefined
 }
 
-
-function renumberLocalType(sourceFile: SourceFile, startLine: number,
-  endLine: number, edits: EditCollection, symbolType: SymbolType) {
+export function getLocalRange(sourceFile: SourceFile, startLine: number,
+    symbolType: SymbolType): { startLine: number, endLine: number } {
 
   // scan backwards for zone/cheap start
-  let limitLine = startLine
-  while (limitLine >= 0) {
-    const statement = sourceFile.statements[limitLine]
+  while (startLine > 0) {
+    const statement = sourceFile.statements[startLine]
     if (isLocalStart(statement, symbolType) || !statement.enabled) {
       break
     }
-    limitLine -= 1
+    startLine -= 1
   }
 
-  // if no zone/cheap start found, scan forward for one
-  if (limitLine < 0) {
-    limitLine = startLine
-    while (limitLine < endLine) {
-      if (isLocalStart(sourceFile.statements[limitLine], symbolType)) {
-        break
-      }
-      limitLine += 1
+  // scan forward to zone/cheap end
+  let endLine = startLine + 1
+  while (endLine < sourceFile.statements.length) {
+    const statement = sourceFile.statements[endLine]
+    if (isLocalStart(statement, symbolType) || !statement.enabled) {
+      break
     }
-    if (limitLine >= endLine) {
-      return
-    }
+    endLine += 1
   }
 
-  startLine = limitLine
+  return { startLine, endLine }
+}
+
+
+function renumberLocalType(sourceFile: SourceFile, startLine: number,
+    endLine: number, edits: EditCollection, symbolType: SymbolType) {
   while (startLine < endLine) {
-    // scan forward to next zone/cheap or eof
-    limitLine = startLine + 1
-    while (limitLine < sourceFile.statements.length) {
-      const statement = sourceFile.statements[limitLine]
-      if (isLocalStart(statement, symbolType) || !statement.enabled) {
-        break
-      }
-      limitLine += 1
-    }
-    renumberRange(sourceFile, startLine, limitLine, symbolType, edits)
-    startLine = limitLine
+    const range = getLocalRange(sourceFile, startLine, symbolType)
+    renumberRange(sourceFile, range.startLine, range.endLine, symbolType, edits)
+    startLine = range.endLine
   }
 }
 
@@ -144,8 +135,12 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
     }
 
     const oldName = symbol.getSimpleNameToken(statement.labelExp).getString()
-    if (!isSimpleLocal(oldName)) {
-      continue
+    const simpleIndex = parseInt(oldName)
+    if (simpleIndex != simpleIndex) {   // NaN != NaN
+      // look for :SKIPA and :LOOP1 locals, common in old Naja source code
+      if (!oldName.startsWith("SKIP") && !oldName.startsWith("LOOP")) {
+        continue
+      }
     }
 
     let newName: string | undefined
@@ -176,24 +171,6 @@ function renameSymbolDefAndRefs(symbol: Symbol, oldName: string,
 }
 
 
-// Return true if local is a simple number or if it's of the form
-//  :SKIPA and :LOOP1 (common in old Naja source code)
-// TODO: remove this feature once all old code has been updated
-function isSimpleLocal(nameStr: string): boolean {
-  let index = parseInt(nameStr)
-  if (index != index) {   // NaN != NaN
-    if (nameStr.length != 6) {
-      return false
-    }
-    let root = nameStr.substring(1, 5)
-    if (root != "SKIP" && root != "LOOP") {
-      return false
-    }
-  }
-  return true
-}
-
-
 function renameSymExp(symExp: SymbolExpression, oldName: string,
     newName: string | undefined, edits: EditCollection) {
   const statement = symExp.sourceFile?.statements[symExp.lineNumber]
@@ -216,7 +193,7 @@ function renameSymExp(symExp: SymbolExpression, oldName: string,
     let oldSize = editEnd - editStart
     // grow old selection to match new name, while space available
     while (editText.length > oldSize) {
-      if (statement.sourceLine[oldSize] != " ") {
+      if (statement.sourceLine[editStart + oldSize] != " ") {
         break
       }
       oldSize += 1

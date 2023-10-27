@@ -29,6 +29,11 @@
         },
         {
           "name": "comment.line.rpw65",
+          "begin": "^\\*",
+          "end": "\\n"
+        },
+        {
+          "name": "comment.line.rpw65",
           "begin": "\\s;",
           "end": "\\n"
         }

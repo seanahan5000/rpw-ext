@@ -268,10 +268,10 @@ export class LspServer {
 
   onInitialize(params: lsp.InitializeParams): void {
 
-    const n = 1
-    while (n) {
-      console.log()  // ***
-    }
+    // const n = 1
+    // while (n) {
+    //   console.log()  // ***
+    // }
 
     if (params.workspaceFolders) {
       // *** walk each folder -- or don't support multiple folders ***
@@ -437,7 +437,7 @@ export class LspServer {
     }
 
     const comp = new Completions()
-    let completions = comp.scan(sourceFile, statement, params.position.character)
+    let completions = comp.scan(sourceFile, params.position.line, params.position.character)
     if (!completions) {
       // return a fake completion that will prevent default suggestions
       let item = lsp.CompletionItem.create("_")

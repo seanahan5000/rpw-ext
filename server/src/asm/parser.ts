@@ -319,11 +319,14 @@ export class Parser extends Tokenizer {
       for (let i = 1; i < SyntaxDefs.length; i += 1) {
         if (!this.syntax || i == this.syntax) {
           const k = SyntaxDefs[i].keywordMap.get(keywordLC)
-          if (k !== undefined) {
+          if (k) {
+            if (keyword && !k.create) {
+              continue
+            }
             keyword = k
-            // *** count match ***
-            // *** track likelySyntax by keyword matches in only one syntax
-            // *** could change likelySyntax for each line?
+            // TODO: Count number of matches and track likelySyntax
+            //  based on keyword matches in only one syntax.
+            //  Could change likelySyntax for each line?
             if (this.syntax) {
               break
             }
