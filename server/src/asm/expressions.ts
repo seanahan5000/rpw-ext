@@ -433,6 +433,14 @@ export class PcExpression extends Expression {
 
 //------------------------------------------------------------------------------
 
+export class FileNameExpression extends Expression {
+  constructor(token: Token) {
+    super([token])
+  }
+}
+
+//------------------------------------------------------------------------------
+
 export class VarExpression extends Expression {
 
   // first token in set is bracket, second is name

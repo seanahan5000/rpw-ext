@@ -69,6 +69,7 @@ export class Completions {
     let loc: Loc | undefined
     const labelRange = statement. labelExp?.getRange()
     const opRange = statement.opExp?.getRange()
+    let checkXY = false
 
     // no completions when in comment
     for (let token of statement.children) {
@@ -179,6 +180,7 @@ export class Completions {
               this.addData = 1
               this.addZpage = 2
               this.addUnclassified = 3
+              checkXY = true
               break
             case OpMode.IND:
               this.addZpage = 1
@@ -189,6 +191,7 @@ export class Completions {
             case OpMode.INDY:
               this.addZpage = 1
               this.addUnclassified = 2
+              checkXY = true
               break
             case OpMode.BRANCH:
               // TODO: constrain to only close-by code
@@ -216,8 +219,26 @@ export class Completions {
       this.addUnclassified = 5
     }
 
+    // if "X" or "Y" at the end of an indirect opcode triggered
+    //  a completion, don't return any results
+    if (checkXY && position > 1) {
+      let p = position
+      const prevCharLC = statement.sourceLine[--p].toLowerCase()
+      if (prevCharLC == "x" || prevCharLC == "y") {
+        while (p > 0) {
+          const c = statement.sourceLine[--p]
+          if (c == " " || c == "\t") {
+            continue
+          }
+          if (c == ",") {
+            return
+          }
+          break
+        }
+      }
+    }
+
     const completions: lsp.CompletionItem[] = []
-    const isIncomplete = false
 
     if (this.addOpcodes) {
       for (let key in Opcodes6502) {

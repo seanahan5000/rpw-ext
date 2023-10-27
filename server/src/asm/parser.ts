@@ -49,12 +49,12 @@
 
 //               MERLIN  DASM  CA65  ACME  LISA  SBASM
 //  --------     ------  ----  ----  ----  ----  -----
-//  !keyword                         ACME 
+//  !keyword                         ACME
 //  .keyword                   CA65              SBASM
 //  :local       MERLIN
 //  :macrolocal                                  SBASM
 //  .local               DASM        ACME        SBASM
-//  @local                     CA65 
+//  @local                     CA65
 //  label:                     CA65
 //  +/-                              ACME
 //  ^#,<#,>#                               LISA
@@ -202,6 +202,7 @@ export class Parser extends Tokenizer {
     const statements = []
     this.sourceFile = sourceFile
     this.lineNumber = 0
+    this.syntax = sourceFile.module.project.syntax
     // *** macro begin/end tracking ***
     while (this.lineNumber < lines.length) {
       this.setSourceLine(lines[this.lineNumber])
@@ -411,7 +412,7 @@ export class Parser extends Tokenizer {
 
       const savedPosition = this.position
       // *** mark start and back up on some failures ***
-  
+
       if (nextChar == " " || nextChar == "\t") {    // *** tabs?
 
         // detect indented variable assignment but exclude
@@ -871,48 +872,44 @@ export class Parser extends Tokenizer {
     return new exp.StringExpression(this.endExpression())
   }
 
-  mustPushNextFileName(): Token {
+ getNextFileNameExpression(): exp.FileNameExpression | undefined {
+
     this.skipWhitespace()
-    let token = this.veryNextFileName()
-    if (token.isEmpty()) {
-      token = new Token(this.sourceLine, this.position, this.position, TokenType.Missing)
-      token.setError("Missing argument, expecting file path")
-    }
-    this.addToken(token)
-    return token
-  }
-
-  private veryNextFileName(): Token {
-
-    const token = new Token(this.sourceLine, this.position, this.position, TokenType.Null)
+    const startPosition = this.position
     if (this.position < this.sourceLine.length) {
-      let quoted = false
-      if (this.sourceLine[this.position] == '"') {
-        quoted = true
+
+      let quoteChar = this.sourceLine[this.position]
+      if (quoteChar == '"' || quoteChar == "'") {
+        // TODO: enforce/allow quotes for only some syntaxes?
         this.position += 1
+      } else {
+        quoteChar = ""
       }
 
       while (this.position < this.sourceLine.length) {
-        const code = this.sourceLine.charCodeAt(this.position)
-        if ((code >= 0x30 && code <= 0x39) ||			// 0-9
-          (code >= 0x41 && code <= 0x5A) ||		    // A-Z
-          (code >= 0x61 && code <= 0x7A) ||		    // a-z
-          code == 0x5F || code == 0x2E || code == 0x2F) { // "_" or "." or "/"
+        const nextCode = this.sourceLine.charCodeAt(this.position)
+        if ((nextCode >= 0x30 && nextCode <= 0x39) ||			// 0-9
+            (nextCode >= 0x41 && nextCode <= 0x5A) ||		  // A-Z
+            (nextCode >= 0x61 && nextCode <= 0x7A)) {		  // a-z
           this.position += 1
           continue
         }
-        if (quoted && code == 0x22) {
+        const nextChar = this.sourceLine[this.position]
+        if (nextChar == "_" || nextChar == "." || nextChar == "/") {
+          this.position += 1
+          continue
+        }
+        if (nextChar == quoteChar) {
           this.position += 1
         }
         break
       }
     }
 
-    token.end = this.position
-    if (token.length > 0) {
-      token.type = TokenType.FileName
+    if (this.position > startPosition) {
+      const token = new Token(this.sourceLine, startPosition, this.position, TokenType.FileName)
+      return new exp.FileNameExpression(token)
     }
-    return token
   }
 
   // caller has already checked for Merlin and that token == "]"

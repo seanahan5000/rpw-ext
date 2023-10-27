@@ -1,15 +1,55 @@
 
+// - prevent opcode PLA autocompleting to PLANET, for example
+// - show comment header on Pict macro completion suggestions
+// - show all completions on invoked completion
+
+// "LDA #ARM_EVEN_UN+1" should give expression out of range!
+
+// - when a file goes from inside a project to out, fully rebuild
+//  (comment out a file in an ASM. file, for example)
+
+// - selecting gap between ; and STA and tab does nothing
+//  ";   STA	SERIAL,Y"
+
+// - selecting tabs between
+//  "ARM_EVEN		HEX	80402A552A552A552A552A552A552A552A000000"
+
+// - convert tabs to spaces to tab columns work enough to fix tabs
+
+// - weird double error on file not found, once in project
+    // because of bad info in "asm6502 build error info"
+
+// - scan back from storage opcodes to mark labels as data
+//   (So "LABEL HEX" split into two lines still works)
+
+// - more tmLanguage hiliting, including other syntax keywords
+
+
+// editor tab size
+// editor insert spaces
+// editor indent size
+// editor detect indentation
+// editor use tab stops
+
+// auto-detect project settings, store in workspace?
+    // syntax
+    // opcode case
+    // keyword case?
+    // tab-stops
+
 // - provide symbol information so @DRAW_PICT works
 // - support outline view
 
-// - editing/tab handling (different for conditional statements)
-// - tab modifier to move between columns
-    // - control-tab? shift-control-tab?
+// build vsix for release
+// "vscode:prepublish": "npm run esbuild-base -- --minify",
+//  npm run compile
+//  (npm run esbuild)
+//  vsce package
+// - Add repository and license
 
-
-// ? webpack for building extension
-// ? script for building extension
 // - folding groups on macro contents
+// - folding on zone borders
+// - add folding ranges for all non-local symbol scopes
 
 // - hover/complete macro shows calling parameters and comments
 // - signatureHelpProvider for macros
@@ -21,33 +61,30 @@
     // : line number
 // Option up/down arrow to move lines
 
-// git code lens
-// paste json as code
-
 
 // Language Server Ideas
 
 // Features
 // X renumber local labels
-// * detect out of range branches
+// + detect out of range branches
 // X detect missing locals/labels
 // - .dsk file as virtual file system
 
 // Assembler
-// - be smarter about generating .lst files with macro expansion
+// + be smarter about generating .lst files with macro expansion
 
 // symbols
-    // constant versus dynamic symbol
-    // make local prefix character a variable
+    // - constant versus dynamic symbol
+    // - make local prefix character a variable
 
 // error issues
 //  - syntax errors with specific information
 //      - addressing mode not allowed, for example
 //  X missing symbol
-//  * branch out of range
+//  + branch out of range
 //  X duplicate locals
 //  X unused locals
-//  - failing ERRs, when possible
+//  + failing ERRs, when possible
 //
 // features
 //  X renumber locals
@@ -77,21 +114,21 @@
 //  - show "DUM 0" defined structure/offsets
 //
 // syntax hiliting
-//  - general hilite dimming of unused lables/constants/vars/etc.
-//  * gray out disabled conditional clauses
+//  X general hilite dimming of unused lables/constants/vars/etc.
+//  X gray out disabled conditional clauses
 //  X support collapsing code in else clauses
 //  X hilite constants differently from other symbols
 //  X hilite zpage differently than 16-bit symbols
 //  X hilite local scope symbols as well as simple locals
 //  X hilite ENT symbols differently than others
-//  - hilite differently when only found in current source file
-//  * hilite (underline?) branches that cross page boundaries
-//  - hilite tables that cross pages
+//  ? hilite differently when only found in current source file
+//  + hilite (underline?) branches that cross page boundaries
+//  + hilite tables that cross pages
 //
 // auto-complete
 //  X smart auto-complete based on instruction type
-//      - constant (LDA #), zpage (LDA), or label (LDA, JSR)
-//  - smart editing of auto-completes/snippets (more research)
+//      X constant (LDA #), zpage (LDA), or label (LDA, JSR)
+//  ? smart editing of auto-completes/snippets (more research)
 //
 // other
 //  X jump to definition for functions and data storage
@@ -99,7 +136,7 @@
 //  ? use deprecated names to show renames for legacy functions
 //
 
-//  - option to allow or warn on symbols > 13 character merlin limit
+//  ? option to allow or warn on symbols > 13 character merlin limit
 
 //  X possible to auto-complete <space> to do full indent?
 //      X take into consideration being within a comment
@@ -120,13 +157,10 @@
 // *** don't show error on file-not-found for single files
 
 
-// TODO (low-priority)
-//  - add folding ranges for all non-local symbol scopes
 
-// - hover over a label reference hilites definition?
-//  - particularly for local labels?
+// ? hover over a label reference hilites definition?
+//  ? particularly for local labels?
 
 // - hover over expression selection -- evaluate/resolve selection using parser
-
 
 // - syntax hilite all if/else clauses in a macro definition

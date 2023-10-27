@@ -55,7 +55,8 @@ function renumberLocalType(sourceFile: SourceFile, startLine: number,
   // scan backwards for zone/cheap start
   let limitLine = startLine
   while (limitLine >= 0) {
-    if (isLocalStart(sourceFile.statements[limitLine], symbolType)) {
+    const statement = sourceFile.statements[limitLine]
+    if (isLocalStart(statement, symbolType) || !statement.enabled) {
       break
     }
     limitLine -= 1
@@ -80,7 +81,8 @@ function renumberLocalType(sourceFile: SourceFile, startLine: number,
     // scan forward to next zone/cheap or eof
     limitLine = startLine + 1
     while (limitLine < sourceFile.statements.length) {
-      if (isLocalStart(sourceFile.statements[limitLine], symbolType)) {
+      const statement = sourceFile.statements[limitLine]
+      if (isLocalStart(statement, symbolType) || !statement.enabled) {
         break
       }
       limitLine += 1

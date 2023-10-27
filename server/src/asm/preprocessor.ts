@@ -130,7 +130,7 @@ export class Preprocessor {
   preprocess(fileName: string): LineRecord[] | undefined {
     const lineRecords: LineRecord[] = []
 
-    if (!this.includeFile(fileName)) {
+    if (!this.includeFile(undefined, fileName)) {
       // *** error messaging?
       return
     }
@@ -195,9 +195,14 @@ export class Preprocessor {
     return lineRecords
   }
 
-  includeFile(fileName: string): boolean {
+  includeFile(fileNameExp?: exp.FileNameExpression, fileName?: string): boolean {
+    if (!fileName) {
+      fileName = fileNameExp?.getString() || ""
+      // TODO: strip off quotes here?
+    }
     const sourceFile = this.module.openSourceFile(fileName)
     if (!sourceFile) {
+      fileNameExp?.setError("File not found")
       return false
     }
     sourceFile.parseStatements()

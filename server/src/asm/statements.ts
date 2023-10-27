@@ -181,8 +181,8 @@ export class OpStatement extends Statement {
               res.token.setError("Indirect mode not allowed for this opcode")
             }
             token.type = TokenType.Opcode
-            parser.mustAddToken(")", TokenType.Opcode)
           }
+          parser.mustAddToken(")", TokenType.Opcode)
           return
 
         } else if (res.index == 1) {        // (exp) or (exp),Y
@@ -198,17 +198,11 @@ export class OpStatement extends Statement {
             str = token.getString()
             if (str == ",") {
               token.type = TokenType.Opcode
-              token = parser.mustAddNextToken("expecting 'Y'")
-              str = token.getString().toLowerCase()
-              if (str == "y") {
+              res = parser.mustAddToken("y", TokenType.Opcode)
+              if (res.index == 0 && res.token) {
                 if (this.opcode.INDY === undefined) {
                   token.setError("Indirect mode not allowed for this opcode")
                 }
-                token.type = TokenType.Opcode
-              } else if (str == "x") {
-                token.setError("Invalid mode, expecting 'Y'")
-              } else if (str != "") {
-                token.setError("Unexpected token, expecting 'Y'")
               }
             } else {
               // *** should maybe undo this push ***
@@ -843,34 +837,35 @@ export class HexStatement extends Statement {
 
 export class IncludeStatement extends Statement {
 
-  private fileName?: string
-  private fileNameToken?: Token
+  private fileName?: exp.FileNameExpression
 
   parse(parser: Parser) {
-    const token = parser.mustPushNextFileName()
-    const fileName = token.getString()
-    if (fileName != "") {       // *** check for missing token
-      this.fileName = fileName
-      this.fileNameToken = token
+    this.fileName = parser.getNextFileNameExpression()
+    if (!this.fileName) {
+      parser.addMissingToken("Missing argument, expecting file path")
+      return
     }
+    parser.addExpression(this.fileName)
   }
 
   preprocess(preprocessor: Preprocessor) {
     if (this.fileName) {
-      if (!preprocessor.includeFile(this.fileName)) {
-        this.fileNameToken?.setError("File not found")
-      }
+      preprocessor.includeFile(this.fileName)
     }
   }
 }
 
 export class SaveStatement extends Statement {
 
-  private fileName?: string
+  private fileName?: exp.FileNameExpression
 
   parse(parser: Parser) {
-    const token = parser.mustPushNextFileName()
-    this.fileName = token.getString()
+    this.fileName = parser.getNextFileNameExpression()
+    if (!this.fileName) {
+      parser.addMissingToken("Missing argument, expecting file path")
+      return
+    }
+    parser.addExpression(this.fileName)
   }
 }
 
@@ -1148,6 +1143,64 @@ export class MacroInvokeStatement extends Statement {
   }
 
   // ***
+}
+
+//------------------------------------------------------------------------------
+
+export class DummyStatement extends Statement {
+
+  private value?: exp.Expression
+
+  parse(parser: Parser) {
+    if (this.labelExp) {
+      if (parser.syntax == Syntax.MERLIN) {
+        this.labelExp.setError("Label not allowed")
+      }
+    }
+
+    this.value = parser.mustAddNextExpression()
+  }
+}
+
+export class DummyEndStatement extends Statement {
+}
+
+//------------------------------------------------------------------------------
+
+export class ListStatement extends Statement {
+  parse(parser: Parser) {
+    const token = parser.addNextToken()
+    let options: string[] = []
+    if (this.opNameLC == "tr") {
+      options = ["on", "off"]
+    } else if (this.opNameLC == "lst") {
+      options = ["on", "off", ""]
+    } else if (this.opNameLC == "lstdo") {
+      options = ["off", ""]
+    } else if (this.opNameLC == "exp") {
+      options = ["on", "off", "only"]
+    } else if (this.opNameLC == "pag") {
+      options = [""]
+    }
+    const opStrLC = token?.getString().toLowerCase() ?? ""
+    const index = options.indexOf(opStrLC)
+    if (index < 0) {
+      let message = "expecting "
+      for (let i = 0; i < options.length; i += 1) {
+        if (i > 0) {
+          message += ", "
+        }
+        message += "'" + options[i] + "'"
+      }
+      if (token) {
+        token.setError("Unexpected token, " + message)
+      } else {
+        parser.addMissingToken(message)
+      }
+    } else if (token) {
+      token.type = TokenType.Keyword
+    }
+  }
 }
 
 //------------------------------------------------------------------------------

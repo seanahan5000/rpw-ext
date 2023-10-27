@@ -6,11 +6,12 @@ import * as fs from 'fs';
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { RpwProject, Project, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
-import { Expression, SymbolExpression } from "./asm/expressions"
+import { Expression, FileNameExpression, SymbolExpression } from "./asm/expressions"
 import { Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
+import exp = require("constants");
 
 //------------------------------------------------------------------------------
 
@@ -172,8 +173,6 @@ export class LspDocuments {
 
 //------------------------------------------------------------------------------
 
-// *** fold some of this into asm.Project ***
-
 class LspProject extends Project {
 
   private server: LspServer
@@ -203,6 +202,7 @@ type SemanticState = {
 }
 
 type DiagnosticState = {
+  sourceFile: SourceFile,
   lineNumber: number,
   diagnostics: lsp.Diagnostic[]
 }
@@ -387,6 +387,7 @@ export class LspServer {
       if (sourceFile) {
         const project = sourceFile.module.project as LspProject
         if (project && project.temporary) {
+          this.removeDiagnostics(sourceFile)
           const index = this.projects.indexOf(project)
           this.projects.splice(index, 1)
         }
@@ -670,10 +671,16 @@ export class LspServer {
 
   //----------------------------------------------------------------------------
 
+  public removeDiagnostics(sourceFile: SourceFile) {
+    this.connection.sendDiagnostics({
+      uri: URI.file(sourceFile.fullPath).toString(),
+      diagnostics: [] })
+  }
+
   public updateDiagnostics(sourceFile: SourceFile) {
 
     const diagnostics: lsp.Diagnostic[] = []
-    const state: DiagnosticState = { lineNumber: 0, diagnostics }
+    const state: DiagnosticState = { sourceFile, lineNumber: 0, diagnostics }
 
     for (let lineNumber = 0; lineNumber < sourceFile.statements.length; ) {
 
@@ -707,10 +714,6 @@ export class LspServer {
   }
 
   private diagnoseExpression(state: DiagnosticState, expression: Expression) {
-    if (expression.errorType != NodeErrorType.None) {
-      this.diagnoseNode(state, expression)
-      return
-    }
 
     // mark unused symbols as DiagnosticTag.Unnecessary
     if (expression instanceof SymbolExpression) {
@@ -720,8 +723,7 @@ export class LspServer {
           const expRange = expression.getRange()
           if (expRange) {
             const diagRange = lsp.Range.create(
-              state.lineNumber, expRange.start,
-              state.lineNumber, expRange.end)
+              state.lineNumber, expRange.start, state.lineNumber, expRange.end)
             const diag = lsp.Diagnostic.create(diagRange, "Unreferenced label")
             diag.tags = [lsp.DiagnosticTag.Unnecessary]
             diag.severity = lsp.DiagnosticSeverity.Hint
@@ -732,6 +734,36 @@ export class LspServer {
       }
 
       // TODO: for any duplicate symbol, add information link back to definition
+
+    } else if (expression instanceof FileNameExpression) {
+      if (expression.hasAnyError()) {
+        const expRange = expression.getRange()
+        if (expRange) {
+          let diagRange: lsp.Range
+          let hint: boolean
+          if (state.sourceFile.module.project.temporary) {
+            // dim out the entire line, including put/include
+            hint = true
+            diagRange = lsp.Range.create(
+              state.lineNumber, 0, state.lineNumber, expRange.end)
+          } else {
+            // error underline just the file name
+            hint = false
+            diagRange = lsp.Range.create(
+              state.lineNumber, expRange.start, state.lineNumber, expRange.end)
+          }
+          const diag = lsp.Diagnostic.create(diagRange, "File not found")
+          diag.severity = hint ? lsp.DiagnosticSeverity.Hint : lsp.DiagnosticSeverity.Error
+          diag.tags = hint ? [lsp.DiagnosticTag.Unnecessary] : []
+          state.diagnostics.push(diag)
+          return
+        }
+      }
+    }
+
+    if (expression.errorType != NodeErrorType.None) {
+      this.diagnoseNode(state, expression)
+      return
     }
 
     for (let i = 0; i < expression.children.length; i += 1) {

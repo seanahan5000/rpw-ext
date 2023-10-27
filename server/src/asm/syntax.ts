@@ -176,6 +176,7 @@ class MerlinSyntax extends SyntaxDef {
   constructor() {
     super()
 
+    // *** padded name too? just flag? ***
     this.keywordMap = new Map<string, KeywordDef>([
       [ "xc",     {}],
       [ "org",    { create: () => { return new stm.OrgStatement() }}],
@@ -194,9 +195,9 @@ class MerlinSyntax extends SyntaxDef {
       [ "eom",    { create: () => { return new stm.EndMacroDefStatement() }}],
       [ "<<<",    { create: () => { return new stm.EndMacroDefStatement() }}],
 
-      [ "dum",    {}],
-      [ "dummy",  {}],
-      [ "dend",   {}],
+      [ "dum",    { create: () => { return new stm.DummyStatement() }}],
+      [ "dummy",  { create: () => { return new stm.DummyStatement() }}],
+      [ "dend",   { create: () => { return new stm.DummyEndStatement() }}],
       [ "usr",    { create: () => { return new stm.UsrStatement() }}],
       [ "lup",    {}],
 
@@ -219,11 +220,11 @@ class MerlinSyntax extends SyntaxDef {
       [ "else",   { create: () => { return new stm.ElseStatement() }}],
       [ "fin",    { create: () => { return new stm.EndIfStatement() }}],
 
-      [ "tr",     {}],
-      [ "lst",    {}],
-      [ "lstdo",  {}],
-      [ "exp",    {}],
-      [ "page",   {}],
+      [ "tr",     { create: () => { return new stm.ListStatement() }}],
+      [ "lst",    { create: () => { return new stm.ListStatement() }}],
+      [ "lstdo",  { create: () => { return new stm.ListStatement() }}],
+      [ "exp",    { create: () => { return new stm.ListStatement() }}],
+      [ "page",   { create: () => { return new stm.ListStatement() }}],
       [ "obj",    {}],
       [ "end",    {}],
       [ "ent",    { create: () => { return new stm.EntryStatement() }}],
