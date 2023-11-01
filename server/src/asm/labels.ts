@@ -5,6 +5,7 @@ import { SymbolExpression } from "./expressions"
 import { Statement } from "./statements"
 
 // TODO: maybe move to symbols?
+// *** or move to lsp_utils? ***
 
 //------------------------------------------------------------------------------
 
@@ -43,8 +44,8 @@ export function renameSymbol(symbol: Symbol, newName: string): FileEdits | undef
 
 export function renumberLocals(sourceFile: SourceFile, startLine: number, endLine: number): FileEdits | undefined {
   let edits = new EditCollection()
-  renumberLocalType(sourceFile, startLine, endLine, edits, SymbolType.CheapLocal)
-  renumberLocalType(sourceFile, startLine, endLine, edits, SymbolType.ZoneLocal)
+  renumberLocalType(sourceFile, startLine, endLine + 1, edits, SymbolType.CheapLocal)
+  renumberLocalType(sourceFile, startLine, endLine + 1, edits, SymbolType.ZoneLocal)
   return edits.fileEdits.size ? edits.fileEdits : undefined
 }
 
@@ -86,7 +87,7 @@ function renumberLocalType(sourceFile: SourceFile, startLine: number,
 
 function isLocalStart(statement: Statement, symbolType: SymbolType): boolean {
   const symExp = statement.labelExp
-  if (symExp && symExp.symbol) {
+  if (symExp && symExp instanceof SymbolExpression && symExp.symbol) {
     if (symbolType == SymbolType.ZoneLocal) {
       return symExp.symbol.isZoneStart
     } else if (symbolType == SymbolType.CheapLocal) {
@@ -125,10 +126,12 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
     if (!statement.labelExp) {
       continue
     }
+    if (!(statement.labelExp instanceof SymbolExpression)) {
+      continue
+    }
     if (statement.labelExp.symbolType != symbolType) {
       continue
     }
-
     const symbol = statement.labelExp.symbol
     if (!symbol) {
       continue

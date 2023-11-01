@@ -229,7 +229,10 @@ export class Parser extends Tokenizer {
       if (symVarExp instanceof exp.SymbolExpression) {
         this.labelExp = symVarExp
       } else if (symVarExp instanceof exp.VarExpression) {
-        statement = this.initStatement(new stm.VarStatement(), this.getNextToken())
+        const token = this.peekNextToken()
+        if (token?.getString() == "=") {
+          statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+        }
       }
     }
     if (!statement) {
@@ -276,9 +279,11 @@ export class Parser extends Tokenizer {
 
     // *** if not macro, if not dummy, if not disabled ***
     {
-      const symValue = statement.labelExp?.symbol?.getValue()
-      if (!symValue) {
-        statement.labelExp?.symbol?.setValue(new exp.PcExpression(), SymbolFrom.Statement)
+      if (statement.labelExp && statement.labelExp instanceof exp.SymbolExpression) {
+        const symValue = statement.labelExp.symbol?.getValue()
+        if (!symValue) {
+          statement.labelExp?.symbol?.setValue(new exp.PcExpression(), SymbolFrom.Statement)
+        }
       }
     }
 

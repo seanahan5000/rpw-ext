@@ -8,6 +8,7 @@ import { Opcodes6502 } from "./asm/opcodes"
 import { SyntaxDefs } from "./asm/syntax"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
+import { SymbolExpression } from "./asm/expressions"
 
 //------------------------------------------------------------------------------
 
@@ -402,7 +403,7 @@ export class Completions {
       const range = getLocalRange(sourceFile, lineNumber, symbolType)
       for (let i = range.startLine; i < range.endLine; i += 1) {
         const symExp = sourceFile.statements[i].labelExp
-        if (symExp) {
+        if (symExp && symExp instanceof SymbolExpression) {
           const symbol = symExp.symbol
           if (symbol && symbol.type == symbolType) {
             const token = symbol.getSimpleNameToken(symExp)

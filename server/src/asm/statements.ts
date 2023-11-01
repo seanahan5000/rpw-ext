@@ -11,7 +11,7 @@ import { Node, Token, TokenType } from "./tokenizer"
 export abstract class Statement extends exp.Expression {
 
   public sourceLine: string = ""
-  public labelExp?: exp.SymbolExpression
+  public labelExp?: exp.SymbolExpression | exp.VarExpression
   public opExp?: exp.Expression         // FIXME: easy to confuse with opExpression
   public opNameLC = ""
   public enabled = true
@@ -65,6 +65,10 @@ export class ZoneStatement extends Statement {
       this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
         parser.sourceFile, parser.lineNumber)
       this.children.unshift(this.labelExp)
+    }
+    if (!(this.labelExp instanceof exp.SymbolExpression)) {
+      this.labelExp.setError("Var not allowed as label")
+      return
     }
     if (this.labelExp.symbol) {
       this.labelExp.symbol.isZoneStart = true
@@ -689,9 +693,11 @@ class DataStatement extends Statement {
 
   parse(parser: Parser) {
 
-    const symbol = this.labelExp?.symbol
-    if (symbol) {
-      symbol.isData = true
+    if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
+      const symbol = this.labelExp.symbol
+      if (symbol) {
+        symbol.isData = true
+      }
     }
 
     while (true) {
@@ -763,9 +769,11 @@ export class StorageStatement extends Statement {
 
   parse(parser: Parser) {
 
-    const symbol = this.labelExp?.symbol
-    if (symbol) {
-      symbol.isData = true
+    if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
+      const symbol = this.labelExp.symbol
+      if (symbol) {
+        symbol.isData = true
+      }
     }
 
     let token: Token | undefined
@@ -831,9 +839,11 @@ export class HexStatement extends Statement {
 
   parse(parser: Parser) {
 
-    const symbol = this.labelExp?.symbol
-    if (symbol) {
-      symbol.isData = true
+    if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
+      const symbol = this.labelExp.symbol
+      if (symbol) {
+        symbol.isData = true
+      }
     }
 
     while (true) {
@@ -935,13 +945,16 @@ export class EquStatement extends Statement {
       parser.insertMissingLabel()
       return
     }
-
-    this.value = parser.mustAddNextExpression()
-    this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
+    if (this.labelExp instanceof exp.SymbolExpression) {
+      this.value = parser.mustAddNextExpression()
+      this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
+    } else {
+      this.labelExp.setError("Var label not allowed")
+    }
   }
 }
 
-export class VarStatement extends Statement {
+export class VarAssignStatement extends Statement {
 
   private value?: exp.Expression
 
@@ -978,8 +991,12 @@ export class OrgStatement extends Statement {
 export class EntryStatement extends Statement {
   parse(parser: Parser) {
     if (this.labelExp) {
-      if (this.labelExp.symbol) {
-        this.labelExp.symbol.isEntryPoint = true
+      if (this.labelExp instanceof exp.SymbolExpression) {
+        if (this.labelExp.symbol) {
+          this.labelExp.symbol.isEntryPoint = true
+        }
+      } else {
+        this.labelExp.setError("Var label not allowed")
       }
     } else {
       parser.insertMissingLabel()
@@ -1059,18 +1076,23 @@ export class MacroDefStatement extends Statement {
   parse(parser: Parser) {
 
     if (this.labelExp) {
-      if (parser.syntax == Syntax.DASM
-          || parser.syntax == Syntax.ACME
-          || parser.syntax == Syntax.CA65) {
-        this.labelExp.setError("Label not allowed")
-      } else if (this.labelExp.isLocalType()) {
-        this.labelExp.setError("Local label not allowed")
-      } else {
-        this.macroName = this.labelExp
-        this.macroName.symbolType = SymbolType.Macro
-        if (this.macroName.symbol) {
-          this.macroName.symbol.type = SymbolType.Macro
+      if (this.labelExp instanceof exp.SymbolExpression) {
+        if (parser.syntax == Syntax.DASM
+            || parser.syntax == Syntax.ACME
+            || parser.syntax == Syntax.CA65) {
+          this.labelExp.setError("Label not allowed")
+        } else if (this.labelExp.isLocalType()) {
+          this.labelExp.setError("Local label not allowed")
+        } else {
+          this.macroName = this.labelExp
+          this.macroName.symbolType = SymbolType.Macro
+          if (this.macroName.symbol) {
+            this.macroName.symbol.type = SymbolType.Macro
+          }
         }
+      } else {
+        this.labelExp.setError("Var label not allowed")
+        return
       }
     } else if (parser.syntax == Syntax.MERLIN) {
       /*|| parser.syntax == Syntax.SBASM*/
