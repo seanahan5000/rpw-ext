@@ -215,6 +215,9 @@ export class LspServer {
   public documents = new LspDocuments()
   private projects: LspProject[] = []
   public workspaceFolderPath = ""
+  private updateId?: NodeJS.Timeout
+  private updateFile?: SourceFile
+  private diagnosticId?: NodeJS.Timeout
 
   constructor(connection: lsp.Connection) {
     this.connection = connection;
@@ -314,14 +317,64 @@ export class LspServer {
       }
     }
 
-    this.updateProjects()
+    this.scheduleUpdate()
   }
 
-  // *** think about cancellation token support ***
-  public updateProjects(diagnostics = false) {
-    for (let i = 0; i < this.projects.length; i += 1) {
-      this.projects[i].update()
-      // TODO: something else?
+  private scheduleUpdate(sourceFile?: SourceFile) {
+    if (this.updateId !== undefined) {
+      clearTimeout(this.updateId)
+    }
+    const updateTimeout = 1
+    this.updateFile = sourceFile
+    this.updateId = setTimeout(() => { this.executeUpdate() }, updateTimeout)
+  }
+
+  private executeUpdate() {
+    if (this.updateId !== undefined) {
+      clearTimeout(this.updateId)
+      delete this.updateId
+    }
+    for (let project of this.projects) {
+      project.update()
+    }
+    this.scheduleDiagnostics(this.updateFile)
+    delete this.updateFile
+  }
+
+  private scheduleDiagnostics(priorityFile?: SourceFile) {
+    if (this.diagnosticId !== undefined) {
+      clearTimeout(this.diagnosticId)
+    }
+    const diagnosticTimeout = 500
+    this.diagnosticId = setTimeout(() => { this.executeDiagnostics(priorityFile) }, diagnosticTimeout)
+  }
+
+  private executeDiagnostics(priorityFile?: SourceFile) {
+    if (this.diagnosticId !== undefined) {
+      clearTimeout(this.diagnosticId)
+      delete this.diagnosticId
+    }
+
+    if (priorityFile) {
+      this.updateDiagnostics(priorityFile)
+    }
+
+    for (let project of this.projects) {
+      for (let sharedFile of project.sharedFiles) {
+        if (sharedFile != priorityFile) {
+          this.updateDiagnostics(sharedFile)
+        }
+      }
+      for (let module of project.modules) {
+        for (let sourceFile of module.sourceFiles) {
+          if (project.sharedFiles.indexOf(sourceFile) != -1) {
+            continue
+          }
+          if (sourceFile != priorityFile) {
+            this.updateDiagnostics(sourceFile)
+          }
+        }
+      }
     }
 
     // *** send message that semantic tokens need refresh ***
@@ -367,21 +420,22 @@ export class LspServer {
               // *** error handling ***
               return
             }
-            project.update()
-            sourceFile = this.findSourceFile(filePath)
-            if (!sourceFile) {
-              // *** error handling ***
-              return
-            }
+            // project.update()
+            // sourceFile = this.findSourceFile(filePath)
+            // if (!sourceFile) {
+            //   // *** error handling ***
+            //   return
+            // }
           }
-          this.updateDiagnostics(sourceFile)
+
+          this.scheduleUpdate(sourceFile)
         }
       }
     }
   }
 
   onDidCloseTextDocument(params: lsp.DidCloseTextDocumentParams): void {
-    const filePath = pathFromUriString(params.textDocument.uri);
+    const filePath = pathFromUriString(params.textDocument.uri)
     if (filePath) {
       let sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
@@ -392,7 +446,7 @@ export class LspServer {
           this.projects.splice(index, 1)
         }
       }
-      this.documents.close(filePath);
+      this.documents.close(filePath)
     }
   }
 
@@ -405,19 +459,14 @@ export class LspServer {
         for (const change of params.contentChanges) {
           document.applyEdit(textDocument.version, change)
         }
-
-        // *** mark as dirty the file/projects that changed ***
-        this.updateProjects()
-
         const sourceFile = this.findSourceFile(filePath)
-        if (sourceFile) {
-          this.updateDiagnostics(sourceFile)
-        }
+        this.scheduleUpdate(sourceFile)
       }
     }
   }
 
   async onCompletion(params: lsp.CompletionParams, cancelToken?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
+    this.executeUpdate()
 
     let sourceFile: SourceFile | undefined
     let statement: Statement | undefined
@@ -453,7 +502,10 @@ export class LspServer {
   }
 
   async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
+
     if (params.command == "rpw65.renumberLocals") {
+
+      this.executeUpdate()
 
       // TODO: make this a call to separate method
 
@@ -509,6 +561,8 @@ export class LspServer {
   }
 
   async onFoldingRanges(params: lsp.FoldingRangeParams, token?: lsp.CancellationToken): Promise<lsp.FoldingRange[] | undefined> {
+    this.executeUpdate()
+
     const foldingRanges: lsp.FoldingRange[] = []
     let sourceFile = this.getSourceFile(params.textDocument.uri)
     if (sourceFile) {
@@ -533,6 +587,8 @@ export class LspServer {
   }
 
   async onHover(params: lsp.TextDocumentPositionParams, token?: lsp.CancellationToken): Promise<lsp.Hover> {
+    this.executeUpdate()
+
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
@@ -560,6 +616,8 @@ export class LspServer {
   }
 
   async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {
+    this.executeUpdate()
+
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
@@ -588,6 +646,8 @@ export class LspServer {
   }
 
   async onReferences(params: lsp.ReferenceParams, token?: lsp.CancellationToken): Promise<lsp.Location[]> {
+    this.executeUpdate()
+
     const locations: lsp.Location[] = []
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
@@ -615,6 +675,8 @@ export class LspServer {
   }
 
   async onPrepareRename(params: lsp.PrepareRenameParams, token?: lsp.CancellationToken): Promise<lsp.Range | { range: lsp.Range; placeholder: string; } | undefined | null> {
+    this.executeUpdate()
+
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
@@ -634,6 +696,8 @@ export class LspServer {
   }
 
   async onRename(params: lsp.RenameParams, token?: lsp.CancellationToken): Promise<lsp.WorkspaceEdit | undefined | null> {
+    this.executeUpdate()
+
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
@@ -671,13 +735,16 @@ export class LspServer {
 
   //----------------------------------------------------------------------------
 
-  public removeDiagnostics(sourceFile: SourceFile) {
+  private removeDiagnostics(sourceFile: SourceFile) {
+    // reschedule, just in case sourceFile is current priority file
+    this.scheduleDiagnostics()
+
     this.connection.sendDiagnostics({
       uri: URI.file(sourceFile.fullPath).toString(),
       diagnostics: [] })
   }
 
-  public updateDiagnostics(sourceFile: SourceFile) {
+  private updateDiagnostics(sourceFile: SourceFile) {
 
     const diagnostics: lsp.Diagnostic[] = []
     const state: DiagnosticState = { sourceFile, lineNumber: 0, diagnostics }
@@ -756,14 +823,13 @@ export class LspServer {
           diag.severity = hint ? lsp.DiagnosticSeverity.Hint : lsp.DiagnosticSeverity.Error
           diag.tags = hint ? [lsp.DiagnosticTag.Unnecessary] : []
           state.diagnostics.push(diag)
-          return
+          return true
         }
       }
     }
 
     if (expression.errorType != NodeErrorType.None) {
       this.diagnoseNode(state, expression)
-      return
     }
 
     for (let i = 0; i < expression.children.length; i += 1) {
@@ -771,12 +837,14 @@ export class LspServer {
       if (node instanceof Expression) {
         this.diagnoseExpression(state, node)
       } else {
-        this.diagnoseNode(state, node)
+        if (this.diagnoseNode(state, node)) {
+          return
+        }
       }
     }
   }
 
-  private diagnoseNode(state: DiagnosticState, node: Node) {
+  private diagnoseNode(state: DiagnosticState, node: Node): boolean {
     if (node.errorType != NodeErrorType.None) {
       let severity: lsp.DiagnosticSeverity
       switch (node.errorType) {
@@ -802,11 +870,14 @@ export class LspServer {
         state.diagnostics.push(diag)
       }
     }
+    return node.errorType == NodeErrorType.Error
   }
 
   //----------------------------------------------------------------------------
 
   async onSemanticTokensFull(params: lsp.SemanticTokensParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
+    this.executeUpdate()
+
     const sourceFile = this.getSourceFile(params.textDocument.uri)
     if (sourceFile) {
       return this.getSemanticTokens(sourceFile, 0, sourceFile.statements.length)
@@ -816,6 +887,8 @@ export class LspServer {
   }
 
   async onSemanticTokensRange(params: lsp.SemanticTokensRangeParams, token?: lsp.CancellationToken): Promise<lsp.SemanticTokens> {
+    this.executeUpdate()
+
     const sourceFile = this.getSourceFile(params.textDocument.uri)
     if (sourceFile) {
       return this.getSemanticTokens(sourceFile, params.range.start.line, params.range.end.line)

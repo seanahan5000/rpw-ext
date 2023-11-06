@@ -1,8 +1,13 @@
 
-// X fix ]var labels for POP
-// - add ABS,X and ABS,Y completions
+// * correctly mark constants used only by other constants
+// * fix ";" in macro treated as comment in dbug/CodeMirror
+// * adding file to project should remove temp project
 
-// - fix TXT, TXC, TXI hiliting
+// - complete MAC with EOM
+// - don't gray out conditional code in macro defs
+// - do allow symbol references (but not defs) in macro defs
+
+// - add ABS,X and ABS,Y completions
 
 // - fix watch tab width (in dbug)
 

@@ -71,7 +71,7 @@ export class Project {
   public tabStops = [0, 16, 20, 40]
   public includes: string[] = []
 
-  protected modules: Module[] = []
+  public modules: Module[] = []
 
   public rootDir = "."
   public srcDir: string = ""
@@ -291,7 +291,7 @@ export class Module {
     this.sourceFiles = []
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
-  
+
     // let asm = new Assembler(this)
     // asm.parse(this.srcName)
 

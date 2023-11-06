@@ -188,7 +188,7 @@ class MerlinSyntax extends SyntaxDef {
       [ "put",    { create: () => { return new stm.IncludeStatement() }}],
       [ "use",    { create: () => { return new stm.IncludeStatement() }}],
       [ "sav",    { create: () => { return new stm.SaveStatement() }}],
-      [ "dsk",    {}],
+      [ "dsk",    { create: () => { return new stm.SaveStatement() }}],
 
       // macros
       [ "mac",    { create: () => { return new stm.MacroDefStatement() }}],
@@ -214,6 +214,11 @@ class MerlinSyntax extends SyntaxDef {
       [ "dci",    {}],
       [ "rev",    {}],
       [ "str",    {}],
+
+      // TODO: eventually treat these as macros
+      [ "txt",    { create: () => { return new stm.TextStatement() }}],
+      [ "txc",    { create: () => { return new stm.TextStatement() }}],
+      [ "txi",    { create: () => { return new stm.TextStatement() }}],
 
       // conditionals
       [ "do",     { create: () => { return new stm.IfStatement() }}],

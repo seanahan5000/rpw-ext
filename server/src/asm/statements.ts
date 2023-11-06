@@ -153,7 +153,10 @@ export class OpStatement extends Statement {
         if (this.opNameLC == "ora") {
           const value = this.expression.resolve()
           if (value == 0x20 || value == 0x40) {
-            this.expression.setWarning("FIXME")
+            const str = this.expression.getString()
+            if (str == "$20" || str == "$40") {
+              this.expression.setWarning("FIXME?")
+            }
           }
         }
 
@@ -276,8 +279,8 @@ export class OpStatement extends Statement {
   }
 
   // TODO: what is the TypeScript magic to avoid this?
-  private checkMode(): boolean {
-    switch (this.mode) {
+  private checkMode(mode: OpMode): boolean {
+    switch (mode) {
       case OpMode.NONE:
         return this.opcode.NONE !== undefined
       case OpMode.A:
@@ -323,7 +326,7 @@ export class OpStatement extends Statement {
           const immValue = this.expression.resolve()
           if (immValue !== undefined) {
             if (immValue > 255) {
-              this.expression.setWarning("Immediate value will be truncated")
+              this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
             }
           }
           break
@@ -351,14 +354,18 @@ export class OpStatement extends Statement {
         case OpMode.ABSY:
           const size = this.expression.getSize() ?? 0
           if (size == 1) {
-            // TODO: when downgrading, handle case where opcode
-            //  could be ABS but not ZP
-            this.mode = this.mode - OpMode.ABS + OpMode.ZP
-            symUtils.markZPage(this.expression)
+            const newMode = this.mode - OpMode.ABS + OpMode.ZP
+            if (this.checkMode(newMode)) {
+              this.mode = newMode
+              symUtils.markZPage(this.expression)
+            } else {
+              // TODO: warn that ABS mode will be used instead of ZP?
+              this.opExp?.setWarning("ZP address forced to ABS")
+            }
           } else {
             symUtils.markData(this.expression)
           }
-          if (!this.checkMode()) {
+          if (!this.checkMode(this.mode)) {
             // TODO: put this on an args expression instead
             this.opExp?.setError("Opcode does not support this addressing mode")
           }
@@ -912,6 +919,7 @@ export class IncludeStatement extends Statement {
   }
 }
 
+// TODO: handle disk and save separately
 export class SaveStatement extends Statement {
 
   private fileName?: exp.FileNameExpression
@@ -1053,6 +1061,15 @@ export class UsrStatement extends Statement {
         break
       }
     }
+  }
+}
+
+// TODO: make this the basis for all the various string/text statements
+export class TextStatement extends Statement {
+  private textExpression?: exp.Expression
+
+  parse(parser: Parser) {
+    this.textExpression = parser.mustAddNextExpression()
   }
 }
 

@@ -101,6 +101,10 @@
         },
         {
           "name": "keyword.control.rpw65",
+          "match": "\\s(?i:TXT|TXC|TXI)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
           "match": "\\s(?i:DO|ELSE|FIN)\\s"
         }
       ]

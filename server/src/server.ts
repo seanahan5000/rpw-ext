@@ -52,9 +52,7 @@ connection.onInitialize((params: InitializeParams) => {
 	const result: InitializeResult = {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
-			// Tell the client that this server supports code completion.
 			completionProvider: {
-				// triggerCharacters: ['.', '"', '\'', '/', '@', '<'],
 				triggerCharacters: ["(", ":"],
 				resolveProvider: true
 			},
@@ -99,9 +97,6 @@ connection.onInitialize((params: InitializeParams) => {
 				"zpage",     // 12
 				"var",       // 13
 				"escape",    // 14
-
-				// "comment.line.semicolon.rpw65"
-				// "keyword.control.opcode.rpw65"
 
 				// 'operator',
 				// 'class',
