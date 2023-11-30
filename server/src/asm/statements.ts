@@ -732,6 +732,15 @@ class DataStatement extends Statement {
         break
       }
 
+      if (this.dataSize == 1) {
+        const value = expression.resolve()
+        if (value != undefined) {
+          if (value < -127 || value > 255) {
+            expression.setError("Expression value too large")
+          }
+        }
+      }
+
       this.dataElements.push(expression)
       if (parser.mustAddToken(["", ","]).index <= 0) {
         break

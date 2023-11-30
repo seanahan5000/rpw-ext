@@ -8,7 +8,7 @@ import { Opcodes6502 } from "./asm/opcodes"
 import { SyntaxDefs } from "./asm/syntax"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
-import { SymbolExpression } from "./asm/expressions"
+import { Expression, SymbolExpression } from "./asm/expressions"
 
 //------------------------------------------------------------------------------
 
@@ -55,6 +55,24 @@ enum Loc {
   afterArgs    = 7,
 }
 
+function inHexToken(expression: Expression, position: number): boolean {
+  for (let node of expression.children) {
+    if (node instanceof Token) {
+      if (position < node.start) {
+        return false
+      }
+      if (position <= node.end) {
+        return node.type == TokenType.HexNumber
+      }
+    } else if (node instanceof Expression) {
+      if (inHexToken(node, position)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 export class Completions {
 
   addOpcodes = 0
@@ -77,7 +95,7 @@ export class Completions {
     let checkInd = false
     let appendIndY = false
 
-    // no completions when in comment
+    // no completions when in comment (top-level token)
     for (let token of statement.children) {
       if (token instanceof Token && token.type == TokenType.Comment) {
         if (position >= token.start) {
@@ -85,6 +103,10 @@ export class Completions {
         }
       }
     }
+
+    // when inside a hex value, don't suggest completions
+    //  ("$C" should not suggest "COUNT", for example)
+    let inHex = inHexToken(statement, position)
 
     const prevChar = statement.sourceLine[position - 1] ?? ""
 
@@ -136,7 +158,7 @@ export class Completions {
       this.addMacros = ++index
       this.addKeywords = ++index
       this.addOpcodes = ++index
-    } else if (loc == Loc.afterOpcode || loc == Loc.inArgs) {
+    } else if ((loc == Loc.afterOpcode || loc == Loc.inArgs) && !inHex) {
       // initial args completions
       if (statement instanceof OpStatement) {
         if (statement.mode == OpMode.NONE) {
@@ -221,21 +243,25 @@ export class Completions {
           }
         }
       } else {
-        // TODO: need better auto completes based on keyword
-        // TODO: better completes for macros
+        if (!inHex) {
+          // TODO: need better auto completes based on keyword
+          // TODO: better completes for macros
+          this.addConstants = ++index
+          this.addZpage = ++index
+          this.addData = ++index
+          this.addCode = ++index
+          this.addUnclassified = ++index
+        }
+      }
+    } else if (loc == Loc.beforeArgs || loc == Loc.afterArgs) {
+      if (!inHex) {
+        // TODO: make this much smarter using expression evaluation state
         this.addConstants = ++index
         this.addZpage = ++index
         this.addData = ++index
         this.addCode = ++index
         this.addUnclassified = ++index
       }
-    } else if (loc == Loc.beforeArgs || loc == Loc.afterArgs) {
-      // TODO: make this much smarter using expression evaluation state
-      this.addConstants = ++index
-      this.addZpage = ++index
-      this.addData = ++index
-      this.addCode = ++index
-      this.addUnclassified = ++index
     }
 
     // if "X" or "Y" at the end of an indirect opcode triggered
@@ -365,11 +391,13 @@ export class Completions {
           }
           // hack snippet for Naja graphics system
           if (key == "DRAW_PICT") {
+            const indent = "".padStart(sourceFile.module.project.tabStops[1], " ")
             item = lsp.CompletionItem.create(key)
             item.sortText = `${this.addCode}_${key}`
             item.insertTextFormat = lsp.InsertTextFormat.Snippet
+            item.insertTextMode = lsp.InsertTextMode.asIs
             item.kind = lsp.CompletionItemKind.Snippet
-            item.insertText = "DRAW_PICT\n$1\nPictEnd"
+            item.insertText = "DRAW_PICT\n" + indent + "$1\n" + indent + "PictEnd"
           } else {
             item = lsp.CompletionItem.create(key)
             item.sortText = `${this.addCode}_${key}`
@@ -425,8 +453,9 @@ export class Completions {
       const sourceFile = server.findSourceFile(item.data.filePath)
       if (sourceFile) {
         if (item.kind == lsp.CompletionItemKind.Function) {
-          const header = getCommentHeader(sourceFile, item.data.line)
+          let header = getCommentHeader(sourceFile, item.data.line)
           if (header) {
+            header = "```\n" + header + "```"
             item.documentation = { kind: "markdown", value: header }
           }
         } else {
@@ -478,12 +507,11 @@ export function getCommentHeader(atFile: SourceFile, atLine: number): string | u
   }
 
   if (startLine != atLine) {
-    let header = "```  \n"
+    let header = ""
     for (let i = startLine; i < atLine; i += 1) {
       const statement = atFile.statements[i]
       header += statement.sourceLine + "  \n"
     }
-    header += "```"
     return header
   }
 }

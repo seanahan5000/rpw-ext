@@ -390,11 +390,18 @@ export class SymbolUtils {
             expression.setWarning("Symbol used as both JSR target and constant")
           } else {
             expression.symbol.isConstant = true
+            // if this symbol is a constant, each expression of its value
+            //  (excluding unary byte high/low) must also be a constant
+            const value = expression.symbol.getValue()
+            if (value) {
+              this.markConstants(value)
+            }
           }
         }
       }
       return
     }
+
     if (expression instanceof exp.UnaryExpression) {
       const opType = expression.opType
       if (opType == Op.LowByte

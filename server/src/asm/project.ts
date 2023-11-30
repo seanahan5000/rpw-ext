@@ -26,7 +26,7 @@ export type RpwProject = {
   modules?: RpwModule[]
 }
 
-// *** add fileSuffix? ".S" for merlin, for example ***
+// TODO: add default fileSuffix? ".S" for merlin, for example
 
 //------------------------------------------------------------------------------
 
@@ -173,7 +173,9 @@ export class Project {
   // overridden to get contents from elsewhere
   getFileContents(fullPath: string): string | undefined {
     if (fs.existsSync(fullPath)) {
-      return fs.readFileSync(fullPath, 'utf8')
+      if (fs.lstatSync(fullPath).isFile()) {
+        return fs.readFileSync(fullPath, 'utf8')
+      }
     }
   }
 
@@ -214,13 +216,6 @@ export class Project {
   //  contents will be created.
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    if (!fs.existsSync(fullPath)) {
-      fullPath = fullPath + ".S"
-      if (!fs.existsSync(fullPath)) {
-        return
-      }
-    }
-
     const isShared = this.includes.indexOf(fullPath) != -1
     if (isShared) {
       for (let sourceFile of this.sharedFiles) {
@@ -334,6 +329,15 @@ export class Module {
       fileName = this.srcPath + "/" + fileName
     }
     let fullPath = this.project.srcDir + fileName
+
+    // TODO: get default suffix info from project?
+    if (!fs.existsSync(fullPath)) {
+      fullPath = fullPath + ".S"
+      if (!fs.existsSync(fullPath)) {
+        return
+      }
+    }
+
     return this.project.openSourceFile(this, fullPath)
   }
 }

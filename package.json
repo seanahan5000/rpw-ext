@@ -1,19 +1,32 @@
 {
 	"name": "rpw65",
-	"description": "Language server for 6502 assembly",
+	"displayName": "RPW 65",
+	"description": "Multi-syntax language server for 6502 assembly",
 	"author": "Sean Callahan",
+	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "1.0.0",
-	"categories": [],
+	"version": "0.9.0",
+	"repository": {
+    "type": "git",
+    "url": "https://github.com/seanahan5000/rpw-ext.git"
+  },
+	"categories": [
+		"Programming Languages"
+	],
 	"keywords": [
-		"multi-root ready"
+		"6502",
+		"assembly",
+		"assembler",
+		"merlin",
+		"dasm",
+		"ca65",
+		"acme",
+		"lisa"
 	],
 	"engines": {
 		"vscode": "^1.75.0"
 	},
-	"activationEvents": [
-		"onLanguage:plaintext"
-	],
+	"icon": "images/rpw65-icon.png",
 	"main": "./client/out/extension",
 	"contributes": {
 		"configuration": {
@@ -43,7 +56,9 @@
 			{
 				"id": "rpw65",
 				"extensions": [
-					".S"
+					".s",
+					".i",
+					".asm"
 				],
 				"configuration": "./language-configuration.json"
 			}
@@ -168,16 +183,13 @@
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run esbuild-base -- --minify",
-    "esbuild-base": "esbuild ./client/src/extension.ts --bundle --outfile=out/main.js --external:vscode --format=cjs --platform=node",
-
-		"esbuild": "npm run esbuild-base -- --sourcemap",
+		"vscode:prepublish": "npm run esbuild-client -- --minify && npm run esbuild-server -- --minify",
+		"esbuild-client": "esbuild ./client/src/extension.ts --bundle --outfile=client/out/extension.js --external:vscode --format=cjs --platform=node",
+		"esbuild-server": "esbuild ./server/src/server.ts --bundle --outfile=server/out/server.js --external:vscode --format=cjs --platform=node",
+    "esbuild-base": "npm run esbuild-client -- --sourcemap && npm run esbuild-server -- --sourcemap",
+		"build": "npm run esbuild-base -- --sourcemap",
     "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
-    "test-compile": "tsc -p ./",
-
-		"compile": "tsc -b",
-		"watch": "tsc -b -w",
-		"postinstall": "cd client && npm install && cd ../server && npm install && cd .."
+    "test-compile": "tsc -p ./"
 	},
 	"devDependencies": {
 		"@types/node": "^16.18.34",

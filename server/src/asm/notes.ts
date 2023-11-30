@@ -1,7 +1,58 @@
+// Feature List
+//  - Inferred types (zpage, constant, data)
+//  - Renumber locals
+//  - Unused symbols
+//  - Unused code
+//  - Hover comment blocks
+//  - Variable tab stops w/formatting
 
-// * correctly mark constants used only by other constants
-// * fix ";" in macro treated as comment in dbug/CodeMirror
-// * adding file to project should remove temp project
+// Known Issues
+//  - Variable tab stops only work with spaces
+//  - Move settings out of project file
+//  - Full support for non-Merlin syntaxes
+
+
+// Release TODO
+//  - Build instructions
+//  - Run built extension on Windows
+//      - Test with build on Mac and Windows
+//  - Readme document
+//  - Demo animated gifs
+//      - Renumber locals
+//      - Per-syntax examples (self-documenting)
+//          - Warn on Zpage and constant
+//      - Conditional folding
+//      - Conditional enable/disable
+//      - Hover showing function header comment
+
+//  - Turn off debugging code (extension.ts and lsp_server.ts)
+
+
+// install node.js from nodejs.org/download
+//  "npm install" in root of rpw-ext
+// In VSCode, open rpw-ext folder
+//  command-shift-B to build
+// Run and Debug "Client + Server"
+
+
+// ? Don't delay document update when file is first opened
+// *** tab jumps too far when opcode > 3 bytes
+// * add some settings and handle them
+// * Add Format Document and Format Selection support
+
+// ? consider space instead of tab for indenting
+    // - double-space to disambiguate for non-Merlin syntaxes
+
+// * infer number of macro args and enforce on invocation
+
+// ? correctly mark zpage used only by other zpages (ZBLOCK_A0+0)
+// * scan back from storage opcodes to mark labels as data
+//   (So "LABEL HEX" split into two lines still works)
+
+// - when a file goes from inside a project to out, fully rebuild
+//  (comment out a file in an ASM. file, for example)
+
+// - add 65C02 support
 
 // - complete MAC with EOM
 // - don't gray out conditional code in macro defs
@@ -10,6 +61,7 @@
 // - add ABS,X and ABS,Y completions
 
 // - fix watch tab width (in dbug)
+// * fix ";" in macro treated as comment in dbug/CodeMirror
 
 // - fix more dbug/CodeMirror syntax colors
 // - more tmLanguage hiliting, including other syntax keywords
@@ -20,9 +72,6 @@
 
 // - show file name instead of "details" in completion
 
-// - when a file goes from inside a project to out, fully rebuild
-//  (comment out a file in an ASM. file, for example)
-
 // - selecting gap between ; and STA and tab does nothing
 //  ";   STA	SERIAL,Y"
 
@@ -30,9 +79,6 @@
 //  "ARM_EVEN		HEX	80402A552A552A552A552A552A552A552A000000"
 
 // - convert tabs to spaces to tab columns work enough to fix tabs
-
-// - scan back from storage opcodes to mark labels as data
-//   (So "LABEL HEX" split into two lines still works)
 
 
 // editor tab size
@@ -89,7 +135,7 @@
 
 // error issues
 //  - syntax errors with specific information
-//      - addressing mode not allowed, for example
+//      X addressing mode not allowed, for example
 //  X missing symbol
 //  + branch out of range
 //  X duplicate locals
@@ -119,8 +165,8 @@
 //  X show comment block for function name
 //  - parse "On entry:" and "On exit:" for more specific intellisense
 //  - show other constants in same set as current
-//  - show values constants actual values
-//  - show ZPAGE variable addresses
+//  X show values constants actual values
+//  X show ZPAGE variable addresses
 //  - show "DUM 0" defined structure/offsets
 //
 // syntax hiliting
@@ -142,7 +188,7 @@
 //
 // other
 //  X jump to definition for functions and data storage
-//  - jump to defitition (open file) on PUT file paths
+//  - jump to definition (open file) on PUT file paths
 //  ? use deprecated names to show renames for legacy functions
 //
 

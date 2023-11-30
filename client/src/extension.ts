@@ -1,25 +1,25 @@
 
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as vsclnt from 'vscode-languageclient';
-import * as cmd from "./commands";
+import * as vscode from 'vscode'
+import * as path from 'path'
+import * as vsclnt from 'vscode-languageclient'
+import * as cmd from "./commands"
 
 import {
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
 	TransportKind
-} from 'vscode-languageclient/node';
+} from 'vscode-languageclient/node'
 
-let client: LanguageClient;
+let client: LanguageClient
 
 export function activate(context: vscode.ExtensionContext) {
 	// The server is implemented in node
 	const serverModule = context.asAbsolutePath(
 		path.join('server', 'out', 'server.js')
-	);
+	)
 
-	const debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] };
+	const debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] }
 
 	// If the extension is launched in debug mode then the debug server options are used
 	// Otherwise the run options are used
@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
 			transport: TransportKind.ipc,
 			options: debugOptions
 		}
-	};
+	}
 
 	// Options to control the language client
 	const clientOptions: LanguageClientOptions = {
@@ -39,10 +39,10 @@ export function activate(context: vscode.ExtensionContext) {
 			// Notify the server about file changes to '.clientrc files contained in the workspace
 			fileEvents: vscode.workspace.createFileSystemWatcher('**/.clientrc')
 		}
-	};
+	}
 
-	client = new LanguageClient('rpw65', 'RPW 6502', serverOptions, clientOptions);
-	client.start();		// also starts server
+	client = new LanguageClient('rpw65', 'RPW 6502', serverOptions, clientOptions)
+	client.start()		// also starts server
 
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.renumberLocals", renumberCmd))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabIndent", () => { cmd.tabIndentCmd(false) }))
@@ -54,42 +54,26 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate(): Thenable<void> | undefined {
 	if (!client) {
-		return undefined;
+		return undefined
 	}
-	return client.stop();
+	return client.stop()
 }
 
-export async function renumberCmd(/*client: LanguageClient*/) {
-
-	// const files = await vscode.workspace.findFiles('*.rpw-project.json', '**/node_modules/**');
-
-	// const x = await vscode.workspace.fs.readDirectory(vscode.workspace.workspaceFolders[0].uri);
-
-	// vscode.workspace.openTextDocument(uri).then((document) => {
-	// 	const text = document.getText();
-	// });
-
-	// const docs = vscode.workspace.textDocuments;
-	// docs.forEach((doc) => {
-	// 	console.log(doc.fileName);
-	// });
-	// const wsfolders = vscode.workspace.workspaceFolders;
-
-	const editor = vscode.window.activeTextEditor;
+export async function renumberCmd() {
+	const editor = vscode.window.activeTextEditor
 	const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
 		command: "rpw65.renumberLocals",
 		arguments: [
 			editor.document.uri.toString(),
 			editor.selection
 		]
-	});
-
+	})
 	if (content && content.edits.length > 0) {
 		editor.edit(edit => {
 			content.edits.forEach(myEdit => {
-				const range = new vscode.Range(myEdit.range.start, myEdit.range.end);
-				edit.replace(range, myEdit.newText);
-			});
-		});
+				const range = new vscode.Range(myEdit.range.start, myEdit.range.end)
+				edit.replace(range, myEdit.newText)
+			})
+		})
 	}
 }

@@ -8,21 +8,10 @@ import {
 	InitializeResult,
 } from 'vscode-languageserver/node';
 
-import { URI } from 'vscode-uri';
-
-import {
-	TextDocument,
-} from 'vscode-languageserver-textdocument';
-
-// Create a connection for the server, using Node's IPC as a transport.
-// Also include all preview / proposed LSP features.
 const connection = createConnection(ProposedFeatures.all);
 
 import { LspServer } from "./lsp_server";
 const server = new LspServer(connection);
-
-// Create a simple text document manager.
-// const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
@@ -61,10 +50,6 @@ connection.onInitialize((params: InitializeParams) => {
 			renameProvider: { prepareProvider: true },
 			referencesProvider: true,
 			foldingRangeProvider: true
-			// ,
-			// executeCommandProvider: {
-			// 	commands: ["rpw65.renumberLocals"]
-			// }
 		}
 	};
 
@@ -97,32 +82,11 @@ connection.onInitialize((params: InitializeParams) => {
 				"zpage",     // 12
 				"var",       // 13
 				"escape",    // 14
-
-				// 'operator',
-				// 'class',
-				// 'enum',
-				// 'interface',
-				// 'namespace',
-				// 'typeParameter',
-				// 'type',
-				// 'parameter',
-				// 'variable',
-				// 'enumMember',
-				// 'property',
-				// 'function',
-				// 'member',
 			],
 			tokenModifiers: [
 				"local",
 				"global",
 				"external"
-
-				// 'declaration',
-				// 'static',
-				// 'async',
-				// 'readonly',
-				// 'defaultLibrary',
-				// 'local',
 			],
 		},
 		full: true,
@@ -144,14 +108,10 @@ connection.onInitialized(() => {
 	}
 });
 
-// The example settings
 interface ExampleSettings {
 	maxNumberOfProblems: number;
 }
 
-// The global settings, used when the `workspace/configuration` request is not supported by the client.
-// Please note that this is not the case when using this server with the client provided in this example
-// but could happen with other clients.
 const defaultSettings: ExampleSettings = { maxNumberOfProblems: 1000 };
 let globalSettings: ExampleSettings = defaultSettings;
 
@@ -192,56 +152,9 @@ function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
 // 	documentSettings.delete(e.document.uri);
 // });
 
-// The content of a text document has changed. This event is emitted
-// when the text document first opened or when its content has changed.
-// documents.onDidChangeContent(change => {
-// 	validateTextDocument(change.document);
+// connection.onDidChangeWatchedFiles(_change => {
+// 	// Monitored files have change in VSCode
+// 	connection.console.log('We received an file change event');
 // });
 
-connection.onDidChangeWatchedFiles(_change => {
-	// Monitored files have change in VSCode
-	connection.console.log('We received an file change event');
-});
-
-// This handler provides the initial list of the completion items.
-// connection.onCompletion(
-// 	(_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-// 		// The pass parameter contains the position of the text document in
-// 		// which code complete got requested. For the example we ignore this
-// 		// info and always provide the same completion items.
-// 		return [
-// 			{
-// 				label: 'TypeScript',
-// 				kind: CompletionItemKind.Text,
-// 				data: 1
-// 			},
-// 			{
-// 				label: 'JavaScript',
-// 				kind: CompletionItemKind.Text,
-// 				data: 2
-// 			}
-// 		];
-// 	}
-// );
-
-// This handler resolves additional information for the item selected in
-// the completion list.
-// connection.onCompletionResolve(
-// 	(item: CompletionItem): CompletionItem => {
-// 		if (item.data === 1) {
-// 			item.detail = 'TypeScript details';
-// 			item.documentation = 'TypeScript documentation';
-// 		} else if (item.data === 2) {
-// 			item.detail = 'JavaScript details';
-// 			item.documentation = 'JavaScript documentation';
-// 		}
-// 		return item;
-// 	}
-// );
-
-// Make the text document manager listen on the connection
-// for open, change and close text document events
-// documents.listen(connection);
-
-// Listen on the connection
-connection.listen();
+connection.listen()

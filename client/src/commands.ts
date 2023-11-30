@@ -171,42 +171,41 @@ export async function tabIndentCmd(shift: boolean) {
 	// unless inside comment, then just delete character
 
 export async function delIndentCmd() {
-	const editor = vscode.window.activeTextEditor;
+	const editor = vscode.window.activeTextEditor
 	editor.edit(edit => {
-		for (let i = 0; i < editor.selections.length; i += 1) {
-			const selection = editor.selections[i];
+		for (let selection of editor.selections) {
 			if (selection.isEmpty) {
-				const line = selection.start.line;
-				const ch = selection.start.character;
+				const line = selection.start.line
+				const ch = selection.start.character
 				if (ch > 0) {
-					const lineText = getStartLineText(editor);
-					const commentStart = findCommentStart(lineText);
+					const lineText = getLineText(editor, line)
+					const commentStart = findCommentStart(lineText)
 					// default to normal delete of single character
-					let startChar = ch - 1;
+					let startChar = ch - 1
 					// if not inside a comment, delete spaces back to tab column
 					if (startChar < commentStart) {
-						let c = lineText[startChar];
+						let c = lineText[startChar]
 						if (c == " ") {
-							const stop = getPrevTabColumn(ch);
+							const stop = getPrevTabColumn(ch)
 							while (startChar > stop && startChar != 0) {
-								c = lineText[startChar - 1];
+								c = lineText[startChar - 1]
 								if (c != " ") {
-									break;
+									break
 								}
-								startChar -= 1;
+								startChar -= 1
 							}
 						}
 					}
-					const range = new vscode.Range(line, startChar, line, ch);
-					edit.delete(range);
+					const range = new vscode.Range(line, startChar, line, ch)
+					edit.delete(range)
 				} else if (line > 0) {
 					// delete to previous line
-					const range = new vscode.Range(line - 1, 1000, line, ch);
-					edit.delete(range);
+					const range = new vscode.Range(line - 1, 1000, line, ch)
+					edit.delete(range)
 				}
 			} else {
 				// normal delete of selection
-				edit.delete(selection);
+				edit.delete(selection)
 			}
 		}
 	});

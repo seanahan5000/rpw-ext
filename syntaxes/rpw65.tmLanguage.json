@@ -65,15 +65,15 @@
       "patterns": [
         {
           "name": "constant.numeric.integer.hexadecimal.rpw65",
-          "match": "\\$\\h+"
+          "match": "\\b\\$?\\h+\\b"
         },
         {
           "name": "constant.numeric.integer.binary.rpw65",
-          "match": "%[01]+"
+          "match": "\\b%[01]+\\b"
         },
         {
           "name": "constant.numeric.integer.decimal.rpw65",
-          "match": "\\-?\\d+"
+          "match": "\\b\\-?\\d+\\b"
         }
       ]
     },

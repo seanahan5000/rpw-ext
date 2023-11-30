@@ -1,17 +1,17 @@
 
-import * as lsp from 'vscode-languageserver';
-import { URI } from 'vscode-uri';
-import * as fs from 'fs';
-
+import * as fs from 'fs'
+import * as lsp from 'vscode-languageserver'
+import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
-import { RpwProject, Project, SourceFile } from "./asm/project"
+import { TextDocuments } from 'vscode-languageserver/node'
+
+import { RpwProject, Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
-import { Expression, FileNameExpression, SymbolExpression } from "./asm/expressions"
+import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
 import { Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
-import exp = require("constants");
 
 //------------------------------------------------------------------------------
 
@@ -64,115 +64,6 @@ function uriFromPath(path: string) {
 
 //------------------------------------------------------------------------------
 
-// *** still needed? ***
-
-export class LspDocument implements TextDocument {
-  protected document: TextDocument;
-
-  constructor(doc: lsp.TextDocumentItem) {
-    const { uri, languageId, version, text } = doc;
-    this.document = TextDocument.create(uri, languageId, version, text);
-  }
-
-  get uri(): string {
-    return this.document.uri;
-  }
-
-  get languageId(): string {
-    return this.document.languageId;
-  }
-
-  get version(): number {
-    return this.document.version;
-  }
-
-  getText(range?: lsp.Range): string {
-    return this.document.getText(range);
-  }
-
-  positionAt(offset: number): lsp.Position {
-    return this.document.positionAt(offset);
-  }
-
-  offsetAt(position: lsp.Position): number {
-    return this.document.offsetAt(position);
-  }
-
-  get lineCount(): number {
-    return this.document.lineCount;
-  }
-
-  getLine(line: number): string {
-    const lineRange = this.getLineRange(line);
-    return this.getText(lineRange);
-  }
-
-  getLineRange(line: number): lsp.Range {
-    const lineStart = this.getLineStart(line);
-    const lineEnd = this.getLineEnd(line);
-    return lsp.Range.create(lineStart, lineEnd);
-  }
-
-  getLineEnd(line: number): lsp.Position {
-    const nextLine = line + 1;
-    const nextLineOffset = this.getLineOffset(nextLine);
-    // If next line doesn't exist then the offset is at the line end already.
-    return this.positionAt(nextLine < this.document.lineCount ? nextLineOffset - 1 : nextLineOffset);
-  }
-
-  getLineStart(line: number): lsp.Position {
-    return lsp.Position.create(line, 0);
-  }
-
-  getLineOffset(line: number): number {
-    const lineStart = this.getLineStart(line);
-    return this.offsetAt(lineStart);
-  }
-
-  applyEdit(version: number, change: lsp.TextDocumentContentChangeEvent): void {
-    const content = this.getText();
-    let newContent = change.text;
-    if (lsp.TextDocumentContentChangeEvent.isIncremental(change)) {
-        const start = this.offsetAt(change.range.start);
-        const end = this.offsetAt(change.range.end);
-        newContent = content.substr(0, start) + change.text + content.substr(end);
-    }
-    // NOTE: this seems excessive but the TypeScript lsp-server does it too
-    this.document = TextDocument.create(this.uri, this.languageId, version, newContent);
-  }
-}
-
-//------------------------------------------------------------------------------
-
-// *** still needed? ***
-
-export class LspDocuments {
-  private readonly documents = new Map<string, LspDocument>();
-
-  get(file: string): LspDocument | undefined {
-    return this.documents.get(file);
-  }
-
-  open(file: string, doc: lsp.TextDocumentItem): boolean {
-    if (this.documents.has(file)) {
-        return false;
-    }
-    this.documents.set(file, new LspDocument(doc));
-    return true;
-  }
-
-  close(file: string): LspDocument | undefined {
-      const document = this.documents.get(file);
-      if (!document) {
-          return undefined;
-      }
-      this.documents.delete(file);
-      return document;
-  }
-}
-
-//------------------------------------------------------------------------------
-
 class LspProject extends Project {
 
   private server: LspServer
@@ -184,35 +75,39 @@ class LspProject extends Project {
 
   getFileContents(fullPath: string): string | undefined {
     // look through open documents first
-    const document = this.server.documents.get(fullPath)
+    const uri = uriFromPath(fullPath)
+    const document = this.server.documents.get(uri)
     if (document) {
       return document.getText()
     }
     // if no open document, go look in file system
     return super.getFileContents(fullPath)
   }
+
+  openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
+    this.server.removeTemporary(fullPath)
+    return super.openSourceFile(module, fullPath)
+  }
 }
 
 //------------------------------------------------------------------------------
 
 type SemanticState = {
-  prevLine: number,
-  prevStart: number,
+  prevLine: number
+  prevStart: number
   data: number[]
 }
 
 type DiagnosticState = {
-  sourceFile: SourceFile,
-  lineNumber: number,
+  sourceFile: SourceFile
+  lineNumber: number
   diagnostics: lsp.Diagnostic[]
 }
-
-//*** think about factoring this so some of the code could be used in SublimeText, for example
 
 export class LspServer {
 
   private connection: lsp.Connection
-  public documents = new LspDocuments()
+  /*private*/ documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument)
   private projects: LspProject[] = []
   public workspaceFolderPath = ""
   private updateId?: NodeJS.Timeout
@@ -220,14 +115,23 @@ export class LspServer {
   private diagnosticId?: NodeJS.Timeout
 
   constructor(connection: lsp.Connection) {
-    this.connection = connection;
+    this.connection = connection
+    this.documents.listen(connection)
+
+    this.documents.onDidOpen(e => {
+      this.onDidOpenTextDocument(e.document.uri)
+    })
+
+    this.documents.onDidChangeContent(e => {
+      this.onDidChangeTextDocument(e.document.uri)
+    })
+
+    this.documents.onDidClose(e => {
+      this.onDidCloseTextDocument(e.document.uri)
+    })
 
 	  // TODO: switch to an override once server.ts cleaned up
-    // connection.onInitialize(this.onInitialize.bind(this));
-
-    connection.onDidOpenTextDocument(this.onDidOpenTextDocument.bind(this))
-    connection.onDidCloseTextDocument(this.onDidCloseTextDocument.bind(this))
-    connection.onDidChangeTextDocument(this.onDidChangeTextDocument.bind(this))
+    // connection.onInitialize(this.onInitialize.bind(this))
 
     connection.onCompletion(this.onCompletion.bind(this))
     connection.onCompletionResolve(this.onCompletionResolve.bind(this))
@@ -259,10 +163,26 @@ export class LspServer {
     }
   }
 
+  // if a file was opened in a project,
+  //  remove a temporary project that already owned the file
+  removeTemporary(filePath: string) {
+    for (let project of this.projects) {
+      if (project.temporary) {
+        if (project.findSourceFile(filePath)) {
+          // NOTE: for now, just disable the project by removing its modules
+          // Removing it completely will cause problems because caller is
+          //  iterating through list of projects.
+          project.modules = []
+          break
+        }
+      }
+    }
+  }
+
   // *** just use a map lookup directly? ***
   findSourceFile(filePath: string): SourceFile | undefined {
-    for (let i = 0; i < this.projects.length; i += 1) {
-      const sourceFile = this.projects[i].findSourceFile(filePath)
+    for (let project of this.projects) {
+      const sourceFile = project.findSourceFile(filePath)
       if (sourceFile) {
         return sourceFile
       }
@@ -271,9 +191,10 @@ export class LspServer {
 
   onInitialize(params: lsp.InitializeParams): void {
 
+    // TODO: enable this for debugging immediately after initialize
     // const n = 1
     // while (n) {
-    //   console.log()  // ***
+    //   console.log()
     // }
 
     if (params.workspaceFolders) {
@@ -407,35 +328,23 @@ export class LspServer {
     return project
   }
 
-  onDidOpenTextDocument(params: lsp.DidOpenTextDocumentParams): void {
-    const filePath = pathFromUriString(params.textDocument.uri)
+  onDidOpenTextDocument(uri: string): void {
+    const filePath = pathFromUriString(uri)
     if (filePath) {
-      if (this.documents.open(filePath, params.textDocument)) {
-        const document = this.documents.get(filePath)
-        if (document) {
-          let sourceFile = this.findSourceFile(filePath)
-          if (!sourceFile) {
-            const project = this.addFileProject(filePath, true)
-            if (!project) {
-              // *** error handling ***
-              return
-            }
-            // project.update()
-            // sourceFile = this.findSourceFile(filePath)
-            // if (!sourceFile) {
-            //   // *** error handling ***
-            //   return
-            // }
-          }
-
-          this.scheduleUpdate(sourceFile)
+      let sourceFile = this.findSourceFile(filePath)
+      if (!sourceFile) {
+        const project = this.addFileProject(filePath, true)
+        if (!project) {
+          // *** error handling ***
+          return
         }
       }
+      this.scheduleUpdate(sourceFile)
     }
   }
 
-  onDidCloseTextDocument(params: lsp.DidCloseTextDocumentParams): void {
-    const filePath = pathFromUriString(params.textDocument.uri)
+  onDidCloseTextDocument(uri: string): void {
+    const filePath = pathFromUriString(uri)
     if (filePath) {
       let sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
@@ -446,20 +355,14 @@ export class LspServer {
           this.projects.splice(index, 1)
         }
       }
-      this.documents.close(filePath)
     }
   }
 
-  onDidChangeTextDocument(params: lsp.DidChangeTextDocumentParams): void {
-    const { textDocument } = params
-    const filePath = pathFromUriString(params.textDocument.uri)
+  onDidChangeTextDocument(uri: string): void {
+    const filePath = pathFromUriString(uri)
     if (filePath) {
-      const document = this.documents.get(filePath)
-      if (document) {
-        for (const change of params.contentChanges) {
-          document.applyEdit(textDocument.version, change)
-        }
-        const sourceFile = this.findSourceFile(filePath)
+      const sourceFile = this.findSourceFile(filePath)
+      if (sourceFile) {
         this.scheduleUpdate(sourceFile)
       }
     }
@@ -589,29 +492,52 @@ export class LspServer {
   async onHover(params: lsp.TextDocumentPositionParams, token?: lsp.CancellationToken): Promise<lsp.Hover> {
     this.executeUpdate()
 
+    let hoverStr = ""
     const statement = this.getStatement(params.textDocument.uri, params.position.line)
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
-      if (res && res.expression instanceof SymbolExpression) {
-        const hoverExp = res.expression
-        // TODO: if hovering over macro invocation, show macro contents
-        if (hoverExp instanceof SymbolExpression) {
-          if (hoverExp.isDefinition) {
-            // *** show value of symbol, if resolved
-          } else if (hoverExp.symbol) {
-            const defExp = hoverExp.symbol?.definition
-            if (defExp && defExp.sourceFile) {
-              // *** also show value, if resolved
-              let header = getCommentHeader(defExp.sourceFile, defExp.lineNumber)
-              if (header) {
-                return { contents: header }
+      if (res) {
+        if (res.expression instanceof SymbolExpression) {
+          const hoverExp = res.expression
+          // TODO: if hovering over macro invocation, show macro contents
+          if (hoverExp instanceof SymbolExpression) {
+            if (hoverExp.symbol) {
+              const defExp = hoverExp.symbol.definition
+              if (defExp && defExp.sourceFile) {
+                hoverStr = getCommentHeader(defExp.sourceFile, defExp.lineNumber) ?? ""
+                if (hoverExp.symbol.isConstant) {
+                  const value = hoverExp.resolve()
+                  if (value != undefined) {
+                    hoverStr += hoverExp.symbol.getSimpleNameToken(hoverExp).getString()
+                      + " = " + value.toString(10)
+                      + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
+                      + ", %" + value.toString(2).padStart(8, "0")
+                  }
+                } else if (hoverExp.symbol.isZPage) {
+                  const value = hoverExp.resolve()
+                  if (value != undefined) {
+                    hoverStr += hoverExp.symbol.getSimpleNameToken(hoverExp).getString()
+                      + " = $" + value.toString(16).padStart(2, "0").toUpperCase()
+                  }
+                }
               }
             }
+          }
+        } else if (res.expression instanceof NumberExpression) {
+          const value = res.expression.resolve()
+          if (value != undefined) {
+            hoverStr += value.toString(10)
+              + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
+              + ", %" + value.toString(2).padStart(8, "0")
           }
         }
       }
     }
 
+    if (hoverStr != "") {
+      hoverStr = "```\n" + hoverStr + "\n```"
+      return { contents: hoverStr }
+    }
     return { contents: [] }
   }
 
