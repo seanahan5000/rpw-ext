@@ -186,10 +186,14 @@
 		"vscode:prepublish": "npm run esbuild-client -- --minify && npm run esbuild-server -- --minify",
 		"esbuild-client": "esbuild ./client/src/extension.ts --bundle --outfile=client/out/extension.js --external:vscode --format=cjs --platform=node",
 		"esbuild-server": "esbuild ./server/src/server.ts --bundle --outfile=server/out/server.js --external:vscode --format=cjs --platform=node",
-    "esbuild-base": "npm run esbuild-client -- --sourcemap && npm run esbuild-server -- --sourcemap",
+		"esbuild-base": "npm run esbuild-client -- --sourcemap && npm run esbuild-server -- --sourcemap",
 		"build": "npm run esbuild-base -- --sourcemap",
-    "esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
-    "test-compile": "tsc -p ./"
+		"esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
+		"test-compile": "tsc -p ./",
+
+		"compile": "tsc -b",
+		"watch": "tsc -b -w",
+		"postinstall": "cd client && npm install && cd ../server && npm install && cd .."
 	},
 	"devDependencies": {
 		"@types/node": "^16.18.34",

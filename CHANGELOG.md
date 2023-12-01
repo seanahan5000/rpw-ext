@@ -1,10 +1,8 @@
-# Changelog
+# RPW 65 Changelog
 
-All notable changes to the rpw65 extension will be documented here.
+### [0.9.0] - 2023-11-30
 
-## [0.9.0] - 2023-11-29
-
-### Added
+#### Added:
 * Multi-syntax parsing
 * Semantic syntax hiliting
 * Auto-completion

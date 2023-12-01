@@ -422,7 +422,7 @@ export class LspServer {
       }
 
       // *** fold this into something else? ***
-      const textDocument = this.documents.get(filePath)
+      const textDocument = this.documents.get(params.arguments[0])
       if (textDocument === undefined) {
         return
       }
