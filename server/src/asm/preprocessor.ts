@@ -8,13 +8,13 @@ import { SymbolExpression } from "./expressions"
 
 type ConditionalState = {
   enableCount: number,
-  satisfied: boolean,
+  satisfiedCount: number,
   statement?: ConditionalStatement
 }
 
 export class Conditional {
   private enableCount = 1
-  private satisfied = true
+  private satisfiedCount = 0
   public statement?: ConditionalStatement
   private stack: ConditionalState[] = []
 
@@ -23,9 +23,9 @@ export class Conditional {
     if (this.stack.length > 255) {
       return false
     }
-    this.stack.push({ enableCount: this.enableCount, satisfied: this.satisfied, statement: this.statement})
+    this.stack.push({ enableCount: this.enableCount, satisfiedCount: this.satisfiedCount, statement: this.statement})
     this.enableCount -= 1
-    this.satisfied = false
+    this.satisfiedCount = 0
     this.statement = undefined
     return true
   }
@@ -37,18 +37,32 @@ export class Conditional {
     const state = this.stack.pop()
     if (state) {
       this.enableCount = state.enableCount
-      this.satisfied = state.satisfied
+      this.satisfiedCount = state.satisfiedCount
       this.statement = state.statement
     }
     return true
   }
 
-  public setSatisfied(satisfied: boolean) {
-    this.satisfied = satisfied
+  // True when a previous conditional clause was true,
+  //  used to determine if the "else" clause should be enabled.
+  public wasSatisfied(): boolean {
+    return this.satisfiedCount > 0
   }
 
-  public isSatisfied(): boolean {
-    return this.satisfied
+  // Called for each clause, used to control
+  //  enable/disable across clauses.
+  public setSatisfied(isSatisfied: boolean) {
+    if (isSatisfied) {
+      this.satisfiedCount = 1
+      this.enable()
+    } else if (this.satisfiedCount > 0) {
+      // if the previous clause was satisifed,
+      //  disable all remaining clauses
+      if (this.satisfiedCount == 1) {
+        this.disable()
+      }
+      this.satisfiedCount += 1
+    }
   }
 
   public enable() {

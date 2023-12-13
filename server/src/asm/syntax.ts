@@ -327,6 +327,9 @@ class DasmSyntax extends SyntaxDef {
       [ "!",   { pre: 20, op: Op.LogNot   }], // logical NOT
       [ "<",   { pre: 20, op: Op.LowByte  }], // low-byte
       [ ">",   { pre: 20, op: Op.HighByte }], // high-byte
+
+      [ "(",   { pre: 0,  op: Op.Group, end: ")" }],
+      [ "{",   { pre: 0,  op: Op.Group, end: "}" }]
     ])
 
     this.binaryOpMap = new Map<string, OpDef>([
@@ -433,6 +436,8 @@ class AcmeSyntax extends SyntaxDef {
       [ "<",   { pre:  7, op: Op.LowByte  }], // Lowbyte of
       [ ">",   { pre:  7, op: Op.HighByte }], // Highbyte of
       [ "^",   { pre:  7, op: Op.BankByte }], // Bankbyte of
+
+      [ "(",   { pre: 0,  op: Op.Group, end: ")" }]
     ])
 
     this.binaryOpMap = new Map<string, OpDef>([
@@ -491,6 +496,12 @@ class Ca65Syntax extends SyntaxDef {
       [ ".endmac",    { create: () => { return new stm.EndMacroDefStatement() }}],
       [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() }}],
 
+      // conditionals
+      [ ".if",        { create: () => { return new stm.IfStatement() }}],
+      [ ".else",      { create: () => { return new stm.ElseStatement() }}],
+      [ ".elseif",    { create: () => { return new stm.ElseIfStatement() }}],
+      [ ".endif",     { create: () => { return new stm.EndIfStatement() }}],
+
       // ***
     ])
 
@@ -507,6 +518,8 @@ class Ca65Syntax extends SyntaxDef {
       [ ".BANKBYTE", { pre: 7, op: Op.BankByte }],  // (1) Unary bank-byte
       [ "!",         { pre: 1, op: Op.LogNot   }],  // (7) Boolean not
       [ ".NOT",      { pre: 1, op: Op.LogNot   }],  // (7) Boolean not
+
+      [ "(",   { pre: 0,  op: Op.Group, end: ")" }]
     ])
 
     this.binaryOpMap = new Map<string, OpDef>([
@@ -567,6 +580,7 @@ class LisaSyntax extends SyntaxDef {
       [ "org",  { create: () => { return new stm.OrgStatement() }}],
       [ "equ",  { create: () => { return new stm.EquStatement() }}],
       [ "=",    { create: () => { return new stm.EquStatement() }}],
+      [ "epz",  { create: () => { return new stm.EquStatement() }}],
 
       // disk
       [ "icl",  { create: () => { return new stm.IncludeStatement() }}],
@@ -582,8 +596,12 @@ class LisaSyntax extends SyntaxDef {
       [ "end",  {}],
       [ "dcm",  {}],
       [ "nls",  {}],
-      [ "epz",  {}],
       [ "adr",  {}],
+
+      // conditionals
+      [ ".if",  { create: () => { return new stm.IfStatement() }}],
+      [ ".el",  { create: () => { return new stm.ElseStatement() }}],
+      [ ".fi",  { create: () => { return new stm.EndIfStatement() }}],
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

@@ -1,11 +1,11 @@
 {
 	"name": "rpw65",
 	"displayName": "RPW 65",
-	"description": "Multi-syntax language server for 6502 assembly",
+	"description": "Multi-syntax language extension for 6502 assembly, supporting MERLIN, DASM, ACME, CA65, and LISA",
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "0.9.0",
+	"version": "1.0.0",
 	"repository": {
     "type": "git",
     "url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -38,17 +38,6 @@
 					"type": "number",
 					"default": 100,
 					"description": "Controls the maximum number of problems produced by the server."
-				},
-				"rpw65.trace.server": {
-					"scope": "window",
-					"type": "string",
-					"enum": [
-						"off",
-						"messages",
-						"verbose"
-					],
-					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
 				}
 			}
 		},

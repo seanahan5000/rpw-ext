@@ -481,10 +481,7 @@ export class IfStatement extends ConditionalStatement {
     conditional.statement = this
 
     let value = this.expression?.resolve() ?? 0
-    if (value != 0) {
-      conditional.setSatisfied(true)
-      conditional.enable()
-    }
+    conditional.setSatisfied(value != 0)
   }
 
   postProcessSymbols(symUtils: SymbolUtils): void {
@@ -534,9 +531,49 @@ export class IfDefStatement extends ConditionalStatement {
     conditional.statement = this
 
     const symDefined = this.symExpression?.symbol !== undefined
-    if ((symDefined && this.isDefined) || (!symDefined && !this.isDefined)) {
-      conditional.setSatisfied(true)
-      conditional.enable()
+    conditional.setSatisfied(
+      (symDefined && this.isDefined) || (!symDefined && !this.isDefined))
+  }
+}
+
+
+// MERLIN:
+//   DASM:  ELIF <exp>
+//   ACME:
+//   CA65:  .elseif <exp>
+//   LISA:
+//  SBASM:
+
+export class ElseIfStatement extends ConditionalStatement {
+
+  private expression?: exp.Expression
+
+  parse(parser: Parser) {
+    // TODO: give hint that this expression is for conditional code
+    this.expression = parser.mustAddNextExpression()
+  }
+
+  applyConditional(conditional: Conditional): void {
+    if (conditional.isComplete()) {
+      this.setError("Unexpected ELIF without IF")
+      return
+    }
+
+    if (conditional.statement) {
+      conditional.statement.nextConditional = this
+    } else {
+      this.setError("no matching IF/ELIF statement")
+      return
+    }
+    conditional.statement = this
+
+    let value = this.expression?.resolve() ?? 0
+    conditional.setSatisfied(!conditional.wasSatisfied() && value != 0)
+  }
+
+  postProcessSymbols(symUtils: SymbolUtils): void {
+    if (this.expression) {
+      symUtils.markConstants(this.expression)
     }
   }
 }
@@ -584,59 +621,7 @@ export class ElseStatement extends ConditionalStatement {
     }
     conditional.statement = this
 
-    if (!conditional.isSatisfied()) {
-      conditional.setSatisfied(true)
-      conditional.enable()
-    } else {
-      conditional.disable()
-    }
-  }
-}
-
-
-// MERLIN:
-//   DASM:
-//   ACME:
-//   CA65:  .elseif <exp>
-//   LISA:
-//  SBASM:
-
-export class ElseIfStatement extends ConditionalStatement {
-
-  private expression?: exp.Expression
-
-  parse(parser: Parser) {
-    // TODO: give hint that this expression is for conditional code
-    this.expression = parser.mustAddNextExpression()
-  }
-
-  applyConditional(conditional: Conditional): void {
-    if (conditional.isComplete()) {
-      this.setError("Unexpected ELIF without IF")
-      return
-    }
-
-    if (conditional.statement) {
-      conditional.statement.nextConditional = this
-    } else {
-      this.setError("no matching IF/ELIF statement")
-      return
-    }
-    conditional.statement = this
-
-    let value = this.expression?.resolve() ?? 0
-    if (conditional.isSatisfied() && value != 0) {
-      conditional.setSatisfied(true)
-      conditional.enable()
-    } else {
-      conditional.disable()
-    }
-  }
-
-  postProcessSymbols(symUtils: SymbolUtils): void {
-    if (this.expression) {
-      symUtils.markConstants(this.expression)
-    }
+    conditional.setSatisfied(!conditional.wasSatisfied())
   }
 }
 

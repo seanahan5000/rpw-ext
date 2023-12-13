@@ -5,7 +5,8 @@ import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { TextDocuments } from 'vscode-languageserver/node'
 
-import { RpwProject, Project, Module, SourceFile } from "./asm/project"
+import { RpwProject, RpwSettings } from "./rpw_types"
+import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
 import { Statement } from "./asm/statements"
@@ -319,7 +320,8 @@ export class LspServer {
         directory = path.substring(0, index)
       }
     }
-    let rpwProject: RpwProject = {}
+    let settings: RpwSettings = {}
+    let rpwProject: RpwProject = { settings }
     rpwProject.modules = []
     rpwProject.modules.push({src: fileName})
     const project = new LspProject(this)

@@ -1,5 +1,6 @@
 
 import * as fs from 'fs'
+import { RpwProject } from "../rpw_types"
 import { Syntax, SyntaxMap } from "./syntax"
 import { Statement } from "./statements"
 import { Preprocessor } from "./preprocessor"
@@ -9,24 +10,6 @@ import { Symbol } from "./symbols"
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
 }
-
-//------------------------------------------------------------------------------
-
-export type RpwModule = {
-  src?: string
-}
-
-export type RpwProject = {
-  syntax?: string,
-  upperCase?: boolean,
-  tabSize?: number,
-  tabStops?: number[],
-  srcDir?: string,
-  includes?: string[],
-  modules?: RpwModule[]
-}
-
-// TODO: add default fileSuffix? ".S" for merlin, for example
 
 //------------------------------------------------------------------------------
 
@@ -94,19 +77,19 @@ export class Project {
       this.rootDir = rootDir
     }
 
-    if (rpwProject.syntax) {
-      this.syntax = SyntaxMap.get(rpwProject.syntax.toUpperCase()) ?? Syntax.UNKNOWN
+    if (rpwProject.settings.syntax) {
+      this.syntax = SyntaxMap.get(rpwProject.settings.syntax.toUpperCase()) ?? Syntax.UNKNOWN
       // TODO: error if syntax match not found?
     }
 
-    this.upperCase = rpwProject.upperCase ?? false
-    this.tabSize = rpwProject.tabSize ?? 4
+    this.upperCase = rpwProject.settings.upperCase ?? false
+    this.tabSize = rpwProject.settings.tabSize ?? 4
 
     // process tabStops
-    if (rpwProject.tabStops && rpwProject.tabStops.length) {
+    if (rpwProject.settings.tabStops && rpwProject.settings.tabStops.length) {
       const tabStops = [0]
       let prevStop = 0
-      for (let nextStop of rpwProject.tabStops) {
+      for (let nextStop of rpwProject.settings.tabStops) {
         if (nextStop > prevStop) {
           tabStops.push(nextStop)
         }
@@ -152,6 +135,9 @@ export class Project {
           srcName = srcName.substring(lastSlash + 1)
           if (srcPath.indexOf("/") != 0) {
             srcPath = "/" + srcPath
+          }
+          if (srcPath == "/") {
+            srcPath = ""
           }
         }
 

@@ -1,5 +1,15 @@
 # RPW 65 Changelog
 
+### [1.0.0] - 2023-12-13
+
+#### Fixed:
+* Paren and brace parsing for non-Merlin syntaxes
+* Elseif conditional handling
+* Put/include directory parsing exception while editing
+
+#### Changed:
+* Moved project settings under a common property in project file
+
 ### [0.9.0] - 2023-11-30
 
 #### Added:
