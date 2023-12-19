@@ -5,15 +5,16 @@ import { Expression, SymbolExpression} from "./expressions"
 //------------------------------------------------------------------------------
 
 export enum SymbolType {
-  Macro       = 0,
+  Variable    = 0,
+  Macro       = 1,
 
-  Simple      = 1,
-  Scoped      = 2,  // explicit scope, fully specified
+  Simple      = 2,
+  Scoped      = 3,  // explicit scope, fully specified
 
-  CheapLocal  = 3,  // scoped to previous non-local
-  ZoneLocal   = 4,  // scoped to SUBROUTINE or !zone
-  AnonLocal   = 5,  // ++ or --
-  LisaLocal   = 6,  // ^# def, <# or ># ref
+  CheapLocal  = 4,  // scoped to previous non-local
+  ZoneLocal   = 5,  // scoped to SUBROUTINE or !zone
+  AnonLocal   = 6,  // ++ or --
+  LisaLocal   = 7,  // ^# def, <# or ># ref
 }
 
 export function isLocalType(symbolType: SymbolType): boolean {
@@ -111,6 +112,12 @@ export class ScopeState {
   setSymbolExpression(symExp: SymbolExpression): string | undefined {
 
     switch (symExp.symbolType) {
+
+      case SymbolType.Variable: {
+        // TODO: just getSimpleNameToken instead?
+        // NOTE: if this changes, also change processSymbols in preprocessor.ts
+        return symExp.getString()
+      }
 
       case SymbolType.Macro: {
         let nameToken = symExp.children[0]

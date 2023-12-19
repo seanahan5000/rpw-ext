@@ -1,11 +1,11 @@
 {
 	"name": "rpw65",
 	"displayName": "RPW 65",
-	"description": "Multi-syntax language extension for 6502 assembly, supporting MERLIN, DASM, ACME, CA65, and LISA",
+	"description": "Multi-syntax language extension for 6502 assembly, in merlin, dasm, acme, ca65, and lisa syntaxes",
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"repository": {
     "type": "git",
     "url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -31,13 +31,35 @@
 	"contributes": {
 		"configuration": {
 			"type": "object",
-			"title": "Example configuration",
+			"title": "RPW65",
 			"properties": {
-				"rpw65.maxNumberOfProblems": {
-					"scope": "resource",
+				"rpw65.syntax": {
+					"type": "string",
+					"enum": ["merlin", "dasm", "acme", "ca65", "lisa"],
+					"markdownDescription": "Assembler syntax to apply to source files.  A hybrid union of the syntaxes is used if none is chosen."
+				},
+				"rpw65.columns.c1": {
 					"type": "number",
-					"default": 100,
-					"description": "Controls the maximum number of problems produced by the server."
+					"default": 16,
+					"minimum": 1,
+					"markdownDescription": "Width of the label column to use in tabbing and formatting."
+				},
+				"rpw65.columns.c2": {
+					"type": "number",
+					"default": 4,
+					"minimum": 1,
+					"markdownDescription": "Width of the opcode column to use in tabbing and formatting."
+				},
+				"rpw65.columns.c3": {
+					"type": "number",
+					"default": 20,
+					"minimum": 1,
+					"markdownDescription": "Width of the arguments column to use in tabbing and formatting."
+				},
+				"rpw65.case.lowerCaseCompletions": {
+					"type": "boolean",
+					"default": false,
+					"markdownDescription": "Use lowercase in auto-complete suggestions."
 				}
 			}
 		},

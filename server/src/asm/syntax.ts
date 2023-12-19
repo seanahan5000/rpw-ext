@@ -176,9 +176,8 @@ class MerlinSyntax extends SyntaxDef {
   constructor() {
     super()
 
-    // *** padded name too? just flag? ***
     this.keywordMap = new Map<string, KeywordDef>([
-      [ "xc",     {}],
+      [ "xc",     { create: () => { return new stm.CpuStatement() }}],
       [ "org",    { create: () => { return new stm.OrgStatement() }}],
       [ "equ",    { create: () => { return new stm.EquStatement() }}],
       [ "=",      { create: () => { return new stm.EquStatement() }}],
@@ -188,7 +187,7 @@ class MerlinSyntax extends SyntaxDef {
       [ "put",    { create: () => { return new stm.IncludeStatement() }}],
       [ "use",    { create: () => { return new stm.IncludeStatement() }}],
       [ "sav",    { create: () => { return new stm.SaveStatement() }}],
-      [ "dsk",    { create: () => { return new stm.SaveStatement() }}],
+      [ "dsk",    { create: () => { return new stm.DiskStatement() }}],
 
       // macros
       [ "mac",    { create: () => { return new stm.MacroDefStatement() }}],
@@ -210,10 +209,10 @@ class MerlinSyntax extends SyntaxDef {
       [ "ds",     { create: () => { return new stm.ByteStorageStatement() }}],
       [ "hex",    { create: () => { return new stm.HexStatement() }}],
 
-      [ "asc",    {}],
-      [ "dci",    {}],
-      [ "rev",    {}],
-      [ "str",    {}],
+      [ "asc",    { create: () => { return new stm.TextStatement() }}],
+      [ "dci",    { create: () => { return new stm.TextStatement() }}],
+      [ "rev",    { create: () => { return new stm.TextStatement() }}],
+      [ "str",    { create: () => { return new stm.TextStatement() }}],
 
       // TODO: eventually treat these as macros
       [ "txt",    { create: () => { return new stm.TextStatement() }}],
@@ -224,6 +223,7 @@ class MerlinSyntax extends SyntaxDef {
       [ "do",     { create: () => { return new stm.IfStatement() }}],
       [ "else",   { create: () => { return new stm.ElseStatement() }}],
       [ "fin",    { create: () => { return new stm.EndIfStatement() }}],
+      [ "end",    {}],
 
       [ "tr",     { create: () => { return new stm.ListStatement() }}],
       [ "lst",    { create: () => { return new stm.ListStatement() }}],
@@ -231,7 +231,6 @@ class MerlinSyntax extends SyntaxDef {
       [ "exp",    { create: () => { return new stm.ListStatement() }}],
       [ "page",   { create: () => { return new stm.ListStatement() }}],
       [ "obj",    {}],
-      [ "end",    {}],
       [ "ent",    { create: () => { return new stm.EntryStatement() }}],
     ])
 
@@ -275,10 +274,11 @@ class DasmSyntax extends SyntaxDef {
     super()
 
     this.keywordMap = new Map<string, KeywordDef>([
-      [ "processor",  {}],
+      [ "processor",  { create: () => { return new stm.CpuStatement() }}],
       [ "org",        { create: () => { return new stm.OrgStatement() }}],
       [ "equ",        { create: () => { return new stm.EquStatement() }}],
       [ "=",          { create: () => { return new stm.EquStatement() }}],
+      [ "set",        { create: () => { return new stm.VarAssignStatement() }}],
       [ "err",        { create: () => { return new stm.ErrorStatement() }}],
 
       // disk
@@ -288,8 +288,10 @@ class DasmSyntax extends SyntaxDef {
       [ "mac",        { create: () => { return new stm.MacroDefStatement() }}],
       [ "macro",      { create: () => { return new stm.MacroDefStatement() }}],
       [ "endm",       { create: () => { return new stm.EndMacroDefStatement() }}],
+      [ "mexit",      {}],
 
-      [ "seg",        {}],
+      [ "seg",        { create: () => { return new stm.SegmentStatement() }}],
+      [ "seg.u",      { create: () => { return new stm.SegmentStatement() }}],
       [ "repeat",     {}],
       [ "repend",     {}],
       [ "echo",       {}],
@@ -303,7 +305,9 @@ class DasmSyntax extends SyntaxDef {
       [ "dc.b",       { create: () => { return new stm.ByteDataStatement() }}],
       [ "dc.w",       { create: () => { return new stm.WordDataStatement() }}],
       [ "dc.s",       { create: () => { return new stm.WordDataStatement(true) }}],
+      [ "byte",       { create: () => { return new stm.ByteDataStatement() }}],
       [ ".byte",      { create: () => { return new stm.ByteDataStatement() }}],
+      [ "word",       { create: () => { return new stm.WordDataStatement() }}],
       [ ".word",      { create: () => { return new stm.WordDataStatement() }}],
       [ "hex",        { create: () => { return new stm.HexStatement() }}],
       [ "align",      {}],
@@ -316,6 +320,7 @@ class DasmSyntax extends SyntaxDef {
       [ "elif",       { create: () => { return new stm.ElseIfStatement() }}],
       [ "endif",      { create: () => { return new stm.EndIfStatement() }}],
       [ "eif",        { create: () => { return new stm.EndIfStatement() }}],
+      [ "end",        {}],
 
       // scope
       [ "subroutine", { create: () => { return new stm.ZoneStatement() }}],
@@ -387,12 +392,13 @@ class AcmeSyntax extends SyntaxDef {
     super()
 
     this.keywordMap = new Map<string, KeywordDef>([
-      [ "!cpu",       {}],
+      [ "!cpu",       { create: () => { return new stm.CpuStatement() }}],
       [ "*",          { create: () => { return new stm.OrgStatement() }}],
+      [ "=",          { create: () => { return new stm.EquStatement() }}],
 
       // disk
-      [ "!source",    {}],
-      [ "!to",        {}],
+      [ "!source",    { create: () => { return new stm.IncludeStatement() }}],
+      [ "!to",        { create: () => { return new stm.DiskStatement() }}],
 
       // macros
       [ "!mac",       { create: () => { return new stm.MacroDefStatement() }}],
@@ -404,11 +410,18 @@ class AcmeSyntax extends SyntaxDef {
       [ "!fill",      {}],
       [ "!align",     {}],
 
+      [ "!pet",       { create: () => { return new stm.TextStatement() }}],
+      [ "!raw",       { create: () => { return new stm.TextStatement() }}],
+      [ "!scr",       { create: () => { return new stm.TextStatement() }}],
+      [ "!text",      { create: () => { return new stm.TextStatement() }}],
+
       [ "!convtab",   {}],
       [ "!pseudopc",  {}],
 
       // conditionals
       [ "!if",        { create: () => { return new stm.IfStatement() }}],
+      [ "!ifdef",     { create: () => { return new stm.IfDefStatement(true) }}],
+      [ "!ifndef",    { create: () => { return new stm.IfDefStatement(false) }}],
 
       // scope
       [ "!zone",      { create: () => { return new stm.ZoneStatement() }}],

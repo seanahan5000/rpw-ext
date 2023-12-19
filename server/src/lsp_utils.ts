@@ -3,8 +3,8 @@ import * as lsp from 'vscode-languageserver'
 import { LspServer } from "./lsp_server"
 import { SourceFile } from "./asm/project"
 import { Token, TokenType } from "./asm/tokenizer"
-import { Statement, OpStatement, OpMode } from "./asm/statements"
-import { Opcodes6502 } from "./asm/opcodes"
+import { OpStatement, OpMode } from "./asm/statements"
+import { OpcodeSets } from "./asm/opcodes"
 import { SyntaxDefs } from "./asm/syntax"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
@@ -290,8 +290,11 @@ export class Completions {
     const completions: lsp.CompletionItem[] = []
 
     if (this.addOpcodes) {
-      for (let key in Opcodes6502) {
-        let opcode = (Opcodes6502 as {[key: string]: any})[key]
+      for (let i = 0; i < OpcodeSets.length; i += 1) {
+        const opcodeSet = OpcodeSets[i]
+        // TODO: decide if opcodes should be limited to just 6502?
+        for (let key in opcodeSet) {
+          let opcode = (opcodeSet as {[key: string]: any})[key]
           if (sourceFile.module.project.upperCase) {
             key = key.toUpperCase()
           }
@@ -303,6 +306,7 @@ export class Completions {
           item.sortText = `${this.addOpcodes}_${key}`
           item.kind = lsp.CompletionItemKind.Text
           completions.push(item)
+        }
       }
     }
 

@@ -134,6 +134,10 @@
         {
           "name": "keyword.mnemonic.rpw65",
           "match": "\\s(?i:CLC|CLD|CLI|CLV|SEC|SED|SEI|BRK|NOP|RTI)\\s"
+        },
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:BRA|PHX|PHY|PLX|PLY|STZ|TRB|TSB)\\s"
         }
       ]
     }

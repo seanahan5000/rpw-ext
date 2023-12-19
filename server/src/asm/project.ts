@@ -1,6 +1,6 @@
 
 import * as fs from 'fs'
-import { RpwProject } from "../rpw_types"
+import { RpwProject, RpwSettings } from "../rpw_types"
 import { Syntax, SyntaxMap } from "./syntax"
 import { Statement } from "./statements"
 import { Preprocessor } from "./preprocessor"
@@ -48,6 +48,7 @@ export class SourceFile {
 
 export class Project {
 
+  private rpwSettings: RpwSettings = {}
   public syntax = Syntax.UNKNOWN
   public upperCase: boolean = false
   public tabSize = 4
@@ -77,28 +78,7 @@ export class Project {
       this.rootDir = rootDir
     }
 
-    if (rpwProject.settings.syntax) {
-      this.syntax = SyntaxMap.get(rpwProject.settings.syntax.toUpperCase()) ?? Syntax.UNKNOWN
-      // TODO: error if syntax match not found?
-    }
-
-    this.upperCase = rpwProject.settings.upperCase ?? false
-    this.tabSize = rpwProject.settings.tabSize ?? 4
-
-    // process tabStops
-    if (rpwProject.settings.tabStops && rpwProject.settings.tabStops.length) {
-      const tabStops = [0]
-      let prevStop = 0
-      for (let nextStop of rpwProject.settings.tabStops) {
-        if (nextStop > prevStop) {
-          tabStops.push(nextStop)
-        }
-        prevStop = nextStop
-      }
-      if (tabStops.length >= 4) {
-        this.tabStops = tabStops
-      }
-    }
+    this.rpwSettings = rpwProject.settings ?? {}
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
@@ -146,6 +126,21 @@ export class Project {
     }
 
     return true
+  }
+
+  defaultSettingsChanged(defaultSettings?: RpwSettings) {
+    const syntax = this.rpwSettings.syntax ?? defaultSettings?.syntax ?? Syntax.UNKNOWN
+    if (syntax) {
+      this.syntax = SyntaxMap.get(syntax.toUpperCase()) ?? Syntax.UNKNOWN
+      // TODO: error if syntax match not found?
+    }
+
+    this.upperCase = this.rpwSettings.upperCase ?? defaultSettings?.upperCase ?? true
+    this.tabSize = this.rpwSettings.tabSize ?? defaultSettings?.tabSize ?? 4
+    this.tabStops = this.rpwSettings.tabStops ?? defaultSettings?.tabStops ?? [0, 16, 20, 40]
+    if (this.tabStops[0] != 0) {
+      this.tabStops.unshift(0)
+    }
   }
 
   update() {
@@ -248,6 +243,7 @@ export class Module {
   private srcPath: string     // always in the form "/path" or ""
   private srcName: string     // always just the file name (*** without suffix?)
   public symbolMap = new Map<string, Symbol>
+  public variableMap = new Map<string, Symbol>
 
   //*** separate list of exported symbols (also in this.symbols)
   //*** when creating xxx = $ffff symbols, search all other module exports and link
@@ -272,6 +268,7 @@ export class Module {
     this.sourceFiles = []
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
+    this.variableMap = new Map<string, Symbol>
 
     // let asm = new Assembler(this)
     // asm.parse(this.srcName)

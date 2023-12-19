@@ -56,9 +56,6 @@ export const Opcodes6502 = {
 	"bpl": {
 		"BRAN": 0x10
 	},
-	// "bra": {
-	// 	OPC(BRAN: 0x80)		// 65C02
-	// },
 	"brk": {
 		"NONE": 0x00
 	},
@@ -101,8 +98,8 @@ export const Opcodes6502 = {
 		"ABS" : 0xCC
 	},
 	"dec": {
-		// OPC(NONE: 0x3A)		// 65C02
-		// OPC(A   : 0x3A)		// 65C02
+		"NONE": 0x3A,		// 65C02
+		"A"   : 0x3A,		// 65C02
 		"ZP"  : 0xC6,
 		"ZPX" : 0xD6,
 		"ABS" : 0xCE,
@@ -125,8 +122,8 @@ export const Opcodes6502 = {
 		"INDY": 0x51
 	},
 	"inc": {
-		// OPC(NONE: 0x1A)		// 65C02
-		// OPC(A   : 0x1A)		// 65C02
+		"NONE": 0x1A,		// 65C02
+		"A"   : 0x1A,		// 65C02
 		"ZP"  : 0xE6,
 		"ZPX" : 0xF6,
 		"ABS" : 0xEE,
@@ -196,27 +193,12 @@ export const Opcodes6502 = {
 	"php": {
 		"NONE": 0x08
 	},
-	// "phx": {
-	// 	OPC(NONE: 0xDA)		// 65C02
-	// },
-	// "phy": {
-	// 	OPC(NONE: 0x5A)		// 65C02
-	// },
 	"pla": {
 		"NONE": 0x68
 	},
 	"plp": {
 		"NONE": 0x28
 	},
-	// "plx": {
-	// 	OPC(NONE: 0xFA)		// 65C02
-	// },
-	// "ply": {
-	// 	OPC(NONE: 0x7A)		// 65C02
-	// },
-	// "rep": {
-	// 	OPG(IMM,  0xC2)		// 65816
-	// },
 	"rol": {
 		"NONE": 0x2A,
 		"A"   : 0x2A,
@@ -258,9 +240,6 @@ export const Opcodes6502 = {
 	"sei": {
 		"NONE": 0x78
 	},
-	// "sep": {
-	// 	OPG(IMM,  0xE2)		// 65816
-	// },
 	"sta": {
 		"ZP"  : 0x85,
 		"ZPX" : 0x95,
@@ -280,26 +259,12 @@ export const Opcodes6502 = {
 		"ZPX" : 0x94,
 		"ABS" : 0x8C
 	},
-	// "stz": {
-	// 	OPC(ZP  : 0x64)		// 65C02
-	// 	OPC(ZPX : 0x74)		// 65C02
-	// 	OPC(ABS : 0x9C)		// 65C02
-	// 	OPC(ABSX: 0x9E)		// 65C02
-	// },
 	"tax": {
 		"NONE": 0xAA
 	},
 	"tay": {
 		"NONE": 0xA8
 	},
-	// "trb": {
-	// 	OPC(ZP  : 0x14)		// 65C02
-	// 	OPC(ABS : 0x1C)		// 65C02
-	// },
-	// "tsb": {
-	// 	OPC(ZP  : 0x04)		// 65C02
-	// 	OPC(ABS : 0x0C)		// 65C02
-	// },
 	"tsx": {
 		"NONE": 0xBA
 	},
@@ -311,8 +276,56 @@ export const Opcodes6502 = {
 	},
 	"tya": {
 		"NONE": 0x98
-	},
-	// "xce": {
-	// 	OPG(NONE: 0xFB)		// 65816
-	// }
+	}
 }
+
+export const Opcodes65C02 = {
+	"bra": {
+		"BRAN": 0x80
+	},
+	"phx": {
+		"NONE": 0xDA
+	},
+	"phy": {
+		"NONE": 0x5A
+	},
+	"plx": {
+		"NONE": 0xFA
+	},
+	"ply": {
+		"NONE": 0x7A
+	},
+	"stz": {
+		"ZP"  : 0x64,
+		"ZPX" : 0x74,
+		"ABS" : 0x9C,
+		"ABSX": 0x9E
+	},
+	"trb": {
+		"ZP"  : 0x14,
+		"ABS" : 0x1C
+	},
+	"tsb": {
+		"ZP"  : 0x04,
+		"ABS" : 0x0C
+	}
+}
+
+export const Opcodes65816 = {
+	"rep": {
+		"IMM":  0xC2
+	},
+	"sep": {
+		"IMM":  0xE2
+	},
+	"xce": {
+		"NONE": 0xFB
+	}
+}
+
+
+export const OpcodeSets = [
+	Opcodes6502,
+	Opcodes65C02,
+	Opcodes65816
+]

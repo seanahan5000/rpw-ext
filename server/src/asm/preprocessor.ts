@@ -144,7 +144,7 @@ export class Preprocessor {
   preprocess(fileName: string): LineRecord[] | undefined {
     const lineRecords: LineRecord[] = []
 
-    if (!this.includeFile(undefined, fileName)) {
+    if (!this.includeFile(fileName)) {
       // *** error messaging?
       return
     }
@@ -209,14 +209,9 @@ export class Preprocessor {
     return lineRecords
   }
 
-  includeFile(fileNameExp?: exp.FileNameExpression, fileName?: string): boolean {
-    if (!fileName) {
-      fileName = fileNameExp?.getString() || ""
-      // TODO: strip off quotes here?
-    }
+  includeFile(fileName: string): boolean {
     const sourceFile = this.module.openSourceFile(fileName)
     if (!sourceFile) {
-      fileNameExp?.setError("File not found")
       return false
     }
     sourceFile.parseStatements()
@@ -233,6 +228,18 @@ export class Preprocessor {
         if (expression instanceof SymbolExpression) {
           const symExp = expression
 
+          // look for symbol references that should be converted to variables
+          if (firstPass && !symExp.isDefinition) {
+            // NOTE: if this changes, also change setSymbolExpression
+            const variableName = symExp.getString()
+            const foundVar = this.module.variableMap.get(variableName)
+            if (foundVar) {
+              symExp.symbol = foundVar
+              symExp.symbolType = foundVar.type
+              symExp.fullName = foundVar.fullName
+            }
+          }
+
           // must do this in the first pass while scope is being tracked
           if (!symExp.fullName) {
             symExp.fullName = this.scopeState.setSymbolExpression(symExp)
@@ -240,16 +247,27 @@ export class Preprocessor {
           if (symExp.fullName) {
             if (symExp.isDefinition) {
               if (firstPass) {
-                const foundSym = this.module.symbolMap.get(symExp.fullName)
-                if (foundSym) {
-                  symExp.setError("Duplicate symbol (use Go To Definition)")
-                  // turn symExp into a reference to the original symbol
-                  symExp.symbol = foundSym
-                  symExp.isDefinition = false
-                  foundSym.addReference(symExp)
-                  return
+                if (!symExp.isVariableType()) {
+                  const foundSym = this.module.symbolMap.get(symExp.fullName)
+                  if (foundSym) {
+                    symExp.setError("Duplicate symbol (use Go To Definition)")
+                    // turn symExp into a reference to the original symbol
+                    symExp.symbol = foundSym
+                    symExp.isDefinition = false
+                    foundSym.addReference(symExp)
+                    return
+                  }
                 }
                 if (symExp.symbol) {
+                  if (symExp.isVariableType()) {
+                    // only add the first reference to a variable
+                    const foundVar = this.module.variableMap.get(symExp.fullName)
+                    if (!foundVar) {
+                      this.module.variableMap.set(symExp.fullName, symExp.symbol)
+                    }
+                    return
+                  }
+
                   const sharedSym = this.module.project.sharedSymbols.get(symExp.fullName)
                   if (symExp.symbol.isEntryPoint) {
                     if (sharedSym) {
@@ -291,7 +309,7 @@ export class Preprocessor {
                 symExp.symbolType = foundSym.type
                 symExp.fullName = foundSym.fullName
                 foundSym.addReference(symExp)
-              } else {
+              } else if (!symExp.suppressUnknown) {
                 if (symExp.isLocalType() || !this.module.project.temporary) {
                   if (symExp.symbolType == SymbolType.Macro) {
                     symExp.setError("Unknown macro or opcode")

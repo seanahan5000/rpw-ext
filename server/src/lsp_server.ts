@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as lsp from 'vscode-languageserver'
 import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
-import { TextDocuments } from 'vscode-languageserver/node'
+import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
 
 import { RpwProject, RpwSettings } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
@@ -114,10 +114,11 @@ export class LspServer {
   private updateId?: NodeJS.Timeout
   private updateFile?: SourceFile
   private diagnosticId?: NodeJS.Timeout
+  private defaultSettings?: RpwSettings
 
   constructor(connection: lsp.Connection) {
     this.connection = connection
-    this.documents.listen(connection)
+    this.documents.listen(this.connection)
 
     this.documents.onDidOpen(e => {
       this.onDidOpenTextDocument(e.document.uri)
@@ -131,20 +132,23 @@ export class LspServer {
       this.onDidCloseTextDocument(e.document.uri)
     })
 
-	  // TODO: switch to an override once server.ts cleaned up
-    // connection.onInitialize(this.onInitialize.bind(this))
+    this.connection.onDidChangeConfiguration(e => {
+      this.onDidChangeConfiguration()
+    })
 
-    connection.onCompletion(this.onCompletion.bind(this))
-    connection.onCompletionResolve(this.onCompletionResolve.bind(this))
-    connection.onDefinition(this.onDefinition.bind(this))
-    connection.onExecuteCommand(this.onExecuteCommand.bind(this))
-    connection.onFoldingRanges(this.onFoldingRanges.bind(this))
-    connection.onHover(this.onHover.bind(this))
-    connection.onReferences(this.onReferences.bind(this))
-    connection.onPrepareRename(this.onPrepareRename.bind(this))
-    connection.onRenameRequest(this.onRename.bind(this))
-    connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
-    connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
+    this.connection.onInitialize(this.onInitialize.bind(this))
+    this.connection.onInitialized(this.onInitialized.bind(this))
+    this.connection.onCompletion(this.onCompletion.bind(this))
+    this.connection.onCompletionResolve(this.onCompletionResolve.bind(this))
+    this.connection.onDefinition(this.onDefinition.bind(this))
+    this.connection.onExecuteCommand(this.onExecuteCommand.bind(this))
+    this.connection.onFoldingRanges(this.onFoldingRanges.bind(this))
+    this.connection.onHover(this.onHover.bind(this))
+    this.connection.onReferences(this.onReferences.bind(this))
+    this.connection.onPrepareRename(this.onPrepareRename.bind(this))
+    this.connection.onRenameRequest(this.onRename.bind(this))
+    this.connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
+    this.connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
   }
 
   private getSourceFile(uri: string): SourceFile | undefined {
@@ -190,13 +194,65 @@ export class LspServer {
     }
   }
 
-  onInitialize(params: lsp.InitializeParams): void {
+  onInitialize(params: lsp.InitializeParams): lsp.InitializeResult {
 
     // TODO: enable this for debugging immediately after initialize
     // const n = 1
     // while (n) {
     //   console.log()
     // }
+
+    const result: lsp.InitializeResult = {
+      capabilities: {
+        textDocumentSync: lsp.TextDocumentSyncKind.Incremental,
+        completionProvider: {
+          triggerCharacters: ["(", ":"],
+          resolveProvider: true
+        },
+        definitionProvider: true,
+        hoverProvider: true,
+        renameProvider: { prepareProvider: true },
+        referencesProvider: true,
+        foldingRangeProvider: true
+      }
+    }
+
+    result.capabilities.workspace = {
+      workspaceFolders: {
+        supported: true
+      }
+    }
+
+    result.capabilities.semanticTokensProvider = {
+      documentSelector: ['rpw65'],
+      legend: {
+        tokenTypes: [
+          "invalid",   // 0
+          "comment",   // 1
+          "string",    // 2
+          "number",    // 3
+          "operator",  // 4
+          "keyword",   // 5
+          "label",     // 6
+          "macro",     // 7
+          "function",  // 8
+
+          "buffer",    // 9
+          "opcode",    // 10
+          "constant",  // 11
+          "zpage",     // 12
+          "var",       // 13
+          "escape",    // 14
+        ],
+        tokenModifiers: [
+          "local",
+          "global",
+          "external"
+        ],
+      },
+      full: true,
+      range: true
+    }
 
     if (params.workspaceFolders) {
       // *** walk each folder -- or don't support multiple folders ***
@@ -240,6 +296,41 @@ export class LspServer {
     }
 
     this.scheduleUpdate()
+
+    return result
+  }
+
+  private async onInitialized() {
+    // register for all configuration changes
+    this.connection.client.register(DidChangeConfigurationNotification.type, undefined)
+
+    // this.connection.workspace.onDidChangeWorkspaceFolders(e => {
+    //   this.connection.console.log('Workspace folder change event received.')
+    // })
+
+    this.onDidChangeConfiguration()
+  }
+
+  private async onDidChangeConfiguration() {
+    this.defaultSettings = await this.buildRpwSettings()
+    for (let project of this.projects) {
+      project.defaultSettingsChanged(this.defaultSettings)
+    }
+    this.scheduleUpdate()
+  }
+
+  private async buildRpwSettings(): Promise<RpwSettings> {
+    const econfig = await this.connection.workspace.getConfiguration("editor")
+    const tabSize = econfig.tabSize ?? 4
+    const config = await this.connection.workspace.getConfiguration("rpw65")
+    const syntax = config.syntax  // no default
+    const lowerCase = config.case?.lowerCaseCompletions ?? false
+    const upperCase = !lowerCase
+    const c1 = config.columns?.c1 ?? 16
+    const c2 = config.columns?.c2 ?? 4
+    const c3 = config.columns?.c3 ?? 20
+    const tabStops = [0, c1, c1 + c2, c1 + c2 + c3]
+    return { syntax, upperCase, tabSize, tabStops }
   }
 
   private scheduleUpdate(sourceFile?: SourceFile) {
@@ -320,7 +411,7 @@ export class LspServer {
         directory = path.substring(0, index)
       }
     }
-    let settings: RpwSettings = {}
+    let settings = this.defaultSettings ?? {}
     let rpwProject: RpwProject = { settings }
     rpwProject.modules = []
     rpwProject.modules.push({src: fileName})
@@ -712,7 +803,8 @@ export class LspServer {
 
     // mark unused symbols as DiagnosticTag.Unnecessary
     if (expression instanceof SymbolExpression) {
-      if (expression.isDefinition) {
+      // TODO: track variable references
+      if (expression.isDefinition && !expression.isVariableType()) {
         const symbol = expression.symbol
         if (symbol && symbol.references.length == 0) {
           const expRange = expression.getRange()
@@ -851,6 +943,8 @@ export class LspServer {
             if (symExp.isLocalType()) {
               index = SemanticToken.label
               bits |= (1 << SemanticModifier.local)
+            } else if (symExp.isVariableType()) {
+              index = SemanticToken.var
             } else if (symExp.symbol) {
               if (symExp.symbol.type == SymbolType.Macro) {
                 index = SemanticToken.macro

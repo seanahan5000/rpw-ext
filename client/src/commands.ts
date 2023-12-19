@@ -1,9 +1,5 @@
 import * as vscode from 'vscode';
 
-// TODO: get these from settings or pass them in
-// NOTE: code assumes first column is always 0
-const tabColumns: number[] = [ 0, 16, 20, 40 ];
-
 function getStartLineText(editor): string {
 	return getLineText(editor, editor.selection.start.line);
 }
@@ -18,8 +14,11 @@ function findCommentStart(lineText: string): number {
 	let prevChar = "";
 	while (commentStart < lineText.length) {
 		const c = lineText[commentStart];
-		if (c == ";" && (prevChar == " " || prevChar == "\t" || prevChar == "")) {
-			break
+		if (c == ";") {
+			// TODO: only do this for merlin
+			if (prevChar == " " || prevChar == "\t" || prevChar == "") {
+				break
+			}
 		} else if (c == "*" && prevChar == "") {
 			break
 		}
@@ -41,25 +40,25 @@ function findTextStart(lineText: string, textStart = 0): number {
 }
 
 // get tab column *before* current position or 0 if at start
-function getPrevTabColumn(ch: number): number {
+function getPrevTabColumn(tabStops: number[], ch: number): number {
 	let stop = 0;
 	if (ch > 0) {
-		for (let i = 0; i < tabColumns.length; i += 1) {
-			if (tabColumns[i] >= ch) {
+		for (let i = 0; i < tabStops.length; i += 1) {
+			if (tabStops[i] >= ch) {
 				break;
 			}
-			stop = tabColumns[i];
+			stop = tabStops[i];
 		}
 	}
 	return stop;
 }
 
 // get tab column after current position
-function getNextTabColumn(ch: number): number {
+function getNextTabColumn(tabStops: number[], ch: number): number {
 	let stop = -1;
-	for (let i = 0; i < tabColumns.length; i += 1) {
-		if (tabColumns[i] > ch) {
-			stop = tabColumns[i];
+	for (let i = 0; i < tabStops.length; i += 1) {
+		if (tabStops[i] > ch) {
+			stop = tabStops[i];
 			break;
 		}
 	}
@@ -67,6 +66,14 @@ function getNextTabColumn(ch: number): number {
 		stop = ch + (4 - (ch % 4));
 	}
 	return stop;
+}
+
+function getTabStops(): number[] {
+	const config = vscode.workspace.getConfiguration("rpw65")
+	const c1 = config.get<number>("columns.c1", 16)
+	const c2 = config.get<number>("columns.c2", 4)
+	const c3 = config.get<number>("columns.c3", 20)
+	return [0, c1, c1 + c2, c1 + c2 + c3]
 }
 
 // tab:
@@ -80,6 +87,7 @@ function getNextTabColumn(ch: number): number {
 	// use first non-space to pick stop
 
 export async function tabIndentCmd(shift: boolean) {
+	const tabStops = getTabStops()
 	const editor = vscode.window.activeTextEditor
 	const oldSelections = editor.selections
 	const newSelections: vscode.Selection[] = []
@@ -104,7 +112,7 @@ export async function tabIndentCmd(shift: boolean) {
 						}
 						startChar = textStart - delta
 					} else {
-						startChar = getPrevTabColumn(textStart)
+						startChar = getPrevTabColumn(tabStops, textStart)
 					}
 					const range = new vscode.Range(line, startChar, line, textStart);
 					edit.delete(range);
@@ -129,7 +137,7 @@ export async function tabIndentCmd(shift: boolean) {
 					let commentStart = findCommentStart(lineText)
 					let end: number
 					if (ch <= commentStart) {
-						end = getNextTabColumn(ch)
+						end = getNextTabColumn(tabStops, ch)
 						// consume whitespace to align next text to next tab column
 						const textStart = findTextStart(lineText, selection.end.character)
 						selection = new vscode.Selection(startLine, ch, startLine, textStart)
@@ -138,7 +146,7 @@ export async function tabIndentCmd(shift: boolean) {
 					}
 					let indent = "".padEnd(end - ch, " ")
 					// if tabbing to comment column, also add ";"
-					if (end == tabColumns[tabColumns.length - 1]) {
+					if (end == tabStops[tabStops.length - 1]) {
 						if (ch + 1 == lineText.length) {
 							indent += ";"
 							end += 1
@@ -150,7 +158,7 @@ export async function tabIndentCmd(shift: boolean) {
 					for (let line = startLine; line < endLine; line += 1) {
 						const lineText = getLineText(editor, line);
 						const textStart = findTextStart(lineText);
-						const end = getNextTabColumn(textStart);
+						const end = getNextTabColumn(tabStops, textStart);
 						const position = new vscode.Position(line, textStart);
 						const indent = "".padEnd(end - textStart, " ");
 						edit.insert(position, indent)
@@ -171,6 +179,7 @@ export async function tabIndentCmd(shift: boolean) {
 	// unless inside comment, then just delete character
 
 export async function delIndentCmd() {
+	const tabStops = getTabStops()
 	const editor = vscode.window.activeTextEditor
 	editor.edit(edit => {
 		for (let selection of editor.selections) {
@@ -186,7 +195,7 @@ export async function delIndentCmd() {
 					if (startChar < commentStart) {
 						let c = lineText[startChar]
 						if (c == " ") {
-							const stop = getPrevTabColumn(ch)
+							const stop = getPrevTabColumn(tabStops, ch)
 							while (startChar > stop && startChar != 0) {
 								c = lineText[startChar - 1]
 								if (c != " ") {
@@ -212,6 +221,7 @@ export async function delIndentCmd() {
 }
 
 export async function arrowIndentCmd(left: boolean) {
+	const tabStops = getTabStops()
 	const moveBy = { to: left ? "left" : "right", by: "character", value: 1 }
 	const editor = vscode.window.activeTextEditor
 	const sel = editor.selections[0]
@@ -222,7 +232,7 @@ export async function arrowIndentCmd(left: boolean) {
 		let pos = ch
 		if (left) {
 			if (ch <= commentStart) {
-				const stop = getPrevTabColumn(ch)
+				const stop = getPrevTabColumn(tabStops, ch)
 				while (pos > stop) {
 					if (lineText[pos - 1] != " ") {
 						break
@@ -233,7 +243,7 @@ export async function arrowIndentCmd(left: boolean) {
 			}
 		} else {
 			if (ch < commentStart) {
-				const stop = getNextTabColumn(ch)
+				const stop = getNextTabColumn(tabStops, ch)
 				while (pos < stop) {
 					if (lineText[pos] != " ") {
 						break

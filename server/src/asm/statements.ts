@@ -11,7 +11,7 @@ import { Node, Token, TokenType } from "./tokenizer"
 export abstract class Statement extends exp.Expression {
 
   public sourceLine: string = ""
-  public labelExp?: exp.SymbolExpression | exp.VarExpression
+  public labelExp?: exp.SymbolExpression
   public opExp?: exp.Expression         // FIXME: easy to confuse with opExpression
   public opNameLC = ""
   public enabled = true
@@ -66,8 +66,8 @@ export class ZoneStatement extends Statement {
         parser.sourceFile, parser.lineNumber)
       this.children.unshift(this.labelExp)
     }
-    if (!(this.labelExp instanceof exp.SymbolExpression)) {
-      this.labelExp.setError("Var not allowed as label")
+    if (this.labelExp.isVariableType()) {
+      this.labelExp.setError("Variable not allowed as label")
       return
     }
     if (this.labelExp.symbol) {
@@ -98,18 +98,24 @@ export enum OpMode {
   BRANCH
 }
 
+export enum OpCpu {
+  M6502  = 0,
+  M65C02 = 1,
+  M65816 = 2
+}
+
 export class OpStatement extends Statement {
 
   public opcode: any
+  public cpu: OpCpu
   public mode: OpMode = OpMode.NONE
   private expression?: exp.Expression
 
-  constructor(opcode: any) {
+  constructor(opcode: any, cpu: OpCpu) {
     super()
     this.opcode = opcode
+    this.cpu = cpu
   }
-
-  // *** split this out into a separate callable/shareable function? ***
 
   parse(parser: Parser) {
     let token: Token | undefined
@@ -128,10 +134,12 @@ export class OpStatement extends Statement {
       if (this.opcode.NONE === undefined) {
         this.opExp?.setError("Mode not allowed for this opcode")
       }
+      // TODO: check for INC/DEC and promote opcode to 65C02
       this.mode = OpMode.NONE
     } else if (token) {
       if (str == "a") {
         parser.addToken(token)
+        // TODO: check for INC/DEC and promote opcode to 65C02
         if (this.opcode.A === undefined) {
           token.setError("Accumulator mode not allowed for this opcode")
         } else if (parser.syntax && parser.syntax == Syntax.ACME) {
@@ -515,6 +523,7 @@ export class IfDefStatement extends ConditionalStatement {
     const expression = parser.mustAddNextExpression()
     if (expression instanceof exp.SymbolExpression) {
       this.symExpression = expression
+      expression.suppressUnknown = true
     } else {
       expression.setError("Symbol expression required")
     }
@@ -697,7 +706,9 @@ class DataStatement extends Statement {
 
       token = parser.getNextToken()
       if (!token) {
-        parser.addMissingToken("expecting data expression")
+        if (parser.syntax && parser.syntax != Syntax.DASM) {
+          parser.addMissingToken("expecting data expression")
+        }
         break
       }
 
@@ -908,12 +919,27 @@ export class IncludeStatement extends Statement {
 
   preprocess(preprocessor: Preprocessor) {
     if (this.fileName) {
-      preprocessor.includeFile(this.fileName)
+      let fileNameStr = this.fileName.getString() || ""
+      if (fileNameStr.length > 0) {
+        // TODO: only strip quotes for non-Merlin?
+        let quoteChar = fileNameStr[0]
+        if (quoteChar == "'" || quoteChar == '"') {
+          fileNameStr = fileNameStr.substring(1)
+          if (fileNameStr.length > 0) {
+            const lastChar = fileNameStr[fileNameStr.length - 1]
+            if (lastChar == quoteChar) {
+              fileNameStr = fileNameStr.substring(0, fileNameStr.length - 1)
+            }
+          }
+        }
+      }
+      if (!preprocessor.includeFile(fileNameStr)) {
+        this.fileName.setError("File not found")
+      }
     }
   }
 }
 
-// TODO: handle disk and save separately
 export class SaveStatement extends Statement {
 
   private fileName?: exp.FileNameExpression
@@ -928,6 +954,32 @@ export class SaveStatement extends Statement {
   }
 }
 
+// MERLIN:  DSK <filename>
+//   ACME:  !to <filename>[,<format>]
+
+export class DiskStatement extends Statement {
+
+  private fileName?: exp.FileNameExpression
+
+  parse(parser: Parser) {
+    this.fileName = parser.getNextFileNameExpression()
+    if (!this.fileName) {
+      parser.addMissingToken("Missing argument, expecting file path")
+      return
+    }
+    parser.addExpression(this.fileName)
+
+    if (!parser.syntax || parser.syntax == Syntax.ACME) {
+      if (parser.mustAddToken(["", ","]).index <= 0) {
+        return
+      }
+      if (parser.mustAddToken(["cbm", "plain"], TokenType.Keyword).index < 0) {
+        return
+      }
+    }
+  }
+}
+
 //------------------------------------------------------------------------------
 
 // *** watch for assigning a value to a local label
@@ -935,8 +987,10 @@ export class SaveStatement extends Statement {
 // *** SBASM requires resolvable value with no forward references
 // *** mark symbol as being assigned rather than just a label?
 
-// DASM: symbol EQU exp
-//       symbol = exp
+// MERLIN: symbol EQU exp
+//         symbol = exp
+// DASM:   symbol EQU exp
+//         symbol = exp
 
 export class EquStatement extends Statement {
 
@@ -947,14 +1001,17 @@ export class EquStatement extends Statement {
       parser.insertMissingLabel()
       return
     }
-    if (this.labelExp instanceof exp.SymbolExpression) {
+    if (!this.labelExp.isVariableType()) {
       this.value = parser.mustAddNextExpression()
       this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
     } else {
-      this.labelExp.setError("Var label not allowed")
+      this.labelExp.setError("Variable label not allowed")
     }
   }
 }
+
+// MERLIN: varSymbol = exp
+// DASM:   varSymbol SET exp
 
 export class VarAssignStatement extends Statement {
 
@@ -962,7 +1019,17 @@ export class VarAssignStatement extends Statement {
 
   parse(parser: Parser) {
 
-    if (this.opNameLC != "=") {
+    if (!this.labelExp) {
+      parser.insertMissingLabel()
+      return
+    }
+
+    if (this.opNameLC == "set") {
+      this.labelExp.symbolType = SymbolType.Variable
+      if (this.labelExp.symbol) {
+        this.labelExp.symbol.type = SymbolType.Variable
+      }
+    } else if (this.opNameLC != "=") {
       this.opExp?.setError("Expecting '='")
       return
     }
@@ -972,6 +1039,25 @@ export class VarAssignStatement extends Statement {
 }
 
 //------------------------------------------------------------------------------
+
+// MERLIN:  XC
+//   DASM:  processor <type>
+//   ACME:  !cpu <type>
+
+export class CpuStatement extends Statement {
+
+  parse(parser: Parser) {
+    if (this.opNameLC == "xc") {
+      // no arguments for Merlin operation
+    } else if (this.opNameLC == "processor" || this.opNameLC == "!cpu") {
+      const res = parser.mustAddToken(["6502", "65c02", "65816"], TokenType.Keyword)
+      if (res.index < 0) {
+        return
+      }
+    }
+  }
+}
+
 
 export class OrgStatement extends Statement {
 
@@ -993,12 +1079,12 @@ export class OrgStatement extends Statement {
 export class EntryStatement extends Statement {
   parse(parser: Parser) {
     if (this.labelExp) {
-      if (this.labelExp instanceof exp.SymbolExpression) {
+      if (!this.labelExp.isVariableType()) {
         if (this.labelExp.symbol) {
           this.labelExp.symbol.isEntryPoint = true
         }
       } else {
-        this.labelExp.setError("Var label not allowed")
+        this.labelExp.setError("Variable label not allowed")
       }
     } else {
       parser.insertMissingLabel()
@@ -1058,12 +1144,37 @@ export class UsrStatement extends Statement {
   }
 }
 
+// MERLIN:  ASC <string-args>
+//          DCI <string-args>
+//          REV <string-args>
+//          STR <string-args>
+//          TXT <naja-string>
+//          TXC <naja-string>
+//          TXI <naja-string>
+//
+// ACME:    !pet <string-args>
+//          !raw <string-args>
+//          !scr <string-args>
+//          !text <string-args>
+
 // TODO: make this the basis for all the various string/text statements
 export class TextStatement extends Statement {
-  private textExpression?: exp.Expression
+
+  private textElements: exp.Expression[] = []
 
   parse(parser: Parser) {
-    this.textExpression = parser.mustAddNextExpression()
+    while (true) {
+      const expression = parser.mustAddNextExpression()
+      if (!expression) {
+        break
+      }
+
+      this.textElements.push(expression)
+
+      if (parser.mustAddToken(["", ","]).index <= 0) {
+        break
+      }
+    }
   }
 }
 
@@ -1087,7 +1198,7 @@ export class MacroDefStatement extends Statement {
   parse(parser: Parser) {
 
     if (this.labelExp) {
-      if (this.labelExp instanceof exp.SymbolExpression) {
+      if (!this.labelExp.isVariableType()) {
         if (parser.syntax == Syntax.DASM
             || parser.syntax == Syntax.ACME
             || parser.syntax == Syntax.CA65) {
@@ -1102,7 +1213,7 @@ export class MacroDefStatement extends Statement {
           }
         }
       } else {
-        this.labelExp.setError("Var label not allowed")
+        this.labelExp.setError("Variable label not allowed")
         return
       }
     } else if (parser.syntax == Syntax.MERLIN) {
@@ -1243,6 +1354,25 @@ export class DummyStatement extends Statement {
 }
 
 export class DummyEndStatement extends Statement {
+}
+
+
+// TODO: reconcile seg.u and dummy statements (currently DASM-only)
+export class SegmentStatement extends Statement {
+
+  private segName?: Token
+
+  parse(parser: Parser) {
+    if (this.labelExp) {
+      this.labelExp.setError("Label not allowed")
+    }
+
+    this.segName = parser.addNextToken()
+    if (this.segName) {
+      // TODO: pick a better symbol type
+      this.segName.type = TokenType.String
+    }
+  }
 }
 
 //------------------------------------------------------------------------------

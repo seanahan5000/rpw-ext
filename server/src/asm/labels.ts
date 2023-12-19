@@ -211,7 +211,12 @@ function renameSymExp(symExp: SymbolExpression, oldName: string,
     }
     // pad new name to match old size, if not at end of line
     if (editEnd != statement.sourceLine.length) {
-      editText = editText.padEnd(oldSize, " ")
+      // if symbol was part of an expression, for example, don't pad
+      // TODO: This could be made smarter by inserting padding before
+      //  any trailing comment so it stays in place.
+      if (statement.sourceLine[editEnd] == " ") {
+        editText = editText.padEnd(oldSize, " ")
+      }
     }
     if (symExp.sourceFile) {
       edits.addEdit(symExp.sourceFile, symExp.lineNumber, editStart, editEnd, editText)

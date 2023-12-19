@@ -62,7 +62,7 @@
 
 import { SourceFile } from "./project"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
-import { Opcodes6502 } from "./opcodes"
+import { OpcodeSets } from "./opcodes"
 import { Syntax, SyntaxMap, SyntaxDefs, SyntaxDef, OpDef, Op } from "./syntax"
 import { SymbolType, SymbolFrom } from "./symbols"
 import * as exp from "./expressions"
@@ -223,18 +223,21 @@ export class Parser extends Tokenizer {
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
 
-    let symVarExp = this.parseSymbol(true)
-    if (symVarExp) {
-      this.addExpression(symVarExp)
-      if (symVarExp instanceof exp.SymbolExpression) {
-        this.labelExp = symVarExp
-      } else if (symVarExp instanceof exp.VarExpression) {
-        const token = this.peekNextToken()
-        if (token?.getString() == "=") {
-          statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+    let symExp = this.parseSymbol(true)
+    if (symExp) {
+      this.addExpression(symExp)
+      if (symExp instanceof exp.SymbolExpression) {
+        this.labelExp = symExp
+        if (symExp.isVariableType()) {
+          // *** this is merlin-only ***
+          const token = this.peekNextToken()
+          if (token?.getString() == "=") {
+            statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+          }
         }
       }
     }
+
     if (!statement) {
       const token = this.getNextToken()
       if (token) {
@@ -355,13 +358,15 @@ export class Parser extends Tokenizer {
     }
   }
 
-
   private parseOpcode(token: Token): stm.Statement | undefined {
     let opNameLC = token.getString().toLowerCase()
-    let opcode = (Opcodes6502 as {[key: string]: any})[opNameLC]
-    if (opcode !== undefined) {
-      token.type = TokenType.Opcode
-      return this.initStatement(new stm.OpStatement(opcode), token)
+    for (let i = 0; i < OpcodeSets.length; i += 1) {
+      const opcodeSet = OpcodeSets[i]
+      let opcode = (opcodeSet as {[key: string]: any})[opNameLC]
+      if (opcode !== undefined) {
+        token.type = TokenType.Opcode
+        return this.initStatement(new stm.OpStatement(opcode, i), token)
+      }
     }
   }
 
@@ -403,8 +408,7 @@ export class Parser extends Tokenizer {
 
   // *** keep count of local types and directive matches to determine syntax ***
 
-  private parseSymbol(isDefinition: boolean, token?: Token):
-    exp.SymbolExpression | exp.VarExpression | undefined {
+  private parseSymbol(isDefinition: boolean, token?: Token): exp.Expression | undefined {
 
     if (isDefinition) {
       const nextChar = this.peekVeryNextChar()
@@ -453,7 +457,7 @@ export class Parser extends Tokenizer {
       if (!this.syntax || this.syntax == Syntax.MERLIN) {
         // *** enforce/handle var assignment
           // peekNextToken == "=" ?
-        return this.parseVarExpression(token)
+        return this.parseVarExpression(token, isDefinition)
       }
     }
 
@@ -619,6 +623,7 @@ export class Parser extends Tokenizer {
       if (token) {
         // TODO: change token.type to what?
         if (this.syntax &&
+          this.syntax != Syntax.DASM &&
           this.syntax != Syntax.ACME &&
           this.syntax != Syntax.CA65) {
           token.setError("Not allowed for this syntax")
@@ -704,6 +709,12 @@ export class Parser extends Tokenizer {
         token.type = TokenType.Keyword
         return new exp.PcExpression(token)
       }
+      if (str == ".") {
+        if (this.syntax && this.syntax == Syntax.DASM) {
+          token.type = TokenType.Keyword
+          return new exp.PcExpression(token)
+        }
+      }
       if (str == '"' || str == "'") {
         // *** how to choose between string literals and strings? ***
         // *** pick these values dynamically ***
@@ -740,7 +751,7 @@ export class Parser extends Tokenizer {
       }
       if (str == "]") {
         if (!this.syntax || this.syntax == Syntax.MERLIN) {
-          return this.parseVarExpression(token)
+          return this.parseVarExpression(token, false)
         }
         return
       }
@@ -921,7 +932,7 @@ export class Parser extends Tokenizer {
   }
 
   // caller has already checked for Merlin and that token == "]"
-  parseVarExpression(bracketToken: Token): exp.VarExpression {
+  parseVarExpression(bracketToken: Token, isDefinition: boolean): exp.SymbolExpression {
     bracketToken.type = TokenType.Variable
     const nameToken = this.mustGetVeryNextToken("expecting var name")
     if (nameToken.type != TokenType.Symbol
@@ -931,8 +942,12 @@ export class Parser extends Tokenizer {
       nameToken.setError("Unexpected token, expecting var name")
     }
 
+    // TODO: for now, treat all variables as definitions
+    //  until reference tracking and macro usage is resolved
+    isDefinition = true
+
     nameToken.type = TokenType.Variable
-    return new exp.VarExpression([bracketToken, nameToken])
+    return new exp.SymbolExpression([bracketToken, nameToken], SymbolType.Variable, isDefinition)
   }
 
   private pushNextComment() {

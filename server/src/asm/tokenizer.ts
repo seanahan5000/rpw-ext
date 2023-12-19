@@ -186,7 +186,11 @@ export class Tokenizer {
           return
         }
         const prevChar = this.sourceLine[this.position - 1]
-        if (prevChar == " " || prevChar == "\t") {
+        if (!this.syntax || this.syntax == Syntax.MERLIN) {
+          if (prevChar == " " || prevChar == "\t") {
+            return
+          }
+        } else {
           return
         }
       }
@@ -213,9 +217,12 @@ export class Tokenizer {
         if (this.position == 0) {
           break
         }
-        // TODO: checking for space may be syntax-specific (Merlin-only?)
         const prevChar = this.sourceLine[this.position - 1]
-        if (prevChar == " " || prevChar == "\t") {
+        if (!this.syntax || this.syntax == Syntax.MERLIN) {
+          if (prevChar == " " || prevChar == "\t") {
+            break
+          }
+        } else {
           break
         }
       }
@@ -257,6 +264,19 @@ export class Tokenizer {
 
       // several non-Merlin assemblers support '.' in symbols
       if (char == ".") {
+
+        // DASM treats a stand-alone period as the PC counter
+        if (this.syntax == Syntax.DASM) {
+          if (this.position == start) {
+            const nextChar = this.sourceLine[this.position + 1] ?? " "
+            if (nextChar == " " || nextChar == "\t") {
+              this.position += 1
+              sawOperator = true
+              break
+            }
+          }
+        }
+
         // TODO: constrain this to the specific subset of assemblers
         if (!this.syntax || this.syntax != Syntax.MERLIN) {
           sawSymbol = true

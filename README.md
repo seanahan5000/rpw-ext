@@ -2,7 +2,7 @@ The Retro Programmer's Workshop (RPW) 65 extension provides Visual Studio Code s
 
 Features include:
 * Multi-syntax parsing
-* Merlin, some DASM and LISA 2.5, and a little ACME and CA65 support
+* Merlin, DASM, ACME, CA65, and LISA 2.5 support
 * Semantic syntax highlighting
 * Context specific auto-completion
 * Symbol hover/tooltips
@@ -50,19 +50,13 @@ Note that some functionality is disabled when when source files aren't part of a
 
 <img src="images/project.png"/>
 
-**syntax** - Syntax to use when parsing source files (merlin, dasm, acme, ca65, lisa).  If none is provided, a union of all known syntaxes is used.
+**srcDir** - Optionl base path prepended to all other file paths and operations.
 
-**upperCase** - Assume upper-case when providing auto-completion suggestions.  Default is true.
-
-**tabSize** - Number of spaces inserted for a tab.  Default is 4.
-
-**srcDir** - Base path prepended to all other file paths and operations.
-
-**includes** - Source files that are common across modules.  Specifying these files allows the extension to track symbol references across modules.
+**includes** - Optional source files that are common across modules.  Specifying these files allows the extension to track symbol references across modules.
 
 **modules** - Top-level source files for each assembled module, in the order that the modules will be assembled.  This tells the extension the start of each dependency tree so it can determine what files are used and what symbols are referenced.
 
 ### Known Problems
 * Variable tabbing command doesn't work correctly on files using tabs instead of spaces.
 
-This is a work in progress.  Non-Merlin functionality is still being filled in.
+This is a work in progress.  Syntax parsing gaps are still being filled.

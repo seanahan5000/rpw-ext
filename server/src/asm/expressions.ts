@@ -209,6 +209,9 @@ export class SymbolExpression extends Expression {
   public fullName?: string
   public symbol?: Symbol
 
+  // true if symbol was used in an !ifdef, etc. conditional check
+  public suppressUnknown = false
+
   constructor(
       children: Node[],
       symbolType: SymbolType,
@@ -220,9 +223,13 @@ export class SymbolExpression extends Expression {
     this.isDefinition = isDefinition
     this.sourceFile = sourceFile
     this.lineNumber = lineNumber ?? 0
-    if (isDefinition) {
+    if (isDefinition && symbolType) {
       this.symbol = new Symbol(symbolType, this)
     }
+  }
+
+  isVariableType(): boolean {
+    return this.symbolType == SymbolType.Variable
   }
 
   isLocalType(): boolean {
@@ -436,26 +443,6 @@ export class PcExpression extends Expression {
 export class FileNameExpression extends Expression {
   constructor(token: Token) {
     super([token])
-  }
-}
-
-//------------------------------------------------------------------------------
-
-export class VarExpression extends Expression {
-
-  // first token in set is bracket, second is name
-  constructor(children: Node[]) {
-    super(children)
-  }
-
-  resolve(): number | undefined {
-    // TODO: what should this method do?
-    return
-  }
-
-  getSize(): number | undefined {
-    // TODO: what should this method do?
-    return
   }
 }
 
