@@ -28,13 +28,24 @@ function findCommentStart(lineText: string): number {
 	return commentStart;
 }
 
-function findTextStart(lineText: string, textStart = 0): number {
+function findNextTextStart(lineText: string, textStart = 0): number {
 	while (textStart < lineText.length) {
 		const c = lineText[textStart]
 		if (c != " " && c != "\t") {
 			break
 		}
 		textStart += 1
+	}
+	return textStart
+}
+
+function findPrevTextStart(lineText: string, textStart: number): number {
+	while (textStart > 0) {
+		const c = lineText[textStart - 1]
+		if (c == " " || c == "\t") {
+			break
+		}
+		textStart -= 1
 	}
 	return textStart
 }
@@ -102,7 +113,7 @@ export async function tabIndentCmd(shift: boolean) {
 				}
 				for (let line = startLine; line <= endLine; line += 1) {
 					const lineText = getLineText(editor, line);
-					const textStart = findTextStart(lineText)
+					const textStart = findNextTextStart(lineText)
 					let startChar
 					if (shift) {
 						// shift-tab ignores tabstops so misalignment is possible
@@ -137,17 +148,30 @@ export async function tabIndentCmd(shift: boolean) {
 					let commentStart = findCommentStart(lineText)
 					let end: number
 					if (ch <= commentStart) {
-						end = getNextTabColumn(tabStops, ch)
+
 						// consume whitespace to align next text to next tab column
-						const textStart = findTextStart(lineText, selection.end.character)
+						let textStart = findNextTextStart(lineText, selection.end.character)
+
+						// compute where the tabstop is based on the beginning of the word
+						//	(used to detect skipped tabstops)
+						const prevStart = findPrevTextStart(lineText, ch)
+						const prevNextCol = getNextTabColumn(tabStops, prevStart)
+
+						end = getNextTabColumn(tabStops, ch)
+						// if text has covered a tab stop, move to the end of the word + 1
+						//	instead of skipping the tab stop
+						if (prevNextCol < end) {
+							textStart = selection.end.character + 1
+							end = ch + 1
+						}
 						selection = new vscode.Selection(startLine, ch, startLine, textStart)
 					} else {
 						end = ch + (4 - (ch % 4))
 					}
 					let indent = "".padEnd(end - ch, " ")
-					// if tabbing to comment column, also add ";"
+					// if tabbing to comment column and not already in line comment, also add ";"
 					if (end == tabStops[tabStops.length - 1]) {
-						if (ch + 1 == lineText.length) {
+						if (ch + 1 == lineText.length && ch <= commentStart) {
 							indent += ";"
 							end += 1
 						}
@@ -157,7 +181,7 @@ export async function tabIndentCmd(shift: boolean) {
 				} else {
 					for (let line = startLine; line < endLine; line += 1) {
 						const lineText = getLineText(editor, line);
-						const textStart = findTextStart(lineText);
+						const textStart = findNextTextStart(lineText);
 						const end = getNextTabColumn(tabStops, textStart);
 						const position = new vscode.Position(line, textStart);
 						const indent = "".padEnd(end - textStart, " ");

@@ -1,5 +1,14 @@
 # RPW 65 Changelog
 
+### [1.1.1] - 2024-01-02
+
+#### Fixed:
+* Disable variable tab indentation while in snippet or completion mode (Issue #1)
+* Add setting to disable variable tab indentation completely (rpw.columns.enable)
+* Renaming a symbol to exactly the label column width doesn't pad with a space before the opcode column
+* Don't insert ';' on tab when already in comment
+* Tab jumps too far when label or opcode are larger than their respective widths
+
 ### [1.1.0] - 2023-12-19
 
 #### Added:

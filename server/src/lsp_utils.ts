@@ -401,7 +401,7 @@ export class Completions {
             item.insertTextFormat = lsp.InsertTextFormat.Snippet
             item.insertTextMode = lsp.InsertTextMode.asIs
             item.kind = lsp.CompletionItemKind.Snippet
-            item.insertText = "DRAW_PICT\n" + indent + "$1\n" + indent + "PictEnd"
+            item.insertText = "DRAW_PICT\n" + indent + "$0\n" + indent + "PictEnd"
           } else {
             item = lsp.CompletionItem.create(key)
             item.sortText = `${this.addCode}_${key}`

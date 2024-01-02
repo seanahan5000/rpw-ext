@@ -193,21 +193,17 @@ function renameSymExp(symExp: SymbolExpression, oldName: string,
         editText = editText.substring(0, n) + newName + editText.substring(n + oldName.length)
       }
     }
-    let firstPass = true
-    let oldSize = editEnd - editStart
     // grow old selection to match new name, while space available
+    let oldSize = editEnd - editStart
     while (editText.length > oldSize) {
-      if (statement.sourceLine[editStart + oldSize] != " ") {
-        // don't consume last available space before next text run
-        if (!firstPass) {
-          oldSize -= 1
-          editEnd -= 1
-        }
-        break
-      }
       oldSize += 1
       editEnd += 1
-      firstPass = false
+      // don't consume last available space before next text run
+      if (statement.sourceLine[editStart + oldSize] != " ") {
+        oldSize -= 1
+        editEnd -= 1
+        break
+      }
     }
     // pad new name to match old size, if not at end of line
     if (editEnd != statement.sourceLine.length) {

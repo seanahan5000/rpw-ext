@@ -5,7 +5,7 @@
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "1.1.0",
+	"version": "1.1.1",
 	"repository": {
     "type": "git",
     "url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -37,6 +37,11 @@
 					"type": "string",
 					"enum": ["merlin", "dasm", "acme", "ca65", "lisa"],
 					"markdownDescription": "Assembler syntax to apply to source files.  A hybrid union of the syntaxes is used if none is chosen."
+				},
+				"rpw65.columns.enable": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Enable variable width tab columns."
 				},
 				"rpw65.columns.c1": {
 					"type": "number",
@@ -90,6 +95,7 @@
 				}
 			]
 		},
+
 		"commands": [
 			{
 				"command": "rpw65.renumberLocals",
@@ -100,39 +106,47 @@
 				"title": "Tab Indentation"
 			},
 			{
+				"command": "rpw65.tabOutdent",
+				"title": "Shift-Tab Indentation"
+			},
+			{
 				"command": "rpw65.delIndent",
 				"title": "Delete Indentation"
 			},
 			{
-				"command": "rpw65.retIndent",
-				"title": "Return Indentation"
+				"command": "rpw65.leftArrowIndent",
+				"title": "Left Arrow Indentation"
+			},
+			{
+				"command": "rpw65.rightArrowIndent",
+				"title": "Right Arrow Indentation"
 			}
 		],
 		"keybindings": [
 			{
 				"command": "rpw65.tabIndent",
 				"key": "tab",
-				"when": "resourceLangId == rpw65 && editorTextFocus"
+				"when": "resourceLangId == rpw65 && config.rpw65.columns.enable && editorTextFocus && !suggestWidgetVisible && !inSnippetMode"
 			},
 			{
 				"command": "rpw65.tabOutdent",
 				"key": "shift-tab",
-				"when": "resourceLangId == rpw65 && editorTextFocus"
+				"when": "resourceLangId == rpw65 && config.rpw65.columns.enable && editorTextFocus && !suggestWidgetVisible && !inSnippetMode"
 			},
 			{
 				"command": "rpw65.delIndent",
 				"key": "backspace",
-				"when": "resourceLangId == rpw65 && editorTextFocus"
+				"when": "resourceLangId == rpw65 && config.rpw65.columns.enable && editorTextFocus"
 			},
 			{
 				"command": "rpw65.leftArrowIndent",
 				"key": "left",
-				"when": "resourceLangId == rpw65 && editorTextFocus"
+				"when": "resourceLangId == rpw65 && config.rpw65.columns.enable && editorTextFocus"
 			},
 			{
 				"command": "rpw65.rightArrowIndent",
 				"key": "right",
-				"when": "resourceLangId == rpw65 && editorTextFocus"
+				"when": "resourceLangId == rpw65 && config.rpw65.columns.enable && editorTextFocus"
 			}
 		],
 		"semanticTokenScopes": [

@@ -1,8 +1,7 @@
-The Retro Programmer's Workshop (RPW) 65 extension provides Visual Studio Code support for 6502 assembly language in several common syntaxes.
+This Retro Programmer's Workshop (RPW) 65 extension provides Visual Studio Code support for 6502 assembly language in several common syntaxes.
 
 Features include:
-* Multi-syntax parsing
-* Merlin, DASM, ACME, CA65, and LISA 2.5 support
+* Merlin, DASM, ACME, CA65, and LISA 2.5 syntaxes
 * Semantic syntax highlighting
 * Context specific auto-completion
 * Symbol hover/tooltips
@@ -12,7 +11,7 @@ Features include:
 * Go To Definition
 * Show References
 * Conditional folding
-* Diagnostic errors and warning
+* Diagnostic errors and warnings
 
 Note that no external assembler executable is required for any syntax.
 
@@ -50,13 +49,13 @@ Note that some functionality is disabled when when source files aren't part of a
 
 <img src="images/project.png"/>
 
-**srcDir** - Optionl base path prepended to all other file paths and operations.
+**srcDir** - Optional base path prepended to all other file paths and operations.
 
-**includes** - Optional source files that are common across modules.  Specifying these files allows the extension to track symbol references across modules.
+**includes** - Optional source files that are common across modules.  Specifying these files allows the extension to track symbol use across modules.
 
 **modules** - Top-level source files for each assembled module, in the order that the modules will be assembled.  This tells the extension the start of each dependency tree so it can determine what files are used and what symbols are referenced.
 
 ### Known Problems
 * Variable tabbing command doesn't work correctly on files using tabs instead of spaces.
 
-This is a work in progress.  Syntax parsing gaps are still being filled.
+This is a work in progress.  Syntax parsing gaps are still being filled in.
