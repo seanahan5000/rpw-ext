@@ -1,7 +1,7 @@
 This Retro Programmer's Workshop (RPW) 65 extension provides Visual Studio Code support for 6502 assembly language in several common syntaxes.
 
 Features include:
-* Merlin, DASM, ACME, CA65, and LISA 2.5 syntaxes
+* Merlin, dasm, ACME, ca65, and LISA syntaxes
 * Semantic syntax highlighting
 * Context specific auto-completion
 * Symbol hover/tooltips
@@ -41,7 +41,7 @@ Note that no external assembler executable is required for any syntax.
 
 ### Projects
 
-Project files can optionally be used to provide additional information about complex builds that can't easily be inferred from single sources files.  They define the overall build structure, indicating the top-level assembly files for modules and how those modules are linked.  They can also list shared header files, making it possible to track symbol references across builds.
+Project files can optionally be used to provide additional information about complex builds that can't easily be inferred from single source files.  They define the overall build structure, indicating the top-level assembly files for modules and how those modules are linked.  They can also list shared header files, making it possible to track symbol references across builds.
 
 Note that some functionality is disabled when when source files aren't part of a project.  (For example, highlighting of missing and unused symbols.)
 

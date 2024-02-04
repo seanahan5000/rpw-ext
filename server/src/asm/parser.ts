@@ -416,8 +416,17 @@ export class Parser extends Tokenizer {
         return
       }
 
+      // these characters may be in the first column
       if (nextChar == "!" || nextChar == "}" || nextChar == "*") {
         if (!this.syntax || this.syntax == Syntax.ACME){
+          return
+        }
+      }
+
+      if (nextChar == ".") {
+        // can't allow this in generic syntax case because it will
+        //  cause problems in files that use locals starting with '.'
+        if (this.syntax == Syntax.CA65){
           return
         }
       }

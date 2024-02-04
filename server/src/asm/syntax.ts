@@ -501,7 +501,14 @@ class Ca65Syntax extends SyntaxDef {
     super()
 
     this.keywordMap = new Map<string, KeywordDef>([
-      [ ".org",     { create: () => { return new stm.OrgStatement() }}],
+      [ ".org",       { create: () => { return new stm.OrgStatement() }}],
+      [ "=",          { create: () => { return new stm.EquStatement() }}],
+      [ ".assert",    {}],
+
+      // disk
+      [ ".include",   { create: () => { return new stm.IncludeStatement() }}],
+      // TODO: separate Statement type?
+      [ ".incbin",    { create: () => { return new stm.IncludeStatement() }}],
 
       // macros
       [ ".mac",       { create: () => { return new stm.MacroDefStatement() }}],
@@ -509,13 +516,18 @@ class Ca65Syntax extends SyntaxDef {
       [ ".endmac",    { create: () => { return new stm.EndMacroDefStatement() }}],
       [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() }}],
 
+      // data storage
+      [ ".byte",      { create: () => { return new stm.ByteDataStatement() }}],
+      [ ".word",      { create: () => { return new stm.WordDataStatement() }}],
+      [ ".res",       { create: () => { return new stm.ByteStorageStatement() }}],
+
       // conditionals
       [ ".if",        { create: () => { return new stm.IfStatement() }}],
+      [ ".ifdef",     { create: () => { return new stm.IfDefStatement(true) }}],
+      [ ".ifndef",    { create: () => { return new stm.IfDefStatement(false) }}],
       [ ".else",      { create: () => { return new stm.ElseStatement() }}],
       [ ".elseif",    { create: () => { return new stm.ElseIfStatement() }}],
       [ ".endif",     { create: () => { return new stm.EndIfStatement() }}],
-
-      // ***
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

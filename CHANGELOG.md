@@ -1,5 +1,12 @@
 # RPW 65 Changelog
 
+### [1.1.2] - 2024-02-04
+
+#### Added:
+* .inc to list of supported file extensions
+* CA65: Missing common keywords
+* CA65: Support for keywords at character column 1
+
 ### [1.1.1] - 2024-01-02
 
 #### Fixed:
