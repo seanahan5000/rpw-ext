@@ -130,12 +130,23 @@ class FileReader {
 
 //------------------------------------------------------------------------------
 
+class MacroDef {
+
+  // TODO: fill in guts
+
+  constructor(name: SymbolExpression) {
+  }
+}
+
+//------------------------------------------------------------------------------
+
 export class Preprocessor {
 
   public module: Module
   private fileReader = new FileReader()
   private conditional = new Conditional()
   private scopeState = new ScopeState()
+  private macroDef?: MacroDef
 
   constructor(module: Module) {
     this.module = module
@@ -175,9 +186,9 @@ export class Preprocessor {
               lineRecord.statement.enabled = false
               lineRecord.statement = new GenericStatement()
             } else {
-              if (lineRecord.statement instanceof IncludeStatement) {
+              // if (lineRecord.statement instanceof IncludeStatement) {
                 lineRecord.statement.preprocess(this)
-              }
+              // }
               this.processSymbols(lineRecord.statement, true)
             }
           }
@@ -212,11 +223,41 @@ export class Preprocessor {
   includeFile(fileName: string): boolean {
     const sourceFile = this.module.openSourceFile(fileName)
     if (!sourceFile) {
+      // TODO: search additional include paths?
       return false
     }
     sourceFile.parseStatements()
     this.fileReader.push(sourceFile)
     return true
+  }
+
+  public inMacroDef(): boolean {
+    return this.macroDef != undefined
+  }
+
+  // TODO: pass in parameter list too?
+  public startMacroDef(macroName: SymbolExpression) {
+    // NOTE: caller should have done this and flagged an error
+    if (this.inMacroDef()) {
+      return
+    }
+
+    this.macroDef = new MacroDef(macroName)
+
+    // TODO: does this scope handling make sense for all syntaxes?
+    this.scopeState.pushScope(macroName.getString())
+  }
+
+  public endMacroDef() {
+    // NOTE: caller should have done this and flagged an error
+    if (!this.inMacroDef()) {
+      return
+    }
+
+    // TODO: does this scope handling make sense for all syntaxes?
+    this.scopeState.popScope()
+
+    this.macroDef = undefined
   }
 
   // *** put in module instead? ***
@@ -305,16 +346,32 @@ export class Preprocessor {
             } else if (!symExp.symbol) {
               const foundSym = this.module.symbolMap.get(symExp.fullName)
               if (foundSym) {
-                symExp.symbol = foundSym
-                symExp.symbolType = foundSym.type
-                symExp.fullName = foundSym.fullName
-                foundSym.addReference(symExp)
-              } else if (!symExp.suppressUnknown) {
-                if (symExp.isLocalType() || !this.module.project.temporary) {
-                  if (symExp.symbolType == SymbolType.Macro) {
-                    symExp.setError("Unknown macro or opcode")
-                  } else if (!firstPass) {
-                    symExp.setError("Symbol not found")
+                if (foundSym != statement.labelExp?.symbol) {
+                  symExp.symbol = foundSym
+                  symExp.symbolType = foundSym.type
+                  symExp.fullName = foundSym.fullName
+                  foundSym.addReference(symExp)
+                } else {
+                  symExp.setError("Circular symbol reference")
+                }
+              } else {
+                // TODO: For now, don't report any missing symbols within
+                //  a macro definition.  This should eventually look at
+                //  named macro parameters and match against those. (ca65-only?)
+                if (firstPass && this.inMacroDef()) {
+                  // TODO: be smarter about scoping locals
+                  if (!symExp.isLocalType()) {
+                    symExp.suppressUnknown = true
+                  }
+                }
+                if (!symExp.suppressUnknown) {
+                  // TODO: make temporary project check a setting
+                  if (symExp.isLocalType() || !this.module.project.temporary) {
+                    if (symExp.symbolType == SymbolType.Macro) {
+                      symExp.setError("Unknown macro or opcode")
+                    } else if (!firstPass) {
+                      symExp.setError("Symbol not found")
+                    }
                   }
                 }
               }

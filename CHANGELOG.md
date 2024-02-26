@@ -1,5 +1,27 @@
 # RPW 65 Changelog
 
+### [1.1.3] - 2024-02-26
+
+#### Added:
+* .a to list of supported file extensions
+* Brackets in place of parens (always allowed, to be connected to syntax feature later)
+* CA65: Anonymous ":", ":+", ":-" labels
+* CA65: Indented assignment
+* CA65: ":=" assignment
+* CA65: .set variables
+* CA65: Better scoping of macro parameters and symbols
+* CA65: More keywords and directives
+* DASM: Optional "." or "#" prefix on all directives
+* DASM: Error if "A" present on accumulator mode shift and rotation opcodes
+* DASM: Parsing of forced addressing mode suffixes on opcodes
+
+#### Fixed:
+* Loading default settings from project
+* Tabbing in the middle of a word, across a tabstop, sometimes overwrites a character instead of inserting space
+* Crash caused by circular symbol reference (label = label)
+* Auto-completion of keywords starting with symbol
+* CA65: Parsing of quoted file paths
+
 ### [1.1.2] - 2024-02-04
 
 #### Added:

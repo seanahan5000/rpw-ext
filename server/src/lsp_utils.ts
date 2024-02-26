@@ -5,7 +5,7 @@ import { SourceFile } from "./asm/project"
 import { Token, TokenType } from "./asm/tokenizer"
 import { OpStatement, OpMode } from "./asm/statements"
 import { OpcodeSets } from "./asm/opcodes"
-import { SyntaxDefs } from "./asm/syntax"
+import { Syntax, SyntaxDefs } from "./asm/syntax"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
 import { Expression, SymbolExpression } from "./asm/expressions"
@@ -94,6 +94,7 @@ export class Completions {
     let checkXY = false
     let checkInd = false
     let appendIndY = false
+    let leadingSymbol = ""
 
     // no completions when in comment (top-level token)
     for (let token of statement.children) {
@@ -154,10 +155,18 @@ export class Completions {
     } else if (loc == Loc.beforeOpcode) {
       // use default completions
     } else if (loc == Loc.inOpcode) {
-      // might depend on statement type
-      this.addMacros = ++index
-      this.addKeywords = ++index
-      this.addOpcodes = ++index
+      const firstChar = opRange ? opRange.sourceLine[opRange.start] : ""
+      const syntax = sourceFile.module.project.syntax
+      // TODO: more logic here
+      if ((firstChar == "." || firstChar == ":") && syntax == Syntax.CA65) {
+        this.addKeywords = ++index
+        leadingSymbol = firstChar
+      } else {
+        // might depend on statement type
+        this.addMacros = ++index
+        this.addKeywords = ++index
+        this.addOpcodes = ++index
+      }
     } else if ((loc == Loc.afterOpcode || loc == Loc.inArgs) && !inHex) {
       // initial args completions
       if (statement instanceof OpStatement) {
@@ -318,10 +327,15 @@ export class Completions {
             key = key.toUpperCase()
           }
           // TODO: only pad keywords that have arguements
-          key = key.padEnd(4, " ")
+          // TODO: use settings instead of 4
+          key = key.padEnd(4 - leadingSymbol.length, " ")
           let item = lsp.CompletionItem.create(key)
           item.sortText = `${this.addKeywords}_${key}`
           item.kind = lsp.CompletionItemKind.Text
+          // TODO: tie this to syntax, check for "!", and/or "+"
+          if (leadingSymbol == key[0]) {
+            item.insertText = key.substring(1)
+          }
           completions.push(item)
         }
       }

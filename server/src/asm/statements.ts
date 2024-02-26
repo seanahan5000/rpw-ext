@@ -38,6 +38,9 @@ export abstract class Statement extends exp.Expression {
     }
   }
 
+  preprocess(preprocessor: Preprocessor) {
+  }
+
   postProcessSymbols(symUtils: SymbolUtils) {
   }
 
@@ -107,13 +110,15 @@ export enum OpCpu {
 export class OpStatement extends Statement {
 
   public opcode: any
+  public opSuffix: string
   public cpu: OpCpu
   public mode: OpMode = OpMode.NONE
   private expression?: exp.Expression
 
-  constructor(opcode: any, cpu: OpCpu) {
+  constructor(opcode: any, opSuffix: string, cpu: OpCpu) {
     super()
     this.opcode = opcode
+    this.opSuffix = opSuffix
     this.cpu = cpu
   }
 
@@ -124,6 +129,10 @@ export class OpStatement extends Statement {
       token = parser.mustGetNextToken("expecting opcode expression")
     } else {
       token = parser.getNextToken()
+    }
+
+    if (!parser.syntax || parser.syntax == Syntax.DASM) {
+      // TODO: use this.opSuffix to help choose mode
     }
 
     // NOTE: Guess at and set this.mode early so it's available
@@ -142,8 +151,8 @@ export class OpStatement extends Statement {
         // TODO: check for INC/DEC and promote opcode to 65C02
         if (this.opcode.A === undefined) {
           token.setError("Accumulator mode not allowed for this opcode")
-        } else if (parser.syntax && parser.syntax == Syntax.ACME) {
-          token.setError("Accumulator mode not allowed for ACME syntax")
+        } else if (parser.syntax == Syntax.ACME || parser.syntax == Syntax.DASM) {
+          token.setError("Accumulator mode not allowed for this syntax")
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.A
@@ -155,19 +164,6 @@ export class OpStatement extends Statement {
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
         this.expression = parser.mustAddNextExpression()
-
-        // temporary hack while upgrading Naja sources to new graphics
-        // *** put a switch around this ***
-        if (this.opNameLC == "ora") {
-          const value = this.expression.resolve()
-          if (value == 0x20 || value == 0x40) {
-            const str = this.expression.getString()
-            if (str == "$20" || str == "$40") {
-              this.expression.setWarning("FIXME?")
-            }
-          }
-        }
-
       } else if (str == "/") {			// same as "#>"
         parser.addToken(token)
         if (this.opcode.IMM === undefined) {
@@ -180,14 +176,16 @@ export class OpStatement extends Statement {
         this.mode = OpMode.IMM
         // *** this loses the implied ">" operation
         this.expression = parser.mustAddNextExpression()
-      } else if (str == "(") {
+      } else if ((str == "(" && !parser.requireBrackets)
+          || (str == "[" && (parser.allowBrackets || parser.requireBrackets))) {
+        const closingChar = str == "(" ? ")" : "]"
         parser.addToken(token)
         // *** check opcode has this address mode ***
         token.type = TokenType.Opcode
         this.mode = OpMode.IND
         this.expression = parser.mustAddNextExpression()
 
-        let res = parser.mustAddToken([",", ")"], TokenType.Opcode)
+        let res = parser.mustAddToken([",", closingChar], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
           this.mode = OpMode.INDX
           res = parser.mustAddToken("x", TokenType.Opcode)
@@ -197,10 +195,10 @@ export class OpStatement extends Statement {
             }
             token.type = TokenType.Opcode
           }
-          parser.mustAddToken(")", TokenType.Opcode)
+          parser.mustAddToken(closingChar, TokenType.Opcode)
           return
-
-        } else if (res.index == 1) {        // (exp) or (exp),Y
+        }
+        if (res.index == 1) {        // (exp) or (exp),Y
           this.mode = OpMode.INDY
           let nextToken = parser.addNextToken()
           if (!nextToken) {
@@ -235,6 +233,7 @@ export class OpStatement extends Statement {
             (this.opNameLC == "jmp" || this.opNameLC == "jsr"))) {
 
           // *** move to parser ***
+          // *** these are valid outside of branch/jump opcodes ***
 
           const isDefinition = false
           if (str == ">" || str == "<") {
@@ -242,6 +241,9 @@ export class OpStatement extends Statement {
               parser.addExpression(parser.parseLisaLocal(token, isDefinition))
               return
             }
+          } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
+            parser.addExpression(parser.parseCA65Local(token, isDefinition))
+            return
           } else if ((str[0] == "-" || str[0] == "+")
               && (str[0] == str[str.length - 1])) {
             if (!parser.syntax || parser.syntax == Syntax.ACME) {
@@ -922,6 +924,7 @@ export class IncludeStatement extends Statement {
       let fileNameStr = this.fileName.getString() || ""
       if (fileNameStr.length > 0) {
         // TODO: only strip quotes for non-Merlin?
+        // TODO: require quoting for CA65? other syntaxes?
         let quoteChar = fileNameStr[0]
         if (quoteChar == "'" || quoteChar == '"') {
           fileNameStr = fileNameStr.substring(1)
@@ -991,6 +994,8 @@ export class DiskStatement extends Statement {
 //         symbol = exp
 // DASM:   symbol EQU exp
 //         symbol = exp
+// CA65:   symbol = exp
+//         symbol := exp
 
 export class EquStatement extends Statement {
 
@@ -1003,6 +1008,7 @@ export class EquStatement extends Statement {
     }
     if (!this.labelExp.isVariableType()) {
       this.value = parser.mustAddNextExpression()
+      // TODO: if ":=", mark symbol as address
       this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
     } else {
       this.labelExp.setError("Variable label not allowed")
@@ -1012,6 +1018,7 @@ export class EquStatement extends Statement {
 
 // MERLIN: varSymbol = exp
 // DASM:   varSymbol SET exp
+// CA65:   varSymbol .SET exp
 
 export class VarAssignStatement extends Statement {
 
@@ -1024,7 +1031,7 @@ export class VarAssignStatement extends Statement {
       return
     }
 
-    if (this.opNameLC == "set") {
+    if (this.opNameLC == "set" || this.opNameLC == ".set") {
       this.labelExp.symbolType = SymbolType.Variable
       if (this.labelExp.symbol) {
         this.labelExp.symbol.type = SymbolType.Variable
@@ -1186,8 +1193,8 @@ export class TextStatement extends Statement {
 //   DASM:         MAC <name>    (no label allowed)
 //                 MACRO <name>
 //   ACME:  !macro <name> [<params-list>] {
-//   CA65:         .mac <name>
-//                 .macro <name>
+//   CA65:         .mac <name> [<params-list>]
+//                 .macro <name> [<params-list>]
 //   LISA:
 //  SBASM:  <name> .MA [<params-list>]
 
@@ -1257,8 +1264,23 @@ export class MacroDefStatement extends Statement {
       }
     }
   }
-}
 
+  preprocess(preprocessor: Preprocessor) {
+    if (!this.macroName) {
+      // parser should have already caught this
+      return
+    }
+
+    if (preprocessor.inMacroDef()) {
+      this.setError("Nested macro definitions not allowed")
+      return
+    }
+
+    // TODO: pass in parameter list too?
+    // TODO: start new label scope here?
+    preprocessor.startMacroDef(this.macroName)
+  }
+}
 
 // MERLIN:  EOM       (label is allowed)
 //          <<<
@@ -1273,6 +1295,16 @@ export class EndMacroDefStatement extends Statement {
 
   parse(parser: Parser) {
     // *** enforce label or not ***
+  }
+
+  preprocess(preprocessor: Preprocessor) {
+    if (!preprocessor.inMacroDef()) {
+      this.setError("End of macro without start")
+      return
+    }
+
+    // TODO: pop label scope here?
+    preprocessor.endMacroDef()
   }
 }
 
@@ -1409,6 +1441,26 @@ export class ListStatement extends Statement {
       }
     } else if (token) {
       token.type = TokenType.Keyword
+    }
+  }
+}
+
+//------------------------------------------------------------------------------
+
+// CA65-only
+// .feature labels_without_colons
+// .feature bracket_as_indirect
+// TODO: others
+
+export class FeatureStatement extends Statement {
+  parse(parser: Parser) {
+    const token = parser.addNextToken()
+    if (token) {
+      // TODO: enforce known features
+      // TODO: correctly auto-complete with those options
+      token.type = TokenType.Keyword
+    } else {
+      parser.addMissingToken("Missing expression, feature name expected")
     }
   }
 }

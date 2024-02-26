@@ -483,12 +483,13 @@ export class LspServer {
 
     const comp = new Completions()
     let completions = comp.scan(sourceFile, params.position.line, params.position.character)
-    if (!completions) {
-      // return a fake completion that will prevent default suggestions
-      let item = lsp.CompletionItem.create("_")
-      item.kind = lsp.CompletionItemKind.Text
-      completions = [item]
-    }
+    // NOTE: turned off for now -- causes problems in CA65 with ":<tab>"
+    // if (!completions) {
+    //   // return a fake completion that will prevent default suggestions
+    //   let item = lsp.CompletionItem.create("_")
+    //   item.kind = lsp.CompletionItemKind.Text
+    //   completions = [item]
+    // }
     const isIncomplete = false
     return lsp.CompletionList.create(completions, isIncomplete)
   }

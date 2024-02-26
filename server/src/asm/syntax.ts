@@ -306,9 +306,7 @@ class DasmSyntax extends SyntaxDef {
       [ "dc.w",       { create: () => { return new stm.WordDataStatement() }}],
       [ "dc.s",       { create: () => { return new stm.WordDataStatement(true) }}],
       [ "byte",       { create: () => { return new stm.ByteDataStatement() }}],
-      [ ".byte",      { create: () => { return new stm.ByteDataStatement() }}],
       [ "word",       { create: () => { return new stm.WordDataStatement() }}],
-      [ ".word",      { create: () => { return new stm.WordDataStatement() }}],
       [ "hex",        { create: () => { return new stm.HexStatement() }}],
       [ "align",      {}],
 
@@ -503,7 +501,10 @@ class Ca65Syntax extends SyntaxDef {
     this.keywordMap = new Map<string, KeywordDef>([
       [ ".org",       { create: () => { return new stm.OrgStatement() }}],
       [ "=",          { create: () => { return new stm.EquStatement() }}],
+      [ ":=",         { create: () => { return new stm.EquStatement() }}],
       [ ".assert",    {}],
+      [ ".end",       {}],
+      [ ".set",       { create: () => { return new stm.VarAssignStatement() }}],
 
       // disk
       [ ".include",   { create: () => { return new stm.IncludeStatement() }}],
@@ -518,8 +519,13 @@ class Ca65Syntax extends SyntaxDef {
 
       // data storage
       [ ".byte",      { create: () => { return new stm.ByteDataStatement() }}],
+      [ ".dbyt",      {}],
       [ ".word",      { create: () => { return new stm.WordDataStatement() }}],
+      [ ".addr",      {}],
+      [ ".faraddr",   {}],    // 24-bit values
+      [ ".dword",     {}],
       [ ".res",       { create: () => { return new stm.ByteStorageStatement() }}],
+      [ ".align",     {}],
 
       // conditionals
       [ ".if",        { create: () => { return new stm.IfStatement() }}],
@@ -528,6 +534,34 @@ class Ca65Syntax extends SyntaxDef {
       [ ".else",      { create: () => { return new stm.ElseStatement() }}],
       [ ".elseif",    { create: () => { return new stm.ElseIfStatement() }}],
       [ ".endif",     { create: () => { return new stm.EndIfStatement() }}],
+
+      [ ".import",    {}],
+      [ ".export",    {}],
+      [ ".segment",   {}],
+      [ ".define",    {}],
+      [ ".proc",      {}],
+      [ ".endproc",   {}],
+      [ ".enum",      {}],
+      [ ".endenum",   {}],
+      [ ".struct",    {}],
+      [ ".endstruct", {}],
+      [ ".tag",       {}],
+      [ ".local",     {}],
+      [ ".zeropage",  {}],
+      [ ".hibytes",   {}],
+      [ ".lobytes",   {}],
+      [ ".fatal",     {}],
+      [ ".error",     {}],
+      [ ".warning",   {}],
+      [ ".out",       {}],
+      [ ".defined",   {}],    // ()
+      [ ".sizeof",    {}],    // ()
+      [ ".blank",     {}],    // ()
+      [ ".sprintf",   {}],    // ()
+      [ ".macpack",   {}],
+      [ ".cpu",       {}],
+      [ ".feature",   { create: () => { return new stm.FeatureStatement() }}],
+      [ ".linecont",  {}]     // + (enable line continuation)
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

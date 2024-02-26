@@ -161,7 +161,10 @@ export async function tabIndentCmd(shift: boolean) {
 						// if text has covered a tab stop, move to the end of the word + 1
 						//	instead of skipping the tab stop
 						if (prevNextCol < end) {
-							textStart = selection.end.character + 1
+							textStart = selection.end.character
+							if (lineText[textStart] == " ") {
+								textStart += 1
+							}
 							end = ch + 1
 						}
 						selection = new vscode.Selection(startLine, ch, startLine, textStart)

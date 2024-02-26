@@ -12,3 +12,4 @@ server/src/**
 .DS_Store
 *.vsix
 examples/**
+TODO-private.md

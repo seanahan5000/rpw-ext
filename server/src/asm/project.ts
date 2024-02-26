@@ -79,6 +79,7 @@ export class Project {
     }
 
     this.rpwSettings = rpwProject.settings ?? {}
+    this.defaultSettingsChanged(this.rpwSettings)
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)

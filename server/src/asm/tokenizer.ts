@@ -277,6 +277,9 @@ export class Tokenizer {
           }
         }
 
+        // TODO: for CA65, don't allow '.' in symbol, allow as start of keyword
+        // TODO: immediately set token to TokenType.Keyword? Macro?
+
         // TODO: constrain this to the specific subset of assemblers
         if (!this.syntax || this.syntax != Syntax.MERLIN) {
           sawSymbol = true
@@ -304,12 +307,12 @@ export class Tokenizer {
           }
         }
 
-        // combine some comparison operators (!=, >=, <=, <>, ><)
+        // combine some comparison operators (:=, !=, >=, <=, <>, ><)
         if (this.position < this.sourceLine.length) {
           if (this.position - start == 1) {
             const nextChar = this.sourceLine[this.position]
             if (nextChar == "=") {
-              if ("!><".indexOf(char) != -1) {
+              if (":!><".indexOf(char) != -1) {
                 this.position += 1
               }
             } else if (char == ">" && nextChar == "<") {

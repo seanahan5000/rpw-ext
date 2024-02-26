@@ -24,6 +24,7 @@
 // CA65
   // keywords start with '.'
   // label starts in first column, ends with ':'
+    // trailing ':' requirement turned off with feature
   // locals scoped with .PROC
   // locals start with '@'
     // scoped to previous non-local
@@ -80,6 +81,12 @@ export class Parser extends Tokenizer {
   public nodeSet: Node[] = []
   public nodeSetStack: Node[][] = []
   public labelExp?: exp.SymbolExpression
+
+  // TODO: configure these externally based on syntax and overrides
+  public requireBrackets = false
+  public allowBrackets = true
+
+  // TODO: add requireTrailingColon, allowTrailingColon
 
   // push/pop the current expression to/from the expressionStack
   // *** move these ***
@@ -297,6 +304,24 @@ export class Parser extends Tokenizer {
     let statement: stm.Statement | undefined
     let keywordLC = token.getString().toLowerCase()
 
+    // DASM allows optional "." or "#" on all directives
+    if (this.syntax == Syntax.DASM) {
+      if (keywordLC[0] == ".") {
+        // period has already been prepended elsewhere
+        keywordLC = keywordLC.substring(1)
+        // keyword now excludes prefix operator
+      } else if (keywordLC == "#") {
+        const nextToken = this.getVeryNextToken()
+        if (nextToken) {
+          // keyword excludes prefix operator
+          keywordLC = nextToken.getString().toLowerCase()
+          // token includes prefix operator
+          token.end = nextToken.end
+          token.type = TokenType.Symbol
+        }
+      }
+    }
+
     // ACME syntax uses '!' prefix for keywords
     if (keywordLC == "!") {
       if (!this.syntax || this.syntax == Syntax.ACME) {
@@ -360,12 +385,20 @@ export class Parser extends Tokenizer {
 
   private parseOpcode(token: Token): stm.Statement | undefined {
     let opNameLC = token.getString().toLowerCase()
+    let opSuffix = ""
+    const n = opNameLC.indexOf(".")
+    if (n > 0) {  // ignore prefix "."
+      opSuffix = opNameLC.substring(n + 1)
+      opNameLC = opNameLC.substring(0, n)
+      // TODO: check for known suffixes here?
+    }
     for (let i = 0; i < OpcodeSets.length; i += 1) {
       const opcodeSet = OpcodeSets[i]
       let opcode = (opcodeSet as {[key: string]: any})[opNameLC]
       if (opcode !== undefined) {
         token.type = TokenType.Opcode
-        return this.initStatement(new stm.OpStatement(opcode, i), token)
+        // TODO: pass in suffix?
+        return this.initStatement(new stm.OpStatement(opcode, opSuffix, i), token)
       }
     }
   }
@@ -446,6 +479,17 @@ export class Parser extends Tokenizer {
             return
           }
           token = t1
+        } else if (this.syntax == Syntax.CA65) {
+          // look for indented assignment
+          // TODO: should this be generalized?
+          const t1 = this.getNextToken()
+          const t2 = this.peekNextToken()
+          const str = (t2?.getString() ?? "").toLowerCase()
+          if (!t1 || (str != "=" && str != ":=" && str != ".set")) {
+            this.position = savedPosition
+            return
+          }
+          token = t1
         } else {
           return
         }
@@ -491,6 +535,10 @@ export class Parser extends Tokenizer {
           if (!this.syntax || this.syntax == Syntax.LISA) {
             return this.parseLisaLocal(token, isDefinition)
           }
+        } else if (str == ":") {
+          if (this.syntax == Syntax.CA65) {
+            return this.parseCA65Local(token, isDefinition)
+          }
         } else if ((str[0] == "-" || str[0] == "+")
             && (str[0] == str[str.length - 1])) {
           if (!this.syntax || this.syntax == Syntax.ACME) {
@@ -514,7 +562,9 @@ export class Parser extends Tokenizer {
           return this.parseLocal(token, SymbolType.ZoneLocal, isDefinition)
         }
       } else if (str == ":") {
-        if (!this.syntax ||
+        if (this.syntax == Syntax.CA65) {
+          // TODO: when would this hit?
+        } else if (!this.syntax ||
             this.syntax == Syntax.MERLIN) {   // *** any others?
           return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
         }
@@ -666,7 +716,7 @@ export class Parser extends Tokenizer {
     return this.newSymbolExpression(this.endExpression(), symbolType, isDefinition)
   }
 
-  parseLisaLocal(token: Token, isDefinition: boolean): exp.Expression {
+  public parseLisaLocal(token: Token, isDefinition: boolean): exp.Expression {
     this.startExpression(token)
     token.type = TokenType.Label
 
@@ -686,6 +736,28 @@ export class Parser extends Tokenizer {
     }
 
     return this.newSymbolExpression(this.endExpression(), SymbolType.LisaLocal, isDefinition)
+  }
+
+  public parseCA65Local(token: Token, isDefinition: boolean): exp.Expression {
+    this.startExpression(token)
+    token.type = TokenType.Label
+
+    if (!isDefinition) {
+      let nextToken = this.addVeryNextToken()
+      if (nextToken) {
+        const str = nextToken.getString()
+        if (nextToken.type == TokenType.Operator &&
+          ((str[0] == "-" || str[0] == "+") && (str[0] == str[str.length - 1]))) {
+          nextToken.type = TokenType.Label
+        } else {
+          nextToken.setError("Must be + or -")
+        }
+      } else {
+        nextToken = this.addMissingToken("Missing + or -")
+      }
+    }
+
+    return this.newSymbolExpression(this.endExpression(), SymbolType.CA65Local, isDefinition)
   }
 
   private mustParseExpression(token?: Token): exp.Expression {
@@ -906,31 +978,33 @@ export class Parser extends Tokenizer {
     const startPosition = this.position
     if (this.position < this.sourceLine.length) {
 
-      let quoteChar = this.sourceLine[this.position]
+      const quoteChar = this.sourceLine[this.position]
       if (quoteChar == '"' || quoteChar == "'") {
         // TODO: enforce/allow quotes for only some syntaxes?
         this.position += 1
+        while (this.position < this.sourceLine.length) {
+          const nextChar = this.sourceLine[this.position]
+          this.position += 1
+          if (nextChar == quoteChar) {
+            break
+          }
+        }
       } else {
-        quoteChar = ""
-      }
-
-      while (this.position < this.sourceLine.length) {
-        const nextCode = this.sourceLine.charCodeAt(this.position)
-        if ((nextCode >= 0x30 && nextCode <= 0x39) ||			// 0-9
-            (nextCode >= 0x41 && nextCode <= 0x5A) ||		  // A-Z
-            (nextCode >= 0x61 && nextCode <= 0x7A)) {		  // a-z
-          this.position += 1
-          continue
+        while (this.position < this.sourceLine.length) {
+          const nextCode = this.sourceLine.charCodeAt(this.position)
+          if ((nextCode >= 0x30 && nextCode <= 0x39) ||			// 0-9
+              (nextCode >= 0x41 && nextCode <= 0x5A) ||		  // A-Z
+              (nextCode >= 0x61 && nextCode <= 0x7A)) {		  // a-z
+            this.position += 1
+            continue
+          }
+          const nextChar = this.sourceLine[this.position]
+          if (nextChar == "_" || nextChar == "." || nextChar == "/") {
+            this.position += 1
+            continue
+          }
+          break
         }
-        const nextChar = this.sourceLine[this.position]
-        if (nextChar == "_" || nextChar == "." || nextChar == "/") {
-          this.position += 1
-          continue
-        }
-        if (nextChar == quoteChar) {
-          this.position += 1
-        }
-        break
       }
     }
 

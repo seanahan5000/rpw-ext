@@ -15,6 +15,7 @@ export enum SymbolType {
   ZoneLocal   = 5,  // scoped to SUBROUTINE or !zone
   AnonLocal   = 6,  // ++ or --
   LisaLocal   = 7,  // ^# def, <# or ># ref
+  CA65Local   = 8,  // : def, :+ or :- ref
 }
 
 export function isLocalType(symbolType: SymbolType): boolean {
@@ -108,6 +109,7 @@ export class ScopeState {
   private cheapScope = "__d"
 
   private anonCounts = new Array(20).fill(0)
+  private anonIndex = 0     // CA65-only
 
   setSymbolExpression(symExp: SymbolExpression): string | undefined {
 
@@ -238,14 +240,33 @@ export class ScopeState {
         }
         break
       }
+
+      case SymbolType.CA65Local: {
+        const nameToken = symExp.children[0]
+        if (nameToken instanceof Token) {
+          let offset = 0
+          if (symExp.isDefinition) {
+            this.anonIndex += 1
+          } else {
+            const indexToken = symExp.children[1]
+            if (indexToken instanceof Token) {
+              const name = indexToken.getString()
+              offset = name.length
+              if (name[0] == "-") {
+                offset = -(offset - 1)
+              }
+            }
+          }
+          return `__a${this.anonIndex + offset}`
+        }
+        break
+      }
     }
 
     return ""
   }
 
-  // future possible methods
-
-  private pushScope(scopeName: string) {
+  public pushScope(scopeName: string) {
     if (this.scopePath) {
       this.scopeStack.push(this.scopePath)
       this.scopePath = this.scopePath + scopeName
@@ -254,9 +275,11 @@ export class ScopeState {
     }
   }
 
-  private popScope() {
+  public popScope() {
     this.scopePath = this.scopeStack.pop()
   }
+
+  // future possible methods
 
   private pushZone(zoneName?: string) {
     if (this.zoneName) {
