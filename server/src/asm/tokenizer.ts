@@ -51,12 +51,14 @@ export abstract class Node {
 
 export enum TokenType {
   Null,         // *** necessary?
-
+  Missing,
   Operator,
   Symbol,
   HexNumber,
   DecNumber,
+  // above are primary tokens returned by tokenizer
 
+  // below are secondary derived tokens
   String,
   Escape,
   Quote,
@@ -70,7 +72,11 @@ export enum TokenType {
   Variable,
   FileName,   // *** TODO: or just use quoted string?
 
-  Missing
+  // Enum,
+  // EnumMember,
+  TypeName,   // .struct/dummy
+  // FieldName,  // .struct/dummy member
+  // Namespace,  // .proc
 }
 
 export class Token extends Node {
@@ -137,6 +143,10 @@ export class Tokenizer {
       this.position = start
     }
     return token
+  }
+
+  ungetToken(t: Token) {
+    this.position = t.start
   }
 
   peekNextToken(): Token | undefined {
@@ -277,7 +287,15 @@ export class Tokenizer {
           }
         }
 
-        // TODO: for CA65, don't allow '.' in symbol, allow as start of keyword
+        // CA65 doesn't allow '.' in symbol but allows as start of keyword,
+        //  define invocation, and built-in functions. Treat it as a stand-alone
+        //  operator here and let other code combine as necessary.
+        // if (this.syntax == Syntax.CA65) {
+        //   this.position += 1
+        //   sawOperator = true
+        //   break
+        // }
+
         // TODO: immediately set token to TokenType.Keyword? Macro?
 
         // TODO: constrain this to the specific subset of assemblers
@@ -303,6 +321,18 @@ export class Tokenizer {
             // limit "=&|:" to doubles only
             if (repeatIndex < 4) {
               break
+            }
+          }
+          // look for Merlin's "--^"
+          if (repeatIndex == 7) { // "-"
+            if (!this.syntax || this.syntax != Syntax.MERLIN) {
+              if (this.position - start == 2) {
+                if (this.position < this.sourceLine.length) {
+                  if (this.sourceLine[this.position] == "^") {
+                    this.position += 1
+                  }
+                }
+              }
             }
           }
         }

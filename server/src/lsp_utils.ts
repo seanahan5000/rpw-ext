@@ -107,7 +107,7 @@ export class Completions {
 
     // when inside a hex value, don't suggest completions
     //  ("$C" should not suggest "COUNT", for example)
-    let inHex = inHexToken(statement, position)
+    const inHex = inHexToken(statement, position)
 
     const prevChar = statement.sourceLine[position - 1] ?? ""
 

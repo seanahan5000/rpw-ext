@@ -1,6 +1,6 @@
 
 import { SourceFile, Module, LineRecord } from "./project"
-import { Statement, ConditionalStatement, GenericStatement, IncludeStatement, MacroInvokeStatement } from "./statements"
+import { Statement, ConditionalStatement, GenericStatement, ClosingBraceStatement, EquStatement, MacroDefStatement, RepeatStatement } from "./statements"
 import { ScopeState, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression } from "./expressions"
 
@@ -140,20 +140,48 @@ class MacroDef {
 
 //------------------------------------------------------------------------------
 
+export enum NestingType {
+  Conditional = 0,
+  Macro       = 1,
+  Repeat      = 2,
+  Struct      = 3,    // CA65, Dummy for MERLIN
+  Enum        = 4,    // CA65
+  Union       = 5,    // CA65
+  Scope       = 6,    // CA65
+  Proc        = 7,    // CA65
+  Zone        = 8,    // ACME
+  PseudoPc    = 9,    // ACME
+  Cpu         = 10,   // ACME
+  Count
+}
+
+type NestingEntry = {
+  type: NestingType
+  statement: Statement
+  bracePopProc?: () => void
+}
+
 export class Preprocessor {
 
   public module: Module
   private fileReader = new FileReader()
-  private conditional = new Conditional()
-  private scopeState = new ScopeState()
+  public conditional = new Conditional()
+  public scopeState = new ScopeState()
+  private curLine?: LineRecord
   private macroDef?: MacroDef
+  private macroStart?: Statement
+  private syntaxStats: number[] = []
+
+  private nestingStack: NestingEntry[] = []
+  private nestingCounts: number[] = new Array(NestingType.Count).fill(0)
 
   constructor(module: Module) {
     this.module = module
   }
 
-  preprocess(fileName: string): LineRecord[] | undefined {
+  preprocess(fileName: string, syntaxStats: number[]): LineRecord[] | undefined {
     const lineRecords: LineRecord[] = []
+    this.syntaxStats = syntaxStats
 
     if (!this.includeFile(fileName)) {
       // *** error messaging?
@@ -164,53 +192,81 @@ export class Preprocessor {
       do {
         while (this.fileReader.state.curLineIndex < this.fileReader.state.endLineIndex) {
 
-          const lineRecord: LineRecord = {
+          const line: LineRecord = {
             sourceFile: this.fileReader.state.file,
             lineNumber: this.fileReader.state.curLineIndex,
             statement: undefined
           }
 
-          lineRecord.statement = this.fileReader.state.file.statements[lineRecord.lineNumber]
+          this.curLine = line
+
+          line.statement = this.fileReader.state.file.statements[line.lineNumber]
           // *** mark statement as used to detect multiple references? ***
 
           // must advance before parsing that may include a different file
           this.fileReader.state.curLineIndex += 1
 
-          if (lineRecord.statement instanceof ConditionalStatement) {
-            // need symbol references hooked up before resolving conditional expression
-            this.processSymbols(lineRecord.statement, true)
-            lineRecord.statement.applyConditional(this.conditional)
-          } else {
-            if (!this.conditional.isEnabled()) {
-              // TODO: reconcile lineRecord and statement use on disabled lines
-              lineRecord.statement.enabled = false
-              lineRecord.statement = new GenericStatement()
+          let conditional = false
+          if (line.statement instanceof ConditionalStatement) {
+            conditional = true
+
+            // determine if ClosingBraceStatement actually a conditional operation
+            if (line.statement instanceof ClosingBraceStatement) {
+              if (this.nestingStack.length > 0) {
+                conditional = (this.nestingStack[this.nestingStack.length - 1].type == NestingType.Conditional)
+              }
+            }
+
+            if (conditional) {
+              // need symbol references hooked up before resolving conditional expression
+              this.processSymbols(line.statement, true)
+              // TODO: consider folding applyConditional into preprocess
+              line.statement.applyConditional(this)
+            }
+          }
+
+          if (!conditional) {
+            const enabled = this.conditional.isEnabled()
+            line.statement.preprocess(this, enabled)
+
+            if (enabled) {
+              this.processSymbols(line.statement, true)
             } else {
-              // if (lineRecord.statement instanceof IncludeStatement) {
-                lineRecord.statement.preprocess(this)
-              // }
-              this.processSymbols(lineRecord.statement, true)
+              // TODO: reconcile lineRecord and statement use on disabled lines
+              line.statement.enabled = false
+              line.statement = new GenericStatement()
             }
           }
 
           // don't add new statement if shared file already has one
-          if (lineRecord.sourceFile.statements.length == lineRecord.lineNumber) {
-            if (lineRecord.statement) {
-              lineRecord.sourceFile.statements.push(lineRecord.statement)
+          if (line.sourceFile.statements.length == line.lineNumber) {
+            if (line.statement) {
+              line.sourceFile.statements.push(line.statement)
             }
           }
 
-          lineRecords.push(lineRecord)
+          lineRecords.push(line)
         }
         this.fileReader.state.curLineIndex = this.fileReader.state.startLineIndex;
       } while (--this.fileReader.state.loopCount > 0)
       this.fileReader.pop()
     }
 
+    this.curLine = undefined
+
+    while (true) {
+      const entry = this.nestingStack.pop()
+      if (!entry) {
+        break
+      }
+      // TODO: more descriptive error message
+      entry.statement.setError("Dangling " + entry.statement.opNameLC)
+    }
+
     // process all remaining symbols
     const symUtils = new SymbolUtils()
-    for (let lineRecord of lineRecords) {
-      const statement = lineRecord.statement
+    for (let line of lineRecords) {
+      const statement = line.statement
       if (statement) {
         this.processSymbols(statement, false)
         statement.postProcessSymbols(symUtils)
@@ -221,12 +277,12 @@ export class Preprocessor {
   }
 
   includeFile(fileName: string): boolean {
-    const sourceFile = this.module.openSourceFile(fileName)
+    const currentFile = this.fileReader.state.file
+    const sourceFile = this.module.openSourceFile(fileName, currentFile)
     if (!sourceFile) {
-      // TODO: search additional include paths?
       return false
     }
-    sourceFile.parseStatements()
+    sourceFile.parseStatements(this.syntaxStats)
     this.fileReader.push(sourceFile)
     return true
   }
@@ -237,27 +293,65 @@ export class Preprocessor {
 
   // TODO: pass in parameter list too?
   public startMacroDef(macroName: SymbolExpression) {
-    // NOTE: caller should have done this and flagged an error
-    if (this.inMacroDef()) {
-      return
+    // NOTE: caller should have checked this and flagged an error
+    if (!this.macroDef) {
+      this.macroStart = this.curLine!.statement
+      this.macroDef = new MacroDef(macroName)
+
+      // TODO: does this scope handling make sense for all syntaxes?
+      this.scopeState.pushScope(macroName.getString())
     }
-
-    this.macroDef = new MacroDef(macroName)
-
-    // TODO: does this scope handling make sense for all syntaxes?
-    this.scopeState.pushScope(macroName.getString())
   }
 
   public endMacroDef() {
-    // NOTE: caller should have done this and flagged an error
-    if (!this.inMacroDef()) {
-      return
+    // NOTE: caller should have checked this and flagged an error
+    if (this.macroDef) {
+
+      if (this.macroStart) {
+        this.macroStart.foldEnd = this.curLine!.statement
+        this.macroStart = undefined
+      }
+
+      // TODO: does this scope handling make sense for all syntaxes?
+      this.scopeState.popScope()
+
+      this.macroDef = undefined
     }
+  }
 
-    // TODO: does this scope handling make sense for all syntaxes?
-    this.scopeState.popScope()
+  public topNestingType(): NestingType | undefined {
+    const length = this.nestingStack.length
+    return length > 0 ? this.nestingStack[length - 1].type : undefined
+  }
 
-    this.macroDef = undefined
+  public isNested(type: NestingType): boolean {
+    return this.nestingCounts[type] != 0
+  }
+
+  public pushNesting(type: NestingType, bracePopProc?: () => void) {
+    if (this.curLine!.statement) {
+      this.nestingStack.push({ type, statement: this.curLine!.statement, bracePopProc})
+      this.nestingCounts[type] += 1
+    }
+  }
+
+  // NOTE: Caller will have already verified there's an entry
+  //  to pop and that it's the correct one.
+  public popNesting(bracePop = false): boolean {
+    const entry = this.nestingStack.pop()
+    if (entry) {
+      if (this.nestingCounts[entry.type]) {
+        this.nestingCounts[entry.type] -= 1
+        if (bracePop && entry.bracePopProc) {
+          entry.bracePopProc()
+        }
+        entry.statement.foldEnd = this.curLine!.statement
+        return true
+      } else {
+        this.nestingStack.push(entry)
+      }
+    }
+    return false
   }
 
   // *** put in module instead? ***
@@ -346,13 +440,13 @@ export class Preprocessor {
             } else if (!symExp.symbol) {
               const foundSym = this.module.symbolMap.get(symExp.fullName)
               if (foundSym) {
-                if (foundSym != statement.labelExp?.symbol) {
+                if (foundSym == statement.labelExp?.symbol && statement instanceof EquStatement) {
+                  symExp.setError("Circular symbol reference")
+                } else {
                   symExp.symbol = foundSym
                   symExp.symbolType = foundSym.type
                   symExp.fullName = foundSym.fullName
                   foundSym.addReference(symExp)
-                } else {
-                  symExp.setError("Circular symbol reference")
                 }
               } else {
                 // TODO: For now, don't report any missing symbols within
@@ -366,7 +460,7 @@ export class Preprocessor {
                 }
                 if (!symExp.suppressUnknown) {
                   // TODO: make temporary project check a setting
-                  if (symExp.isLocalType() || !this.module.project.temporary) {
+                  if (symExp.isLocalType() || !this.module.project.isTemporary) {
                     if (symExp.symbolType == SymbolType.Macro) {
                       symExp.setError("Unknown macro or opcode")
                     } else if (!firstPass) {

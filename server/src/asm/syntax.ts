@@ -198,15 +198,14 @@ class MerlinSyntax extends SyntaxDef {
       [ "dummy",  { create: () => { return new stm.DummyStatement() }}],
       [ "dend",   { create: () => { return new stm.DummyEndStatement() }}],
       [ "usr",    { create: () => { return new stm.UsrStatement() }}],
-      [ "lup",    {}],
 
       // data storage
-      [ "db",     { create: () => { return new stm.ByteDataStatement() }}],
-      [ "dfb",    { create: () => { return new stm.ByteDataStatement() }}],
-      [ "ddb",    { create: () => { return new stm.WordDataStatement(true) }}],
-      [ "dw",     { create: () => { return new stm.WordDataStatement() }}],
-      [ "da",     { create: () => { return new stm.WordDataStatement() }}],
-      [ "ds",     { create: () => { return new stm.ByteStorageStatement() }}],
+      [ "db",     { create: () => { return new stm.DataStatement(1) }}],
+      [ "dfb",    { create: () => { return new stm.DataStatement(1) }}],
+      [ "ddb",    { create: () => { return new stm.DataStatement(2, true) }}],
+      [ "dw",     { create: () => { return new stm.DataStatement(2) }}],
+      [ "da",     { create: () => { return new stm.DataStatement(2) }}],
+      [ "ds",     { create: () => { return new stm.StorageStatement(1) }}],
       [ "hex",    { create: () => { return new stm.HexStatement() }}],
 
       [ "asc",    { create: () => { return new stm.TextStatement() }}],
@@ -225,12 +224,17 @@ class MerlinSyntax extends SyntaxDef {
       [ "fin",    { create: () => { return new stm.EndIfStatement() }}],
       [ "end",    {}],
 
+      [ "lup",    { create: () => { return new stm.RepeatStatement() }}],
+      [ "--^",    { create: () => { return new stm.EndRepStatement() }}],
+
       [ "tr",     { create: () => { return new stm.ListStatement() }}],
       [ "lst",    { create: () => { return new stm.ListStatement() }}],
       [ "lstdo",  { create: () => { return new stm.ListStatement() }}],
       [ "exp",    { create: () => { return new stm.ListStatement() }}],
       [ "page",   { create: () => { return new stm.ListStatement() }}],
       [ "obj",    {}],
+
+      // import/export
       [ "ent",    { create: () => { return new stm.EntryStatement() }}],
     ])
 
@@ -283,6 +287,8 @@ class DasmSyntax extends SyntaxDef {
 
       // disk
       [ "include",    { create: () => { return new stm.IncludeStatement() }}],
+      [ "incdir",     { create: () => { return new stm.IncDirStatement() }}],
+      [ "incbin",     { create: () => { return new stm.IncBinStatement() }}],
 
       // macros
       [ "mac",        { create: () => { return new stm.MacroDefStatement() }}],
@@ -290,25 +296,25 @@ class DasmSyntax extends SyntaxDef {
       [ "endm",       { create: () => { return new stm.EndMacroDefStatement() }}],
       [ "mexit",      {}],
 
+      // segments
       [ "seg",        { create: () => { return new stm.SegmentStatement() }}],
       [ "seg.u",      { create: () => { return new stm.SegmentStatement() }}],
-      [ "repeat",     {}],
-      [ "repend",     {}],
+
       [ "echo",       {}],
 
       // data storage
-      [ "ds",         { create: () => { return new stm.ByteStorageStatement() }}],
-      [ "ds.b",       { create: () => { return new stm.ByteStorageStatement() }}],
-      [ "ds.w",       { create: () => { return new stm.WordStorageStatement() }}],
-      [ "ds.s",       { create: () => { return new stm.WordStorageStatement(true) }}],
-      [ "dc",         { create: () => { return new stm.ByteDataStatement() }}],
-      [ "dc.b",       { create: () => { return new stm.ByteDataStatement() }}],
-      [ "dc.w",       { create: () => { return new stm.WordDataStatement() }}],
-      [ "dc.s",       { create: () => { return new stm.WordDataStatement(true) }}],
-      [ "byte",       { create: () => { return new stm.ByteDataStatement() }}],
-      [ "word",       { create: () => { return new stm.WordDataStatement() }}],
+      [ "ds",         { create: () => { return new stm.StorageStatement(1) }}],
+      [ "ds.b",       { create: () => { return new stm.StorageStatement(1) }}],
+      [ "ds.w",       { create: () => { return new stm.StorageStatement(2) }}],
+      [ "ds.s",       { create: () => { return new stm.StorageStatement(2, true) }}],
+      [ "dc",         { create: () => { return new stm.DataStatement(1) }}],
+      [ "dc.b",       { create: () => { return new stm.DataStatement(1) }}],
+      [ "dc.w",       { create: () => { return new stm.DataStatement(2) }}],
+      [ "dc.s",       { create: () => { return new stm.DataStatement(2, true) }}],
+      [ "byte",       { create: () => { return new stm.DataStatement(1) }}],
+      [ "word",       { create: () => { return new stm.DataStatement(2) }}],
       [ "hex",        { create: () => { return new stm.HexStatement() }}],
-      [ "align",      {}],
+      [ "align",      { create: () => { return new stm.AlignStatement() }}],
 
       // conditionals
       [ "if",         { create: () => { return new stm.IfStatement() }}],
@@ -320,8 +326,12 @@ class DasmSyntax extends SyntaxDef {
       [ "eif",        { create: () => { return new stm.EndIfStatement() }}],
       [ "end",        {}],
 
+      // looping
+      [ "repeat",     { create: () => { return new stm.RepeatStatement() }}],
+      [ "repend",     { create: () => { return new stm.EndRepStatement() }}],
+
       // scope
-      [ "subroutine", { create: () => { return new stm.ZoneStatement() }}],
+      [ "subroutine", { create: () => { return new stm.SubroutineStatement() }}],
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([
@@ -393,20 +403,22 @@ class AcmeSyntax extends SyntaxDef {
       [ "!cpu",       { create: () => { return new stm.CpuStatement() }}],
       [ "*",          { create: () => { return new stm.OrgStatement() }}],
       [ "=",          { create: () => { return new stm.EquStatement() }}],
+      [ "!set",       { create: () => { return new stm.VarAssignStatement() }}],
 
       // disk
       [ "!source",    { create: () => { return new stm.IncludeStatement() }}],
       [ "!to",        { create: () => { return new stm.DiskStatement() }}],
+      [ "!binary",    { create: () => { return new stm.IncBinStatement() }}],
 
       // macros
       [ "!mac",       { create: () => { return new stm.MacroDefStatement() }}],
       [ "!macro",     { create: () => { return new stm.MacroDefStatement() }}],
 
       // data storage
-      [ "!byte",      { create: () => { return new stm.ByteDataStatement() }}],
-      [ "!word",      { create: () => { return new stm.WordDataStatement() }}],
+      [ "!byte",      { create: () => { return new stm.DataStatement(1) }}],
+      [ "!word",      { create: () => { return new stm.DataStatement(2) }}],
       [ "!fill",      {}],
-      [ "!align",     {}],
+      [ "!align",     { create: () => { return new stm.AlignStatement() }}],
 
       [ "!pet",       { create: () => { return new stm.TextStatement() }}],
       [ "!raw",       { create: () => { return new stm.TextStatement() }}],
@@ -414,15 +426,20 @@ class AcmeSyntax extends SyntaxDef {
       [ "!text",      { create: () => { return new stm.TextStatement() }}],
 
       [ "!convtab",   {}],
-      [ "!pseudopc",  {}],
+      [ "!pseudopc",  { create: () => { return new stm.PseudoPcStatement() }}],
 
       // conditionals
       [ "!if",        { create: () => { return new stm.IfStatement() }}],
       [ "!ifdef",     { create: () => { return new stm.IfDefStatement(true) }}],
       [ "!ifndef",    { create: () => { return new stm.IfDefStatement(false) }}],
 
+      // looping
+      [ "!for",       { create: () => { return new stm.RepeatStatement() }}],
+      [ "!do",        {}],
+
       // scope
       [ "!zone",      { create: () => { return new stm.ZoneStatement() }}],
+      [ "!zn",        { create: () => { return new stm.ZoneStatement() }}],
 
       // messages
       [ "!serious",   {}],
@@ -502,14 +519,13 @@ class Ca65Syntax extends SyntaxDef {
       [ ".org",       { create: () => { return new stm.OrgStatement() }}],
       [ "=",          { create: () => { return new stm.EquStatement() }}],
       [ ":=",         { create: () => { return new stm.EquStatement() }}],
-      [ ".assert",    {}],
+      [ ".assert",    { create: () => { return new stm.AssertStatement() }}],
       [ ".end",       {}],
       [ ".set",       { create: () => { return new stm.VarAssignStatement() }}],
 
       // disk
       [ ".include",   { create: () => { return new stm.IncludeStatement() }}],
-      // TODO: separate Statement type?
-      [ ".incbin",    { create: () => { return new stm.IncludeStatement() }}],
+      [ ".incbin",    { create: () => { return new stm.IncBinStatement() }}],
 
       // macros
       [ ".mac",       { create: () => { return new stm.MacroDefStatement() }}],
@@ -518,14 +534,15 @@ class Ca65Syntax extends SyntaxDef {
       [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() }}],
 
       // data storage
-      [ ".byte",      { create: () => { return new stm.ByteDataStatement() }}],
-      [ ".dbyt",      {}],
-      [ ".word",      { create: () => { return new stm.WordDataStatement() }}],
-      [ ".addr",      {}],
-      [ ".faraddr",   {}],    // 24-bit values
-      [ ".dword",     {}],
-      [ ".res",       { create: () => { return new stm.ByteStorageStatement() }}],
-      [ ".align",     {}],
+      [ ".byte",      { create: () => { return new stm.DataStatement(1) }}],
+      [ ".dbyt",      { create: () => { return new stm.DataStatement(2, true) }}],
+      [ ".word",      { create: () => { return new stm.DataStatement(2) }}],
+      [ ".addr",      { create: () => { return new stm.DataStatement(2) }}],
+      [ ".faraddr",   { create: () => { return new stm.DataStatement(3) }}],
+      [ ".dword",     { create: () => { return new stm.DataStatement(4) }}],
+      [ ".res",       { create: () => { return new stm.StorageStatement(1) }}],
+      [ ".tag",       { create: () => { return new stm.StorageStatement(-1) }}],
+      [ ".align",     { create: () => { return new stm.AlignStatement() }}],
 
       // conditionals
       [ ".if",        { create: () => { return new stm.IfStatement() }}],
@@ -535,17 +552,39 @@ class Ca65Syntax extends SyntaxDef {
       [ ".elseif",    { create: () => { return new stm.ElseIfStatement() }}],
       [ ".endif",     { create: () => { return new stm.EndIfStatement() }}],
 
-      [ ".import",    {}],
-      [ ".export",    {}],
-      [ ".segment",   {}],
+      // looping
+      [ ".repeat",    { create: () => { return new stm.RepeatStatement() }}],
+      [ ".endrep",    { create: () => { return new stm.EndRepStatement() }}],
+      [ ".endrepeat", { create: () => { return new stm.EndRepStatement() }}],
+
+      // import/export
+      [ ".import",    { create: () => { return new stm.ImportExportStatement(false, false) }}],
+      [ ".importzp",  { create: () => { return new stm.ImportExportStatement(false, true) }}],
+      [ ".export",    { create: () => { return new stm.ImportExportStatement(true, false) }}],
+      [ ".exportzp",  { create: () => { return new stm.ImportExportStatement(true, true) }}],
+
+      // segments
+      [ ".segment",   { create: () => { return new stm.SegmentStatement() }}],
+      [ ".code",      { create: () => { return new stm.SegmentStatement("CODE") }}],
+      [ ".data",      { create: () => { return new stm.SegmentStatement("DATA") }}],
+      [ ".bss",       { create: () => { return new stm.SegmentStatement("BSS") }}],
+      [ ".rodata",    { create: () => { return new stm.SegmentStatement("RODATA") }}],
+
+      // C-types
+      [ ".enum",      { create: () => { return new stm.EnumStatement() }}],
+      [ ".endenum",   { create: () => { return new stm.EndEnumStatement() }}],
+      [ ".struct",    { create: () => { return new stm.StructStatement() }}],
+      [ ".endstruct", { create: () => { return new stm.EndStructStatement() }}],
+      [ ".union",     { create: () => { return new stm.UnionStatement() }}],
+      [ ".endunion",  { create: () => { return new stm.EndUnionStatement() }}],
+
+      // scope
+      [ ".scope",     { create: () => { return new stm.ScopeStatement() }}],
+      [ ".endscope",  { create: () => { return new stm.EndScopeStatement() }}],
+      [ ".proc",      { create: () => { return new stm.ProcStatement() }}],
+      [ ".endproc",   { create: () => { return new stm.EndProcStatement() }}],
+
       [ ".define",    {}],
-      [ ".proc",      {}],
-      [ ".endproc",   {}],
-      [ ".enum",      {}],
-      [ ".endenum",   {}],
-      [ ".struct",    {}],
-      [ ".endstruct", {}],
-      [ ".tag",       {}],
       [ ".local",     {}],
       [ ".zeropage",  {}],
       [ ".hibytes",   {}],
@@ -646,7 +685,8 @@ class LisaSyntax extends SyntaxDef {
       [ "sav",  { create: () => { return new stm.SaveStatement() }}],
 
       // data storage
-      [ "da",   { create: () => { return new stm.WordDataStatement() }}],
+      [ "dfs",  { create: () => { return new stm.StorageStatement(1) }}],
+      [ "da",   { create: () => { return new stm.DataStatement(2) }}],
       [ "hex",  { create: () => { return new stm.HexStatement() }}],
 
       [ "str",  {}],
@@ -693,6 +733,15 @@ export const enum Syntax {
   ACME    = 4,
   LISA    = 5,
 }
+
+export const SyntaxNames = [
+  "UNKNOWN",
+  "MERLIN",
+  "DASM",
+  "CA65",
+  "ACME",
+  "LISA",
+]
 
 export const SyntaxMap = new Map<string, number>([
   [ "UNKNOWN", 0 ],

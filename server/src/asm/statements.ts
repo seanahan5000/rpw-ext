@@ -1,9 +1,9 @@
 
 import * as exp from "./expressions"
 import { Parser } from "./parser"
-import { Preprocessor, Conditional, SymbolUtils } from "./preprocessor"
+import { Preprocessor, SymbolUtils, NestingType } from "./preprocessor"
 import { SymbolFrom, SymbolType } from "./symbols"
-import { Syntax, Op } from "./syntax"
+import { Syntax, } from "./syntax"
 import { Node, Token, TokenType } from "./tokenizer"
 
 //------------------------------------------------------------------------------
@@ -16,6 +16,9 @@ export abstract class Statement extends exp.Expression {
   public opNameLC = ""
   public enabled = true
 
+  // link between conditional statement groups, used to build code folding ranges
+  public foldEnd?: Statement
+
   init(sourceLine: string, children: Node[],
       labelExp?: exp.SymbolExpression,
       opExp?: exp.Expression) {
@@ -23,9 +26,11 @@ export abstract class Statement extends exp.Expression {
     this.sourceLine = sourceLine
     this.labelExp = labelExp
     this.opExp = opExp
+    // TODO: consider trimming off/separating prefix operator ("+", "!", ".")
     this.opNameLC = this.opExp?.getString().toLowerCase() ?? ""
   }
 
+  // parse the statement line but don't change any external state
   parse(parser: Parser) {
     // TODO: does this default implementation still make sense?
     // TODO: just eat expressions? do nothing instead?
@@ -38,7 +43,8 @@ export abstract class Statement extends exp.Expression {
     }
   }
 
-  preprocess(preprocessor: Preprocessor) {
+  // do any conditional preprocessing work but only change state if enabled is true
+  preprocess(prep: Preprocessor, enabled: boolean) {
   }
 
   postProcessSymbols(symUtils: SymbolUtils) {
@@ -49,36 +55,6 @@ export abstract class Statement extends exp.Expression {
 
 
 export class GenericStatement extends Statement {
-}
-
-//------------------------------------------------------------------------------
-
-// MERLIN:
-//   DASM:  <label> SUBROUTINE    (label is optional)
-//   ACME:  <label> !zone {       (label required?)
-//   CA65:
-//   LISA:
-//  SBASM:
-
-export class ZoneStatement extends Statement {
-
-  parse(parser: Parser) {
-    if (!this.labelExp) {
-      // insert implied label
-      this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
-        parser.sourceFile, parser.lineNumber)
-      this.children.unshift(this.labelExp)
-    }
-    if (this.labelExp.isVariableType()) {
-      this.labelExp.setError("Variable not allowed as label")
-      return
-    }
-    if (this.labelExp.symbol) {
-      this.labelExp.symbol.isZoneStart = true
-    }
-
-    // *** if !zone, look for optional trailing open brace ***
-  }
 }
 
 //==============================================================================
@@ -413,16 +389,13 @@ export class OpStatement extends Statement {
 
 export abstract class ConditionalStatement extends Statement {
 
-  // link between conditional statements, used to build code folding ranges
-  public nextConditional?: ConditionalStatement
-
-  abstract applyConditional(conditional: Conditional): void
+  abstract applyConditional(preprocessor: Preprocessor): void
 
   parseTrailingOpenBrace(parser: Parser): boolean {
-    if (this.opNameLC.startsWith("!")) {
+    // *** syntax instead ***
+    if (this.opNameLC.startsWith("!")) {      // *** stop doing this ***
       const res = parser.mustAddToken("{")
       if (res.index == 0) {
-        // TODO: start new ACME group state
         return true
       }
     }
@@ -433,7 +406,7 @@ export abstract class ConditionalStatement extends Statement {
 
 // MERLIN:  DO <exp>
 //   DASM:  IF <exp>
-//   ACME:  !if <exp> {
+//   ACME:  !if <exp> { <block> }
 //   CA65:  .if <exp>
 //   LISA:  .IF <exp>
 //          NOTE: LISA does not support nested IF's.
@@ -448,7 +421,6 @@ export class IfStatement extends ConditionalStatement {
     // TODO: give hint that this expression is for conditional code
     this.expression = parser.mustAddNextExpression()
     if (this.parseTrailingOpenBrace(parser)) {
-
       // TODO: parse inline code after opening brace to
       //  closing brace and maybe else statement
       // TODO: fix this hack to eat ACME inline code
@@ -459,13 +431,21 @@ export class IfStatement extends ConditionalStatement {
         parser.startExpression()
         while (true) {
           if (token.getString() == "}") {
-            break
+            parser.addToken(token)
+            token = parser.getNextToken()
+            if (!token) {
+              break
+            }
           }
-          token.setError("Unexpected token")
-          parser.addToken(token)
+          // TODO: for now, just eat everything inside inline braces
+          // token.setError("Unexpected token")
+          // parser.addToken(token)
           token = parser.getNextToken()
           if (!token) {
             break
+          }
+          if (token.getString() == "{") {
+            parser.addToken(token)
           }
         }
         parser.addExpression(new exp.BadExpression(parser.endExpression()))
@@ -476,7 +456,9 @@ export class IfStatement extends ConditionalStatement {
     }
   }
 
-  applyConditional(conditional: Conditional): void {
+  applyConditional(prep: Preprocessor): void {
+
+    const conditional = prep.conditional
 
     // TODO: fix this hack for ACME inline code
     if (this.isInline) {
@@ -487,6 +469,8 @@ export class IfStatement extends ConditionalStatement {
       this.setError("Exceeded nested conditionals maximum")
       return
     }
+
+    prep.pushNesting(NestingType.Conditional)
 
     conditional.statement = this
 
@@ -505,8 +489,8 @@ export class IfStatement extends ConditionalStatement {
 // MERLIN:
 //   DASM:  IFCONST <symbol>
 //          IFNCONST <symbol>
-//   ACME:  !ifdef <symbol> {
-//          !ifndef <symbol> {
+//   ACME:  !ifdef <symbol> { <block> }
+//          !ifndef <symbol> { <block> }
 //   CA65:
 //   LISA:
 //  SBASM:
@@ -522,6 +506,8 @@ export class IfDefStatement extends ConditionalStatement {
   }
 
   parse(parser: Parser) {
+    // TODO: should call this a conditional expression instead
+    //  of setting expression.suppressUnknown
     const expression = parser.mustAddNextExpression()
     if (expression instanceof exp.SymbolExpression) {
       this.symExpression = expression
@@ -533,11 +519,16 @@ export class IfDefStatement extends ConditionalStatement {
     this.parseTrailingOpenBrace(parser)
   }
 
-  applyConditional(conditional: Conditional): void {
+  applyConditional(prep: Preprocessor): void {
+
+    const conditional = prep.conditional
+
     if (!conditional.push()) {
       this.setError("Exceeded nested conditionals maximum")
       return
     }
+
+    prep.pushNesting(NestingType.Conditional)
 
     conditional.statement = this
 
@@ -564,18 +555,26 @@ export class ElseIfStatement extends ConditionalStatement {
     this.expression = parser.mustAddNextExpression()
   }
 
-  applyConditional(conditional: Conditional): void {
+  // *** what about folding here? ***
+
+  applyConditional(prep: Preprocessor): void {
+    const conditional = prep.conditional
+
     if (conditional.isComplete()) {
       this.setError("Unexpected ELIF without IF")
       return
     }
 
     if (conditional.statement) {
-      conditional.statement.nextConditional = this
+      conditional.statement.foldEnd = this
     } else {
       this.setError("no matching IF/ELIF statement")
       return
     }
+
+    prep.popNesting()
+    prep.pushNesting(NestingType.Conditional)
+
     conditional.statement = this
 
     let value = this.expression?.resolve() ?? 0
@@ -618,18 +617,24 @@ export class ElseStatement extends ConditionalStatement {
     }
   }
 
-  applyConditional(conditional: Conditional): void {
+  applyConditional(prep: Preprocessor): void {
+    const conditional = prep.conditional
+
     if (conditional.isComplete()) {
       this.setError("Unexpected ELSE without IF")
       return
     }
 
     if (conditional.statement) {
-      conditional.statement.nextConditional = this
+      conditional.statement.foldEnd = this
     } else {
       this.setError("No matching IF statement")
       return
     }
+
+    prep.popNesting()
+    prep.pushNesting(NestingType.Conditional)
+
     conditional.statement = this
 
     conditional.setSatisfied(!conditional.wasSatisfied())
@@ -648,21 +653,168 @@ export class ElseStatement extends ConditionalStatement {
 export class EndIfStatement extends ConditionalStatement {
 
   parse(parser: Parser) {
-    // *** trailing close brace ***
   }
 
-  applyConditional(conditional: Conditional): void {
+  // only called if brace statement is conditional
+  applyConditional(prep: Preprocessor): void {
+    const conditional = prep.conditional
+
     if (conditional.statement) {
-      conditional.statement.nextConditional = this
+      conditional.statement.foldEnd = this
     } else {
       this.setError("no matching IF/ELIF statement")
       return
     }
+
+    if (!prep.isNested(NestingType.Conditional)) {
+      this.setError("no IF/ELIF statement to end")
+      return
+    }
+
+    if (prep.topNestingType() != NestingType.Conditional) {
+      this.setError("no matching IF/ELIF statement")
+      return
+    }
+
+    prep.popNesting()
     if (!conditional.pull()) {
       // Merlin ignores unused FIN
       // if (!assembler->SetMerlinWarning("Unexpected FIN/ENDIF")) {
       //   return
       // }
+    }
+  }
+}
+
+
+export class ClosingBraceStatement extends EndIfStatement {
+
+  // only called if brace statement type is non-conditional
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    prep.popNesting(true)
+  }
+}
+
+//==============================================================================
+// Looping
+//==============================================================================
+
+// TODO: is label allowed or disallowed?
+
+// MERLIN:  LUP <expression>
+//   DASM:  REPEAT <expression>
+//   ACME:  !for <var>, <start>, <end> { <block> }
+//          !for <var>, <end> { <block> }
+//          !do [<keyword-condition>] { <block> } [<keyword-condition>]
+//          TODO: support !do
+//   CA65:  .repeat <expression> [, var]
+//   LISA:  n/a
+
+export class RepeatStatement extends Statement {
+
+  private start?: exp.Expression    // ACME-only
+  private count?: exp.Expression    // end for ACME
+  private var?: exp.SymbolExpression
+
+  parse(parser: Parser) {
+
+    if (parser.syntax == Syntax.ACME) {
+
+      this.var = this.getVarName(parser)
+      if (!this.var) {
+        return
+      }
+
+      if (parser.mustAddToken([","]).index < 0) {
+        return
+      }
+
+      this.count = parser.mustAddNextExpression()
+
+      const res = parser.mustAddToken(["", ",", "{"])
+      if (res.index < 0) {
+        return
+      }
+
+      if (res.index == 1) {
+        this.start = this.count
+        this.count = parser.mustAddNextExpression()
+
+        if (parser.mustAddToken("{").index < 0) {
+          return
+        }
+      }
+
+    } else {
+      this.count = parser.mustAddNextExpression()
+
+      const res = parser.mustAddToken(["", ","])
+      if (res.index < 0) {
+        return
+      }
+
+      if (res.index > 0) {
+        if (parser.syntax == Syntax.MERLIN || parser.syntax == Syntax.DASM) {
+          res.token?.setError("Unexpected token")
+          return
+        }
+        this.var = this.getVarName(parser)
+        if (!this.var) {
+          return
+        }
+      }
+
+      if (!parser.syntax) {
+        parser.mustAddToken(["", "{"])
+      }
+    }
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      prep.pushNesting(NestingType.Repeat, () => {
+        // TODO: handle end repeat brace
+      })
+    }
+  }
+
+  // TODO: generalize this -- similar code used by MacroDefStatement, TypeBeginStatement
+  private getVarName(parser: Parser): exp.SymbolExpression | undefined {
+    const token = parser.getNextToken()
+    if (token) {
+      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+        const isDefinition = true
+        // TODO: should be SymbolType.Variable
+        const varNameExp = new exp.SymbolExpression([token], SymbolType.Simple,
+          isDefinition, parser.sourceFile, parser.lineNumber)
+        parser.addExpression(varNameExp)
+        return varNameExp
+      } else {
+        token.setError("Unexpected token, expecting symbol")
+        parser.addToken(token)
+      }
+    }
+  }
+}
+
+// MERLIN:  --^
+//   DASM:  [.]REPEND
+//   ACME:  }
+//   CA65:  .endrep[eat]
+//   LISA:  n/a
+
+export class EndRepStatement extends Statement {
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      if (!prep.isNested(NestingType.Repeat)) {
+        this.setError("Ending repeat without a start")
+        return
+      }
+      if (prep.topNestingType() != NestingType.Repeat) {
+        this.setError("Mismatched repeat end")
+        return
+      }
+      prep.popNesting()
     }
   }
 }
@@ -677,21 +829,21 @@ export class EndIfStatement extends ConditionalStatement {
 
 //   LISA:  .DA <exp>[,<exp>]
 //          #<expression>
-//          /<expreseion>
+//          /<expression>
 //          <expression>
 //          "string"
 //          'string'
 
-class DataStatement extends Statement {
+export class DataStatement extends Statement {
 
   protected dataSize: number
-  protected swapEndian: boolean
+  protected bigEndian: boolean
   protected dataElements: exp.Expression[] = []
 
-  constructor(dataSize: number, swapEndian = false) {
+  constructor(dataSize: number, bigEndian = false) {
     super()
     this.dataSize = dataSize
-    this.swapEndian = swapEndian
+    this.bigEndian = bigEndian
   }
 
   parse(parser: Parser) {
@@ -708,7 +860,7 @@ class DataStatement extends Statement {
 
       token = parser.getNextToken()
       if (!token) {
-        if (parser.syntax && parser.syntax != Syntax.DASM) {
+        if (parser.syntax && parser.syntax != Syntax.DASM && parser.syntax != Syntax.CA65) {
           parser.addMissingToken("expecting data expression")
         }
         break
@@ -745,40 +897,44 @@ class DataStatement extends Statement {
       }
     }
   }
-}
 
-export class ByteDataStatement extends DataStatement {
-  constructor() {
-    super(1)
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      if (prep.module.project.syntax == Syntax.CA65) {
+        if (this.dataElements.length == 0) {
+          // TODO: only allow no dataElements if inside a .struct
+        }
+      }
+    }
   }
 
   postProcessSymbols(symUtils: SymbolUtils) {
-    for (let expression of this.dataElements) {
-      symUtils.markConstants(expression)
+    // TODO: do for all sizes?
+    if (this.dataSize == 1) {
+      for (let expression of this.dataElements) {
+        symUtils.markConstants(expression)
+      }
     }
-  }
-}
-
-export class WordDataStatement extends DataStatement {
-  constructor(swapEndian = false) {
-    super(2, swapEndian)
   }
 }
 
 //------------------------------------------------------------------------------
 
+//  CA65: .res <count> [, <fill-value>]
+//        .tag <struct-name>
+
 export class StorageStatement extends Statement {
 
   protected dataSize: number
-  protected swapEndian: boolean
+  protected bigEndian: boolean
 
   private sizeArg?: exp.Expression
   private patternArg?: exp.Expression
 
-  constructor(dataSize: number, swapEndian = false) {
+  constructor(dataSize: number, bigEndian = false) {
     super()
     this.dataSize = dataSize
-    this.swapEndian = swapEndian
+    this.bigEndian = bigEndian
   }
 
   parse(parser: Parser) {
@@ -797,6 +953,14 @@ export class StorageStatement extends Statement {
     if (token.isEmpty()) {
       parser.addToken(token)
       return
+    }
+
+    if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+      if (this.opNameLC == ".tag") {
+        token.type = TokenType.TypeName
+        parser.addToken(token)
+        return
+      }
     }
 
     if (token.getString() == "\\") {
@@ -825,15 +989,34 @@ export class StorageStatement extends Statement {
   }
 }
 
-export class ByteStorageStatement extends StorageStatement {
-  constructor() {
-    super(1)
-  }
-}
+// MERLIN:  n/a
+//   DASM:  [.]ALIGN <boundary> [, <fill>]
+//   ACME:  !align <and>, <equal> [, <fill>]
+//   CA65:  .align <boundary> [,<fill>]
+//   LISA:  n/a
 
-export class WordStorageStatement extends StorageStatement {
-  constructor(swapEndian = false) {
-    super(2, swapEndian)
+export class AlignStatement extends Statement {
+
+  private boundary?: exp.Expression
+  private equal?: exp.Expression
+  private fill?: exp.Expression
+
+  parse(parser: Parser) {
+
+    this.boundary = parser.mustAddNextExpression()
+    if (parser.mustAddToken(["", ","]).index <= 0) {
+      return
+    }
+
+    this.fill = parser.mustAddNextExpression()
+
+    if (!parser.syntax || parser.syntax == Syntax.ACME) {
+      if (parser.mustAddToken(["", ","]).index <= 0) {
+        return
+      }
+      this.equal = this.fill
+      this.fill = parser.mustAddNextExpression()
+    }
   }
 }
 
@@ -906,21 +1089,41 @@ export class HexStatement extends Statement {
 // Disk
 //==============================================================================
 
-export class IncludeStatement extends Statement {
+// *** !convtab here too?
 
-  private fileName?: exp.FileNameExpression
+class FileStatement extends Statement {
+
+  protected fileName?: exp.FileNameExpression
 
   parse(parser: Parser) {
+    // TODO: pass in list of required quoting characters, based on syntax?
+    // *** check if quoting is optional for some assemblers ***
     this.fileName = parser.getNextFileNameExpression()
     if (!this.fileName) {
       parser.addMissingToken("Missing argument, expecting file path")
       return
     }
     parser.addExpression(this.fileName)
-  }
 
-  preprocess(preprocessor: Preprocessor) {
-    if (this.fileName) {
+    // TODO: check for quoted fileName, based on syntax
+      // optional on DASM
+      // never on MERLIN
+  }
+}
+
+// MERLIN:  PUT filename
+//          USE filename
+//   DASM:  [.]INCLUDE "filename"
+//   ACME:  !SOURCE "filename"
+//          !SOURCE <filename>
+//   CA65:  .INCLUDE "filename"
+//   LISA:  ICL "filename"
+
+export class IncludeStatement extends FileStatement {
+
+  preprocess(preprocessor: Preprocessor, enabled: boolean) {
+    if (enabled && this.fileName) {
+      // TODO: move this to FileStatement class
       let fileNameStr = this.fileName.getString() || ""
       if (fileNameStr.length > 0) {
         // TODO: only strip quotes for non-Merlin?
@@ -943,41 +1146,108 @@ export class IncludeStatement extends Statement {
   }
 }
 
-export class SaveStatement extends Statement {
+// MERLIN:  SAV filename
+//   DASM:  n/a
+//   ACME:  n/a
+//   CA65:  n/a
+//   LISA:  SAV "filename"
 
-  private fileName?: exp.FileNameExpression
-
-  parse(parser: Parser) {
-    this.fileName = parser.getNextFileNameExpression()
-    if (!this.fileName) {
-      parser.addMissingToken("Missing argument, expecting file path")
-      return
-    }
-    parser.addExpression(this.fileName)
-  }
+export class SaveStatement extends FileStatement {
 }
 
-// MERLIN:  DSK <filename>
-//   ACME:  !to <filename>[,<format>]
 
-export class DiskStatement extends Statement {
+// MERLIN:  DSK filename
+//   DASM:  n/a
+//   ACME:  !TO "filename" [, file-format]
+//   CA65:  n/a
+//   LISA:  n/a
 
-  private fileName?: exp.FileNameExpression
+export class DiskStatement extends FileStatement {
 
   parse(parser: Parser) {
-    this.fileName = parser.getNextFileNameExpression()
-    if (!this.fileName) {
-      parser.addMissingToken("Missing argument, expecting file path")
-      return
-    }
-    parser.addExpression(this.fileName)
+    super.parse(parser)
 
-    if (!parser.syntax || parser.syntax == Syntax.ACME) {
+    // *** TODO: add parser.mayAddToken so this can be parsed when !parser.syntax
+    if (parser.syntax == Syntax.ACME) {
+      // TODO: not required -- defaults to cbm and warns
       if (parser.mustAddToken(["", ","]).index <= 0) {
         return
       }
-      if (parser.mustAddToken(["cbm", "plain"], TokenType.Keyword).index < 0) {
+      if (parser.mustAddToken(["cbm", "plain", "apple"], TokenType.Keyword).index < 0) {
         return
+      }
+    }
+  }
+}
+
+// MERLIN:  n/a
+//   DASM:  [.]INCDIR "directory"
+//   ACME:  n/a
+//   CA65:  n/a
+//   LISA:  n/a
+
+export class IncDirStatement extends FileStatement {
+  // TODO:
+}
+
+// MERLIN:  n/a
+//   DASM:  [.]INCBIN "filename" [, skip-bytes]
+//   ACME:  !BINARY "filename" [, [size] [, [skip]]]
+//   CA65:  .INCBIN "filename" [, start [, size]]
+//   LISA:  n/a
+
+export class IncBinStatement extends FileStatement {
+
+  private offsetArg?: exp.Expression
+  private sizeArg?: exp.Expression
+
+  parse(parser: Parser) {
+    super.parse(parser)
+
+    if (parser.mustAddToken(["", ","]).index <= 0) {
+      return
+    }
+
+    let firstArg: exp.Expression | undefined
+    let secondArg: exp.Expression | undefined
+
+    // parse first argument
+    let token: Token | undefined
+    if (!parser.syntax || parser.syntax == Syntax.ACME) {
+      token = parser.getNextToken()
+      if (token?.getString() != ",") {
+        firstArg = parser.mustAddNextExpression(token)
+        token = parser.getNextToken()
+      }
+    } else {
+      firstArg = parser.mustAddNextExpression()
+      token = parser.getNextToken()
+    }
+
+    // parse second argument
+    if (token) {
+      if (token.getString() != ",") {
+        token.setError("expected ,")
+        return
+      }
+
+      secondArg = parser.mustAddNextExpression()
+    }
+
+    // order arguments based on syntax
+    if (parser.syntax == Syntax.ACME) {
+      // ACME parameters are reversed from other assemblers
+      this.offsetArg = secondArg
+      this.sizeArg = firstArg
+    } else {
+      this.offsetArg = firstArg
+      // DASM does not support size, just offset/skip
+      if (parser.syntax == Syntax.DASM) {
+        if (secondArg) {
+          secondArg.setError("Unexpected expression")
+        }
+      } else {
+        this.sizeArg = secondArg
       }
     }
   }
@@ -992,7 +1262,7 @@ export class DiskStatement extends Statement {
 
 // MERLIN: symbol EQU exp
 //         symbol = exp
-// DASM:   symbol EQU exp
+// DASM:   symbol [.]EQU exp
 //         symbol = exp
 // CA65:   symbol = exp
 //         symbol := exp
@@ -1017,7 +1287,8 @@ export class EquStatement extends Statement {
 }
 
 // MERLIN: varSymbol = exp
-// DASM:   varSymbol SET exp
+// DASM:   varSymbol [.]SET exp
+// ACME:             !SET varSymbol = exp
 // CA65:   varSymbol .SET exp
 
 export class VarAssignStatement extends Statement {
@@ -1026,16 +1297,22 @@ export class VarAssignStatement extends Statement {
 
   parse(parser: Parser) {
 
-    if (!this.labelExp) {
-      parser.insertMissingLabel()
-      return
+    if (this.opNameLC != "!set") {
+      if (!this.labelExp) {
+        parser.insertMissingLabel()
+        return
+      }
     }
 
     if (this.opNameLC == "set" || this.opNameLC == ".set") {
-      this.labelExp.symbolType = SymbolType.Variable
-      if (this.labelExp.symbol) {
-        this.labelExp.symbol.type = SymbolType.Variable
+      this.labelExp!.symbolType = SymbolType.Variable
+      if (this.labelExp!.symbol) {
+        this.labelExp!.symbol.type = SymbolType.Variable
       }
+    } else if (this.opNameLC == "!set") {
+      // TODO: fix this
+      parser.getNextToken()   // var symbol
+      parser.getNextToken()   // "="
     } else if (this.opNameLC != "=") {
       this.opExp?.setError("Expecting '='")
       return
@@ -1048,18 +1325,43 @@ export class VarAssignStatement extends Statement {
 //------------------------------------------------------------------------------
 
 // MERLIN:  XC
-//   DASM:  processor <type>
-//   ACME:  !cpu <type>
+//   DASM:  [.]PROCESSOR <type>
+//   ACME:  !cpu <type> [ { <block> } ]
+//   CA65:
+//   LISA:  n/a
 
 export class CpuStatement extends Statement {
+
+  private pushState = false
 
   parse(parser: Parser) {
     if (this.opNameLC == "xc") {
       // no arguments for Merlin operation
-    } else if (this.opNameLC == "processor" || this.opNameLC == "!cpu") {
+    } else {
+
       const res = parser.mustAddToken(["6502", "65c02", "65816"], TokenType.Keyword)
       if (res.index < 0) {
         return
+      }
+
+      if (!parser.syntax || parser.syntax == Syntax.ACME) {
+        const res = parser.mustAddToken(["", "{"])
+        if (res.index <= 0) {
+          return
+        }
+        this.pushState = true
+      }
+    }
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      if (this.pushState) {
+        prep.pushNesting(NestingType.Cpu, () => {
+          if (enabled) {
+            // TODO: update cpu state
+          }
+        })
       }
     }
   }
@@ -1100,6 +1402,7 @@ export class EntryStatement extends Statement {
 }
 
 
+// TODO: could this be combined with AssertStatement?
 export class ErrorStatement extends Statement {
 
   private errExpression?: exp.Expression
@@ -1192,9 +1495,9 @@ export class TextStatement extends Statement {
 // MERLIN:  <name> MAC           (label required)
 //   DASM:         MAC <name>    (no label allowed)
 //                 MACRO <name>
-//   ACME:  !macro <name> [<params-list>] {
-//   CA65:         .mac <name> [<params-list>]
-//                 .macro <name> [<params-list>]
+//   ACME:  !macro <name> [<param>,...] {
+//   CA65:         .mac <name> [<param>,...]
+//                 .macro <name> [<param>,...]
 //   LISA:
 //  SBASM:  <name> .MA [<params-list>]
 
@@ -1233,6 +1536,7 @@ export class MacroDefStatement extends Statement {
       let token = parser.getNextToken()
       if (token) {
         // macro name
+        // TODO: generlize this
         if (token.type == TokenType.Symbol
             || token.type == TokenType.HexNumber) {
           const isDefinition = true
@@ -1250,7 +1554,31 @@ export class MacroDefStatement extends Statement {
             }
             parser.addToken(token)
           } else {
-            // TODO: parse params
+            // parse comma-delimited parameter list
+            while (token) {
+              const expression = parser.addNextExpression(token)
+              if (!expression) {
+                break
+              }
+
+              token = parser.getNextToken()
+              if (!token) {
+                break
+              }
+              const str = token.getString()
+              if (!parser.syntax || parser.syntax == Syntax.ACME) {
+                if (str == "{") {
+                  parser.addToken(token)
+                  break
+                }
+              }
+              if (str != ",") {
+                token.setError("Unexpected token")
+                break
+              }
+              parser.addToken(token)
+              token = parser.getNextToken()
+            }
           }
         } else if (parser.syntax == Syntax.ACME) {
           parser.addMissingToken("opening brace expected")
@@ -1262,23 +1590,34 @@ export class MacroDefStatement extends Statement {
           parser.addMissingToken("macro name expected")
         }
       }
+
+      // *** explicit trailing brace? ***
     }
   }
 
-  preprocess(preprocessor: Preprocessor) {
+  preprocess(prep: Preprocessor, enabled: boolean) {
+
     if (!this.macroName) {
       // parser should have already caught this
       return
     }
 
-    if (preprocessor.inMacroDef()) {
-      this.setError("Nested macro definitions not allowed")
-      return
-    }
+    if (enabled) {
+      if (prep.isNested(NestingType.Macro)) {
+        this.setError("Nested macro definitions not allowed")
+        return
+      }
 
-    // TODO: pass in parameter list too?
-    // TODO: start new label scope here?
-    preprocessor.startMacroDef(this.macroName)
+      prep.pushNesting(NestingType.Macro, () => {
+        if (enabled) {
+          prep.endMacroDef()
+        }
+      })
+
+      // TODO: pass in parameter list too?
+      // TODO: start new label scope here?
+      prep.startMacroDef(this.macroName)
+    }
   }
 }
 
@@ -1297,14 +1636,23 @@ export class EndMacroDefStatement extends Statement {
     // *** enforce label or not ***
   }
 
-  preprocess(preprocessor: Preprocessor) {
-    if (!preprocessor.inMacroDef()) {
-      this.setError("End of macro without start")
-      return
-    }
+  preprocess(prep: Preprocessor, enabled: boolean) {
+    if (enabled) {
 
-    // TODO: pop label scope here?
-    preprocessor.endMacroDef()
+      if (!prep.isNested(NestingType.Macro)) {
+        this.setError("End of macro without start")
+        return
+      }
+      if (prep.topNestingType() != NestingType.Macro) {
+        // TODO: figure out what exactly is unclosed and add to message
+        this.setError("End of macro with enclosed nested type")
+        return
+      }
+      prep.popNesting()
+
+      // TODO: pop label scope here?
+      prep.endMacroDef()
+    }
   }
 }
 
@@ -1312,9 +1660,17 @@ export class EndMacroDefStatement extends Statement {
 
 // TODO: probably needs to be split by syntax
 
+// MERLIN:  <label> <macro> [<param>;...]
+//   DASM:
+//   ACME:  <label> +<macro> [<param>, ...]
+//   CA65:
+//   LISA:
+//  SBASM:
+
 export class MacroInvokeStatement extends Statement {
 
   public macroName?: exp.SymbolExpression
+  protected params: exp.Expression[] = []
 
   parse(parser: Parser) {
 
@@ -1332,28 +1688,62 @@ export class MacroInvokeStatement extends Statement {
     // *** replace opToken in this.children
 
     while (true) {
-      let token = parser.getNextToken()
+      const token = parser.getNextToken()
       if (!token) {
         break
       }
 
       const str = token.getString()
 
-      // *** merlin-only ***
-      // *** not on first pass ***
-      if (str == ";") {
-        parser.addToken(token)
-        continue
+      // TODO: hacks to allow macros to look like opcodes
+      if (parser.syntax == Syntax.CA65) {
+        if (str == "#") {
+          parser.addToken(token)
+          continue
+        }
+        if (str == ":") {
+          this.params.push(parser.parseCA65Local(token, false))
+          continue
+        }
       }
 
-      if (str == "(") {
-        // *** must at least one ";" before doing this??? ***
-        const strExpression = parser.parseStringExpression(token, true, false)
-        parser.addExpression(strExpression)
-        continue
+      // TODO: not on first pass
+      if (!parser.syntax || parser.syntax == Syntax.MERLIN) {
+        if (str == ";") {
+          parser.addToken(token)
+          continue
+        }
+      }
 
-        // *** attempt NajaText
-        // *** attempt 6502 addressing
+      // TODO: which other syntaxes for this?
+      if (!parser.syntax || parser.syntax == Syntax.ACME || parser.syntax == Syntax.CA65) {
+
+        // TODO: shouldn't look for comma on first iteration
+        if (str == ",") {
+          parser.addToken(token)
+          continue
+        }
+
+        // TODO: fix this multi-statement hack to suppress errors
+        if (parser.syntax == Syntax.ACME) {
+          if (str == ":") {
+            parser.ungetToken(token)
+            break
+          }
+        }
+      }
+
+      // TODO: clean up this hack support for Naja text macros
+      if (parser.syntax == Syntax.MERLIN) {
+        if (str == "(") {
+          // *** must at least one ";" before doing this??? ***
+          const strExpression = parser.parseStringExpression(token, true, false)
+          parser.addExpression(strExpression)
+          continue
+
+          // *** attempt NajaText
+          // *** attempt 6502 addressing
+        }
       }
 
       const expression = parser.addNextExpression(token)
@@ -1361,11 +1751,9 @@ export class MacroInvokeStatement extends Statement {
         break
       }
 
-      // *** what about "," ?
+      this.params.push(expression)
     }
   }
-
-  // ***
 }
 
 //------------------------------------------------------------------------------
@@ -1383,26 +1771,87 @@ export class DummyStatement extends Statement {
 
     this.value = parser.mustAddNextExpression()
   }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      prep.pushNesting(NestingType.Struct)
+    }
+  }
 }
 
 export class DummyEndStatement extends Statement {
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      if (!prep.isNested(NestingType.Struct)) {
+        this.setError("Missing begin for this dummy")
+        return
+      }
+
+      if (prep.topNestingType() != NestingType.Struct) {
+        this.setError("Dangling scoped type")
+        return
+      }
+      prep.popNesting()
+      prep.scopeState.popScope()
+    }
+  }
 }
 
+
+// DASM:  SEG[.U] <name>
+// CA65:  .segment "<name>" [: (direct|zeropage|absolute)]
 
 // TODO: reconcile seg.u and dummy statements (currently DASM-only)
 export class SegmentStatement extends Statement {
 
-  private segName?: Token
+  private impliedName?: string
+
+  constructor(impliedName?: string) {
+    super()
+    this.impliedName = impliedName
+  }
 
   parse(parser: Parser) {
     if (this.labelExp) {
       this.labelExp.setError("Label not allowed")
     }
 
-    this.segName = parser.addNextToken()
-    if (this.segName) {
-      // TODO: pick a better symbol type
-      this.segName.type = TokenType.String
+    if (!this.impliedName) {
+
+      const nameToken = parser.mustGetNextToken("expecting segment name")
+      if (nameToken.getString() == '"') {
+        if (!parser.syntax || parser.syntax == Syntax.CA65) {
+          const strExpression = parser.parseStringExpression(nameToken, true, false)
+          parser.addExpression(strExpression)
+        } else {
+          parser.addToken(nameToken)
+          nameToken.setError("Expecting segment name")
+          return
+        }
+      } else {
+        // TODO: pick a better symbol type
+        nameToken.type = TokenType.String
+        parser.addToken(nameToken)
+        if (parser.syntax == Syntax.CA65) {
+          nameToken.setError("Expecting quoted segment name")
+          return
+        }
+      }
+      // TODO: save name expression
+
+      if (!parser.syntax || parser.syntax == Syntax.CA65) {
+
+        let res = parser.mustAddToken(["", ":"])
+        if (res.index <= 0) {
+          return
+        }
+        // NOTE: "direct" means immediate
+        res = parser.mustAddToken(["direct", "absolute", "zeropage"], TokenType.Keyword)
+        if (res.index < 0) {
+          return
+        }
+        // TODO: save type index
+      }
     }
   }
 }
@@ -1445,9 +1894,10 @@ export class ListStatement extends Statement {
   }
 }
 
-//------------------------------------------------------------------------------
-
+//==============================================================================
 // CA65-only
+//==============================================================================
+
 // .feature labels_without_colons
 // .feature bracket_as_indirect
 // TODO: others
@@ -1461,6 +1911,357 @@ export class FeatureStatement extends Statement {
       token.type = TokenType.Keyword
     } else {
       parser.addMissingToken("Missing expression, feature name expected")
+    }
+  }
+}
+
+//------------------------------------------------------------------------------
+
+export class TypeBeginStatement extends Statement {
+
+  private nestingType: NestingType
+  private canRecurse: boolean
+  private scopeName = ""
+
+  constructor(nestingType: NestingType, canRecurse: boolean) {
+    super()
+    this.nestingType = nestingType
+    this.canRecurse = canRecurse
+  }
+
+  parse(parser: Parser): void {
+    // *** share this ***
+    const token = parser.mustGetNextToken("expecting symbol name")
+    if (token) {
+      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+        token.type = TokenType.TypeName
+        parser.addToken(token)
+        this.scopeName = token.getString()
+      } else {
+        token.setError("Unexpected token, expecting symbol")
+        parser.addToken(token)
+      }
+    }
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      if (!this.canRecurse) {
+        if (prep.isNested(this.nestingType)) {
+          this.setError("Cannot be restarted")
+          return
+        }
+      }
+      prep.pushNesting(this.nestingType)
+      prep.scopeState.pushScope(this.scopeName)
+    }
+  }
+}
+
+export class TypeEndStatement extends Statement {
+  private nestingType: NestingType
+
+  constructor(nestingType: NestingType) {
+    super()
+    this.nestingType = nestingType
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      if (!prep.isNested(this.nestingType)) {
+        this.setError("Missing begin for this end")
+        return
+      }
+
+      if (prep.topNestingType() != this.nestingType) {
+        this.setError("Dangling scoped type")
+        return
+      }
+      prep.popNesting()
+      prep.scopeState.popScope()
+    }
+  }
+}
+
+export class EnumStatement extends TypeBeginStatement {
+  constructor() {
+    super(NestingType.Enum, false)  // cannot nest
+  }
+}
+
+export class EndEnumStatement extends TypeEndStatement {
+  constructor() {
+    super(NestingType.Enum)
+  }
+}
+
+export class StructStatement extends TypeBeginStatement {
+  constructor() {
+    super(NestingType.Struct, true)  // can nest
+  }
+}
+
+export class EndStructStatement extends TypeEndStatement {
+  constructor() {
+    super(NestingType.Struct)
+  }
+}
+
+export class UnionStatement extends TypeBeginStatement {
+  constructor() {
+    super(NestingType.Union, true)  // TODO: can nest?
+  }
+}
+
+export class EndUnionStatement extends TypeEndStatement {
+  constructor() {
+    super(NestingType.Union)
+  }
+}
+
+export class ProcStatement extends TypeBeginStatement {
+  constructor() {
+    super(NestingType.Proc, true) // can nest
+  }
+}
+
+export class EndProcStatement extends TypeEndStatement {
+  constructor() {
+    super(NestingType.Proc)
+  }
+}
+
+export class ScopeStatement extends TypeBeginStatement {
+  constructor() {
+    super(NestingType.Scope, true) // can nest
+  }
+}
+
+export class EndScopeStatement extends TypeEndStatement {
+  constructor() {
+    super(NestingType.Scope)
+  }
+}
+
+//------------------------------------------------------------------------------
+
+// CA65:  .IMPORT <name>[:<mode>] [, ...]
+//        .EXPORT <name>[:<mode>] [, ...]
+//        .IMPORTZP <name> [, ...]
+//        .EXPORTZP <name>[, ...]
+
+export class ImportExportStatement extends Statement {
+  private isExport: boolean
+  private isZpage: boolean
+
+  constructor(isExport: boolean, isZpage: boolean) {
+    super()
+    this.isExport = isExport
+    this.isZpage = isZpage
+  }
+
+  parse(parser: Parser): void {
+    while (true) {
+      const token = parser.mustGetNextToken("expecting symbol name")
+      if (!token) {
+        return
+      }
+      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+        token.type = TokenType.Symbol
+        if (!this.isExport) {
+          const isDefinition = true //***
+          // *** external symbol? ***
+          parser.addExpression(new exp.SymbolExpression([token], SymbolType.Simple,
+            isDefinition, parser.sourceFile, parser.lineNumber))
+        }
+      } else {
+        token.setError("Unexpected token, expecting symbol")
+        parser.addToken(token)
+        return
+      }
+
+      let res = parser.mustAddToken(["", ",", ":"])
+      if (res.index <= 0) {
+        return
+      }
+      // TODO: share with segment
+      if (res.index == 2) {
+        if (this.isZpage) {
+          res.token?.setError("Unexpected token")
+          return
+        }
+        // NOTE: "direct" means immediate
+        res = parser.mustAddToken(["direct", "absolute", "zeropage"], TokenType.Keyword)
+        if (res.index < 0) {
+          return
+        }
+        // TODO: apply size to symbol based on mode or this.zpage
+        res = parser.mustAddToken(["", ","])
+        if (res.index <= 0) {
+          return
+        }
+      }
+    }
+  }
+}
+
+
+// TODO: could this be combined with ErrorStatement?
+
+// CA65:  .assert <expression>, (error|warning), "<message>"
+
+export class AssertStatement extends Statement {
+
+  private errExpression?: exp.Expression
+
+  parse(parser: Parser) {
+    // *** maybe use a different variation like parseControlExpression?
+    this.errExpression = parser.mustAddNextExpression()
+
+    let res = parser.mustAddToken([","])
+    if (res.index < 0) {
+      return
+    }
+
+    res = parser.mustAddToken(["error", "warning"], TokenType.Keyword)
+    if (res.index < 0) {
+      return
+    }
+
+    res = parser.mustAddToken([","])
+    if (res.index < 0) {
+      return
+    }
+
+    // TODO: need parser.mustAddStringExpression()
+    const token = parser.getNextToken()
+    if (!token) {
+      parser.addMissingToken("expecting quoted string")
+      return
+    }
+    if (token.getString() != '"') {
+      parser.addToken(token)
+      token.setError("Expecting quoted string")
+      return
+    }
+
+    const strExpression = parser.parseStringExpression(token)
+    parser.addExpression(strExpression)
+  }
+}
+
+//==============================================================================
+// DASM-only
+//==============================================================================
+
+// MERLIN:
+//   DASM:  <label> SUBROUTINE    (label is optional)
+//   ACME:  (see !zone below)
+//   CA65:
+//   LISA:
+//  SBASM:
+
+export class SubroutineStatement extends Statement {
+
+  parse(parser: Parser) {
+
+    if (!this.labelExp) {
+      // insert implied label
+      this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
+        parser.sourceFile, parser.lineNumber)
+      this.children.unshift(this.labelExp)
+    }
+    if (this.labelExp.isVariableType()) {
+      this.labelExp.setError("Variable not allowed as label")
+      return
+    }
+    if (this.labelExp.symbol) {
+      this.labelExp.symbol.isZoneStart = true
+    }
+  }
+}
+
+//==============================================================================
+// ACME-only
+//==============================================================================
+
+//   ACME:  <label> !zone [<title>] [ { <block> } ]
+//          <label> !zn [<title>] [ { <block> } ]
+
+export class ZoneStatement extends Statement {
+
+  private zoneTitle?: string
+  private pushState = false
+
+  parse(parser: Parser) {
+
+    let t = parser.getNextToken()
+    while (t) {
+      const str = t.getString()
+      if (str == "{") {
+        this.pushState = true
+        break
+      }
+      this.zoneTitle = str
+      t = parser.getNextToken()
+    }
+
+    if (!this.zoneTitle) {
+      // TODO: use zoneTitle as scope name
+      // TODO: support switching back to a previously used zone title
+    } else {
+      // if no zone title, use label
+      // if no label, insert an implied label
+      if (!this.labelExp) {
+        // insert implied label
+        this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
+          parser.sourceFile, parser.lineNumber)
+        this.children.unshift(this.labelExp)
+      }
+      if (this.labelExp.symbol) {
+        this.labelExp.symbol.isZoneStart = true
+      }
+    }
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (this.pushState) {
+      prep.pushNesting(NestingType.Zone, () => {
+        if (enabled) {
+          prep.scopeState.popZone()
+        }
+      })
+    }
+
+    if (enabled) {
+      if (this.pushState) {
+        prep.scopeState.pushZone(this.zoneTitle)
+      } else {
+        prep.scopeState.setZone(this.zoneTitle)
+      }
+    }
+  }
+}
+
+//   ACME:  <label> !pseudopc <expresion> { <block> }
+// TODO: consider folding into OrgStatement?
+export class PseudoPcStatement extends Statement {
+
+  private value?: exp.Expression
+
+  parse(parser: Parser) {
+    this.value = parser.mustAddNextExpression()
+    const res = parser.mustAddToken("{")
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    prep.pushNesting(NestingType.PseudoPc, () => {
+      if (enabled) {
+        // TODO: pop behaviour
+      }
+    })
+    if (enabled) {
+      // TODO: actually change PC
     }
   }
 }

@@ -5,7 +5,7 @@ import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
 
-import { RpwProject, RpwSettings } from "./rpw_types"
+import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
@@ -13,6 +13,7 @@ import { Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
+import { SyntaxMap, SyntaxNames } from "./asm/syntax"
 
 //------------------------------------------------------------------------------
 
@@ -29,14 +30,15 @@ export enum SemanticToken {
   keyword   = 5,
   label     = 6,
   macro     = 7,
+  type      = 8,
 
-  function  = 8,
-  buffer    = 9,
-  opcode    = 10,
-  constant  = 11,
-  zpage     = 12,
-  var       = 13,
-  escape    = 14,
+  function  = 9,
+  buffer    = 10,
+  opcode    = 11,
+  constant  = 12,
+  zpage     = 13,
+  var       = 14,
+  escape    = 15,
 }
 
 export enum SemanticModifier {
@@ -69,8 +71,8 @@ class LspProject extends Project {
 
   private server: LspServer
 
-  constructor(server: LspServer) {
-    super()
+  constructor(server: LspServer, defaultSettings: RpwSettings) {
+    super(defaultSettings)
     this.server = server
   }
 
@@ -109,16 +111,29 @@ export class LspServer {
 
   private connection: lsp.Connection
   /*private*/ documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument)
+
+  private isInitialized: Promise<boolean>
+  private isInitialized_resolve: any
+
   private projects: LspProject[] = []
+
   public workspaceFolderPath = ""
+  private rpwProject?: RpwProject
+
   private updateId?: NodeJS.Timeout
   private updateFile?: SourceFile
   private diagnosticId?: NodeJS.Timeout
-  private defaultSettings?: RpwSettings
+  private defaultSettings?: Promise<RpwSettings>
+  private showErrors = true
+  private showWarnings = true
 
   constructor(connection: lsp.Connection) {
     this.connection = connection
     this.documents.listen(this.connection)
+
+    this.isInitialized = new Promise<boolean>((resolve) => {
+      this.isInitialized_resolve = resolve
+    })
 
     this.documents.onDidOpen(e => {
       this.onDidOpenTextDocument(e.document.uri)
@@ -172,7 +187,7 @@ export class LspServer {
   //  remove a temporary project that already owned the file
   removeTemporary(filePath: string) {
     for (let project of this.projects) {
-      if (project.temporary) {
+      if (project.isTemporary) {
         if (project.findSourceFile(filePath)) {
           // NOTE: for now, just disable the project by removing its modules
           // Removing it completely will cause problems because caller is
@@ -223,6 +238,7 @@ export class LspServer {
       }
     }
 
+    // NOTE: keep in sync with enum SemanticToken above
     result.capabilities.semanticTokensProvider = {
       documentSelector: ['rpw65'],
       legend: {
@@ -235,14 +251,15 @@ export class LspServer {
           "keyword",   // 5
           "label",     // 6
           "macro",     // 7
-          "function",  // 8
+          "type",      // 8
 
-          "buffer",    // 9
-          "opcode",    // 10
-          "constant",  // 11
-          "zpage",     // 12
-          "var",       // 13
-          "escape",    // 14
+          "function",  // 9
+          "buffer",    // 10
+          "opcode",    // 11
+          "constant",  // 12
+          "zpage",     // 13
+          "var",       // 14
+          "escape",    // 15
         ],
         tokenModifiers: [
           "local",
@@ -255,52 +272,72 @@ export class LspServer {
     }
 
     if (params.workspaceFolders) {
-      // *** walk each folder -- or don't support multiple folders ***
-      const workspaceFolder = params.workspaceFolders[0]
-      // move to this.workspaceFolderPath
-      this.workspaceFolderPath = pathFromUriString(workspaceFolder.uri) || ""
-      if (fs.existsSync(this.workspaceFolderPath)) {
 
+      // TODO: walk each folder or don't support multiple folders
+
+      const workspaceFolder = params.workspaceFolders[0]
+      const folderPath = pathFromUriString(workspaceFolder.uri) || ""
+      if (fs.existsSync(folderPath)) {
+
+        // save folder once it's know to exist
+        this.workspaceFolderPath = folderPath
         const files = fs.readdirSync(this.workspaceFolderPath)
 
         // first scan for .rpw-project file
+        let project: LspProject | undefined
         for (let file of files) {
           if (file.toLowerCase().indexOf(".rpw-project") == -1) {
             continue
           }
-          const jsonData = fs.readFileSync(file, 'utf8')
-          const rpwProject = <RpwProject>JSON.parse(jsonData)
-          // *** error handling ***
 
-          const project = new LspProject(this)
-          if (!project.loadProject(this.workspaceFolderPath, rpwProject)) {
-            // *** error handling ***
+          if (project) {
+            throw new Error("Multiple .rpw-project files found")
           }
-          this.projects.push(project)
-          break
-        }
 
-        // if no project, scan for ASM.* files
-        // if (this.projects.length == 0) {
-        //   for (let i = 0; i < files.length; i += 1) {
-        //     if (files[i].toUpperCase().indexOf("ASM.") != 0) {
-        //       continue
-        //     }
-        //     if (!this.addFileProject(files[i], false)) {
-        //       // *** error handling ***
-        //     }
-        //     break
-        //   }
-        // }
+          const jsonData = fs.readFileSync(file, 'utf8')
+          try {
+            this.rpwProject = <RpwProject>JSON.parse(jsonData)
+          } catch (e: any) {
+            throw new Error("Failed to parse project JSON: " + e.toString())
+          }
+        }
       }
     }
-
-    this.scheduleUpdate()
 
     return result
   }
 
   private async onInitialized() {
+
+    if (this.rpwProject) {
+
+      if (!this.defaultSettings) {
+        this.defaultSettings = this.buildRpwSettings()
+      }
+
+      const project = new LspProject(this, await this.defaultSettings)
+      if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
+        throw new Error("Failed to load project")
+      }
+      this.projects.push(project)
+    }
+
+    // if no project, scan for ASM.* files
+    // if (this.projects.length == 0) {
+    //   const files = fs.readdirSync(this.workspaceFolderPath)
+    //   for (let i = 0; i < files.length; i += 1) {
+    //     if (files[i].toUpperCase().indexOf("ASM.") != 0) {
+    //       continue
+    //     }
+    //     if (!this.addFileProject(files[i], false)) {
+    //       // TODO: error handling
+    //     }
+    //     break
+    //   }
+    // }
+
+    this.isInitialized_resolve(true)
+
     // register for all configuration changes
     this.connection.client.register(DidChangeConfigurationNotification.type, undefined)
 
@@ -308,24 +345,36 @@ export class LspServer {
     //   this.connection.console.log('Workspace folder change event received.')
     // })
 
-    this.onDidChangeConfiguration()
-  }
+    // send this so client will ask for initial syntax
+    this.connection.sendNotification("rpw.syntaxChanged")
 
-  private async onDidChangeConfiguration() {
-    this.defaultSettings = await this.buildRpwSettings()
-    for (let project of this.projects) {
-      project.defaultSettingsChanged(this.defaultSettings)
-    }
     this.scheduleUpdate()
   }
 
+  private async onDidChangeConfiguration() {
+    this.defaultSettings = this.buildRpwSettings()
+
+    for (let project of this.projects) {
+      project.settingsChanged(await this.defaultSettings)
+    }
+
+    this.scheduleUpdate()
+
+    // send this so client will ask for syntax
+    this.connection.sendNotification("rpw.syntaxChanged")
+  }
+
+  // TODO: need fallback if vscode client not present
   private async buildRpwSettings(): Promise<RpwSettings> {
     const econfig = await this.connection.workspace.getConfiguration("editor")
     const tabSize = econfig.tabSize ?? 4
     const config = await this.connection.workspace.getConfiguration("rpw65")
+    this.showErrors = config.showErrors ?? true
+    this.showWarnings = config.showWarnings ?? true
     const syntax = config.syntax  // no default
     const lowerCase = config.case?.lowerCaseCompletions ?? false
     const upperCase = !lowerCase
+    // TODO: could also use "editor.rulers"
     const c1 = config.columns?.c1 ?? 16
     const c2 = config.columns?.c2 ?? 4
     const c3 = config.columns?.c3 ?? 20
@@ -395,13 +444,16 @@ export class LspServer {
   }
 
   // build a tempory project given a file path
-  private addFileProject(path: string, temporary: boolean): LspProject | undefined {
+  private async addFileProject(path: string): Promise<LspProject | undefined> {
     let fileName: string
     let directory: string
+    let inWorkspace: boolean
     if (path.indexOf(this.workspaceFolderPath) == 0) {
+      inWorkspace = true
       fileName = path.substring(this.workspaceFolderPath.length + 1)
       directory = this.workspaceFolderPath
     } else {
+      inWorkspace = false
       const index = path.lastIndexOf("/")
       if (index == -1) {
         fileName = path
@@ -411,28 +463,47 @@ export class LspServer {
         directory = path.substring(0, index)
       }
     }
-    let settings = this.defaultSettings ?? {}
-    let rpwProject: RpwProject = { settings }
+
+    // build a fake project file
+    const rpwProject: RpwProject = {}
     rpwProject.modules = []
     rpwProject.modules.push({src: fileName})
-    const project = new LspProject(this)
-    project.loadProject(directory, rpwProject, true)
+
+    if (!this.defaultSettings) {
+      this.defaultSettings = this.buildRpwSettings()
+    }
+
+    const project = new LspProject(this, await this.defaultSettings)
+    const isTemporary = true
+    project.loadProject(directory, rpwProject, isTemporary, inWorkspace)
     this.projects.push(project)
     return project
   }
 
-  onDidOpenTextDocument(uri: string): void {
+  async onDidOpenTextDocument(uri: string) {
+
+    // Don't process documents opening until project load has completed,
+    //  otherwise, temporary projects get created for files that will
+    //  eventually be part of the main project.
+    //
+    // TODO: why does the project load not correct consume these
+    //  temporary projects as the files are identified?
+    await this.isInitialized
+
+    this.executeUpdate()
+
     const filePath = pathFromUriString(uri)
     if (filePath) {
       let sourceFile = this.findSourceFile(filePath)
       if (!sourceFile) {
-        const project = this.addFileProject(filePath, true)
+        const project = await this.addFileProject(filePath)
         if (!project) {
           // *** error handling ***
           return
         }
+        this.scheduleUpdate(sourceFile)
       }
-      this.scheduleUpdate(sourceFile)
+      this.connection.sendNotification("rpw.syntaxChanged")
     }
   }
 
@@ -442,7 +513,7 @@ export class LspServer {
       let sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
         const project = sourceFile.module.project as LspProject
-        if (project && project.temporary) {
+        if (project && project.isTemporary) {
           this.removeDiagnostics(sourceFile)
           const index = this.projects.indexOf(project)
           this.projects.splice(index, 1)
@@ -483,13 +554,12 @@ export class LspServer {
 
     const comp = new Completions()
     let completions = comp.scan(sourceFile, params.position.line, params.position.character)
-    // NOTE: turned off for now -- causes problems in CA65 with ":<tab>"
-    // if (!completions) {
-    //   // return a fake completion that will prevent default suggestions
-    //   let item = lsp.CompletionItem.create("_")
-    //   item.kind = lsp.CompletionItemKind.Text
-    //   completions = [item]
-    // }
+    if (!completions) {
+      // return a fake completion that will prevent default suggestions
+      let item = lsp.CompletionItem.create("")
+      item.kind = lsp.CompletionItemKind.Text
+      completions = [item]
+    }
     const isIncomplete = false
     return lsp.CompletionList.create(completions, isIncomplete)
   }
@@ -500,31 +570,28 @@ export class LspServer {
 
   async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
 
+    if (params.arguments === undefined || params.arguments.length == 0) {
+      return
+    }
+
+    const filePath = pathFromUriString(params.arguments[0])
+    if (!filePath) {
+      return
+    }
+
+    const textDocument = this.documents.get(params.arguments[0])
+    if (textDocument === undefined) {
+      return
+    }
+
+    const sourceFile = this.findSourceFile(filePath)
+    if (!sourceFile) {
+      return
+    }
+
     if (params.command == "rpw65.renumberLocals") {
 
       this.executeUpdate()
-
-      // TODO: make this a call to separate method
-
-      if (params.arguments === undefined || params.arguments.length < 2) {
-        return;
-      }
-
-      const filePath = pathFromUriString(params.arguments[0])
-      if (!filePath) {
-        return
-      }
-
-      // *** fold this into something else? ***
-      const textDocument = this.documents.get(params.arguments[0])
-      if (textDocument === undefined) {
-        return
-      }
-
-      const sourceFile = this.findSourceFile(filePath)
-      if (!sourceFile) {
-        return
-      }
 
       const range = params.arguments[1] as lsp.Range
       if (!range) {
@@ -554,6 +621,21 @@ export class LspServer {
         edits.push(edit)
       }
       return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits }
+
+    } else if (params.command == "rpw65.getSyntax") {
+
+      this.executeUpdate()
+
+      let syntax = SyntaxNames[sourceFile.module.project.syntax]
+      if (syntax) {
+        const syntaxes: string[] = []
+        syntax = syntax.toUpperCase()
+        for (let name of SyntaxNames) {
+          syntaxes.push(name.toUpperCase())
+        }
+        return { syntax, syntaxes }
+      }
+
     }
   }
 
@@ -563,13 +645,11 @@ export class LspServer {
     const foldingRanges: lsp.FoldingRange[] = []
     let sourceFile = this.getSourceFile(params.textDocument.uri)
     if (sourceFile) {
-      // TODO: could support folding macro definitions
       for (let statement of sourceFile.statements) {
         if (statement.enabled) {
-          const nextConditional = (statement as any).nextConditional
-          if (nextConditional && sourceFile) {
+          if (statement.foldEnd && sourceFile) {
             const startLine = sourceFile.statements.indexOf(statement)
-            const endLine = sourceFile.statements.indexOf(nextConditional) - 1
+            const endLine = sourceFile.statements.indexOf(statement.foldEnd) - 1
             if (startLine < endLine) {
               const range: lsp.FoldingRange = {
                 startLine, endLine
@@ -829,7 +909,7 @@ export class LspServer {
         if (expRange) {
           let diagRange: lsp.Range
           let hint: boolean
-          if (state.sourceFile.module.project.temporary) {
+          if (state.sourceFile.module.project.isTemporary) {
             // dim out the entire line, including put/include
             hint = true
             diagRange = lsp.Range.create(
@@ -871,9 +951,15 @@ export class LspServer {
       switch (node.errorType) {
         default:
         case NodeErrorType.Error:
+          if (!this.showErrors) {
+            return false
+          }
           severity = lsp.DiagnosticSeverity.Error       // red line
           break
         case NodeErrorType.Warning:
+          if (!this.showWarnings) {
+            return false
+          }
           severity = lsp.DiagnosticSeverity.Warning     // yellow line
           break
         case NodeErrorType.Info:
@@ -1018,6 +1104,8 @@ export class LspServer {
       index = SemanticToken.string
     } else if (token.type == TokenType.Escape) {
       index = SemanticToken.escape
+    } else if (token.type == TokenType.TypeName) {
+      index = SemanticToken.type
     } else {
       index = SemanticToken.invalid
     }

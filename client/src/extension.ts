@@ -12,6 +12,7 @@ import {
 } from 'vscode-languageclient/node'
 
 let client: LanguageClient
+let statusBarItem: vscode.StatusBarItem
 
 export function activate(context: vscode.ExtensionContext) {
 	// The server is implemented in node
@@ -50,13 +51,15 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.delIndent", cmd.delIndentCmd))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.leftArrowIndent", () => { cmd.arrowIndentCmd(true) }))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.rightArrowIndent", () => { cmd.arrowIndentCmd(false) }))
+
+	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
+
+	client.onNotification("rpw.syntaxChanged", () => { updateStatusItem() })
 }
 
 export function deactivate(): Thenable<void> | undefined {
-	if (!client) {
-		return undefined
-	}
-	return client.stop()
+	return client?.stop()
 }
 
 export async function renumberCmd() {
@@ -75,5 +78,28 @@ export async function renumberCmd() {
 				edit.replace(range, myEdit.newText)
 			})
 		})
+	}
+}
+
+async function updateStatusItem() {
+	const editor = vscode.window.activeTextEditor
+
+	// this happens while in the middle of switching active text editor
+	if (!editor?.document) {
+		return
+	}
+
+	const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
+		command: "rpw65.getSyntax",
+		arguments: [
+			editor.document.uri.toString()
+		]
+	})
+
+	if (content?.syntax && content.syntax != "") {
+		statusBarItem.text = content.syntax
+		statusBarItem.show()
+	} else {
+		statusBarItem.hide()
 	}
 }

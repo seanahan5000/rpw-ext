@@ -5,7 +5,7 @@
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "1.1.3",
+	"version": "1.2.0",
 	"repository": {
     "type": "git",
     "url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -21,12 +21,13 @@
 		"dasm",
 		"ca65",
 		"acme",
-		"lisa"
+		"lisa",
+		"retro"
 	],
 	"engines": {
 		"vscode": "^1.75.0"
 	},
-	"icon": "images/rpw65-icon.png",
+	"icon": "rpw65-icon.png",
 	"main": "./client/out/extension",
 	"contributes": {
 		"configuration": {
@@ -37,6 +38,16 @@
 					"type": "string",
 					"enum": ["merlin", "dasm", "acme", "ca65", "lisa"],
 					"markdownDescription": "Assembler syntax to apply to source files.  A hybrid union of the syntaxes is used if none is chosen."
+				},
+				"rpw65.showErrors": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Highlight syntax errors."
+				},
+				"rpw65.showWarnings": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Highlight syntax warnings."
 				},
 				"rpw65.columns.enable": {
 					"type": "boolean",
@@ -76,7 +87,8 @@
 					".i",
 					".inc",
 					".a",
-					".asm"
+					".asm",
+					".l"
 				],
 				"configuration": "./language-configuration.json"
 			}
@@ -182,6 +194,9 @@
 					],
 					"function.external": [
 						"meta.embedded.assembly"
+					],
+					"type": [
+						"entity.name.type"
 					],
 					"macro": [
 						"entity.name.type"

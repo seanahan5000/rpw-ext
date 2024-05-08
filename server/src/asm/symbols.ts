@@ -88,7 +88,7 @@ export class Symbol {
   getSimpleNameToken(symExp: SymbolExpression): Token {
     let index = symExp.children.length - 1
     let token = symExp.children[index]
-    if (index > 0 && token.getString() == ":") {
+    if (index > 0 && token.getString() == "::") {
       token = symExp.children[index - 1]
     }
     return <Token>token
@@ -149,7 +149,7 @@ export class ScopeState {
         }
 
         if (this.scopePath) {
-          nameStr = this.scopePath + ":" + nameStr
+          nameStr = this.scopePath + "::" + nameStr
         }
         if (symExp.isDefinition && symExp.symbol) {
           this.cheapScope = nameStr
@@ -169,9 +169,9 @@ export class ScopeState {
             const child = symExp.children[i]
             if (child instanceof Token) {
               const str = child.getString()
-              if (str[0] == ":") {
+              if (str == "::") {
                 if (result != "") {
-                  result = result + ":"
+                  result = result + "::"
                 }
               } else {
                 result = result + str
@@ -185,9 +185,9 @@ export class ScopeState {
       case SymbolType.CheapLocal: {
         const nameToken = symExp.children[1]
         if (nameToken instanceof Token) {
-          let result = this.cheapScope + ":" + nameToken.getString()
+          let result = this.cheapScope + "::" + nameToken.getString()
           if (this.scopePath) {
-            result = this.scopePath + ":" + result
+            result = this.scopePath + "::" + result
           }
           return result
         }
@@ -197,7 +197,7 @@ export class ScopeState {
       case SymbolType.ZoneLocal: {
         const nameToken = symExp.children[1]
         if (nameToken instanceof Token) {
-          return this.zoneName + ":" + nameToken.getString()
+          return this.zoneName + "::" + nameToken.getString()
         }
         break
       }
@@ -269,7 +269,7 @@ export class ScopeState {
   public pushScope(scopeName: string) {
     if (this.scopePath) {
       this.scopeStack.push(this.scopePath)
-      this.scopePath = this.scopePath + scopeName
+      this.scopePath = this.scopePath + "::" + scopeName
     } else {
       this.scopePath = scopeName
     }
@@ -279,16 +279,14 @@ export class ScopeState {
     this.scopePath = this.scopeStack.pop()
   }
 
-  // future possible methods
-
-  private pushZone(zoneName?: string) {
+  public pushZone(zoneName?: string) {
     if (this.zoneName) {
       this.zoneStack.push(this.zoneName)
     }
     this.setZone(zoneName)
   }
 
-  private setZone(zoneName?: string) {
+  public setZone(zoneName?: string) {
     if (!zoneName) {
       zoneName = "__z" + this.zoneIndex.toString()
       this.zoneIndex += 1
@@ -296,7 +294,7 @@ export class ScopeState {
     this.zoneName = zoneName
   }
 
-  private popZone() {
+  public popZone() {
     this.zoneName = this.zoneStack.pop()
   }
 }

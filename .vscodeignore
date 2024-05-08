@@ -4,6 +4,7 @@ client/node_modules/**
 server/node_modules/**
 client/src/**
 server/src/**
+tests/**
 .gitignore
 **/tsconfig.json
 **/tsconfig.base.json
@@ -13,3 +14,4 @@ server/src/**
 *.vsix
 examples/**
 TODO-private.md
+images/**

@@ -1,7 +1,7 @@
 
 import * as fs from 'fs'
 import { RpwProject, RpwSettings } from "../rpw_types"
-import { Syntax, SyntaxMap } from "./syntax"
+import { Syntax, SyntaxMap, SyntaxDefs } from "./syntax"
 import { Statement } from "./statements"
 import { Preprocessor } from "./preprocessor"
 import { Parser } from "./parser"
@@ -35,10 +35,10 @@ export class SourceFile {
     this.lines = lines
   }
 
-  parseStatements(): Statement[] {
+  parseStatements(syntaxStats: number[]): Statement[] {
     if (!this.statements.length) {
       const parser = new Parser()
-      this.statements = parser.parseStatements(this, this.lines)
+      this.statements = parser.parseStatements(this, this.lines, syntaxStats)
     }
     return this.statements
   }
@@ -48,27 +48,38 @@ export class SourceFile {
 
 export class Project {
 
-  private rpwSettings: RpwSettings = {}
+  private rpwProject?: RpwProject
+  private defaultSettings?: RpwSettings
+  private inferredSyntax = Syntax.UNKNOWN
+
   public syntax = Syntax.UNKNOWN
-  public upperCase: boolean = false
+  public upperCase: boolean = true
   public tabSize = 4
   public tabStops = [0, 16, 20, 40]
-  public includes: string[] = []
 
+  public includes: string[] = []    // NOTE: shared files, not include paths
   public modules: Module[] = []
 
   public rootDir = "."
   public srcDir: string = ""
 
-  public temporary = false
+  public includePaths: string[] = []
+  public isTemporary = false
+  public inWorkspace = false
 
   // state that needs to be reset upon update
   public sharedFiles: SourceFile[] = []
   public sharedSymbols = new Map<string, Symbol>()
 
-  loadProject(extRootDir: string, rpwProject: RpwProject, temporary = false): boolean {
+  constructor(defaultSettings: RpwSettings) {
+    this.defaultSettings = defaultSettings
+    this.settingsChanged()
+  }
 
-    this.temporary = temporary
+  loadProject(extRootDir: string, rpwProject: RpwProject, isTemporary = false, inWorkspace = false): boolean {
+
+    this.isTemporary = isTemporary
+    this.inWorkspace = inWorkspace
 
     let rootDir = fixBackslashes(extRootDir)
     if (rootDir.endsWith("/")) {
@@ -78,8 +89,8 @@ export class Project {
       this.rootDir = rootDir
     }
 
-    this.rpwSettings = rpwProject.settings ?? {}
-    this.defaultSettingsChanged(this.rpwSettings)
+    this.rpwProject = rpwProject
+    this.settingsChanged()
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
@@ -101,6 +112,12 @@ export class Project {
         }
         this.includes.push(fullIncName)
       }
+    }
+
+    // Build a list of all directories in the workspace
+    //  and use that as a fake include list for temporary projects.
+    if (this.isTemporary && this.inWorkspace) {
+      this.getDirectories(rootDir, this.includePaths)
     }
 
     if (!rpwProject.modules) {
@@ -125,30 +142,80 @@ export class Project {
         this.modules.push(new Module(this, srcPath, srcName))
       }
     }
-
     return true
   }
 
-  defaultSettingsChanged(defaultSettings?: RpwSettings) {
-    const syntax = this.rpwSettings.syntax ?? defaultSettings?.syntax ?? Syntax.UNKNOWN
-    if (syntax) {
-      this.syntax = SyntaxMap.get(syntax.toUpperCase()) ?? Syntax.UNKNOWN
-      // TODO: error if syntax match not found?
+  // TODO: This should be done once when the workspace directory
+  //  is known, and only updated if workspace directory changes.
+  private getDirectories(path: string, list: string[]) {
+    const cleanPath = fixBackslashes(path)
+    list.push(cleanPath)
+    const files = fs.readdirSync(cleanPath)
+    for (let file of files) {
+      const fullName = cleanPath + "/" + file
+      if (fs.lstatSync(fullName).isDirectory()) {
+        this.getDirectories(fullName, list)
+      }
+    }
+  }
+
+  settingsChanged(newDefaultSettings?: RpwSettings) {
+
+    if (newDefaultSettings) {
+      this.defaultSettings = newDefaultSettings
     }
 
-    this.upperCase = this.rpwSettings.upperCase ?? defaultSettings?.upperCase ?? true
-    this.tabSize = this.rpwSettings.tabSize ?? defaultSettings?.tabSize ?? 4
-    this.tabStops = this.rpwSettings.tabStops ?? defaultSettings?.tabStops ?? [0, 16, 20, 40]
+    const defaults = this.defaultSettings
+    const settings = this.rpwProject?.settings
+
+    const syntaxName = settings?.syntax ?? defaults?.syntax
+    if (syntaxName) {
+      const syntax = SyntaxMap.get(syntaxName.toUpperCase())
+      if (!syntax) {
+        throw new Error("Unknown syntax: " + syntaxName)
+      }
+      this.syntax = syntax
+    } else {
+      this.syntax = this.inferredSyntax
+    }
+
+    this.upperCase = settings?.upperCase ?? defaults?.upperCase ?? true
+    this.tabSize = settings?.tabSize ?? defaults?.tabSize ?? 4
+    this.tabStops = settings?.tabStops ?? defaults?.tabStops ?? [0, 16, 20, 40]
     if (this.tabStops[0] != 0) {
       this.tabStops.unshift(0)
     }
   }
 
   update() {
-    this.sharedFiles = []
-    this.sharedSymbols = new Map<string, Symbol>()
-    for (let module of this.modules) {
-      module.update()
+    while (true) {
+      const syntaxStats = new Array(SyntaxDefs.length).fill(0)
+
+      this.sharedFiles = []
+      this.sharedSymbols = new Map<string, Symbol>()
+      for (let module of this.modules) {
+        module.update(syntaxStats)
+      }
+
+      // choose syntax based on number of keywords matched
+      if (this.syntax == Syntax.UNKNOWN) {
+        let bestMatch = Syntax.UNKNOWN
+        let bestCount = -1
+        for (let i = 1; i < syntaxStats.length; i += 1) {
+          if (syntaxStats[i] > bestCount) {
+            bestCount = syntaxStats[i]
+            bestMatch = i
+          } else if (syntaxStats[i] == bestCount) { // ignore ties
+            bestMatch = Syntax.UNKNOWN
+          }
+        }
+        if (bestMatch != Syntax.UNKNOWN) {
+          this.inferredSyntax = bestMatch
+          this.settingsChanged()
+          continue
+        }
+      }
+      break
     }
   }
 
@@ -265,7 +332,7 @@ export class Module {
     this.srcName = srcName
   }
 
-  update() {
+  update(syntaxStats: number[]) {
     this.sourceFiles = []
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
@@ -274,12 +341,13 @@ export class Module {
     // let asm = new Assembler(this)
     // asm.parse(this.srcName)
 
-    let prep = new Preprocessor(this)
-    const lineRecords = prep.preprocess(this.srcName)
+    const prep = new Preprocessor(this)
+    const lineRecords = prep.preprocess(this.srcName, syntaxStats)
     if (!lineRecords) {
       // *** error handling ***
       return
     }
+
     this.lineRecords = lineRecords
 
     // link up all symbols
@@ -306,24 +374,96 @@ export class Module {
     // }
   }
 
-  // extFileName comes from any PUT/include statement in any source code
-  openSourceFile(extFileName: string): SourceFile | undefined {
-    let fileName = fixBackslashes(extFileName)
-    if (fileName[0] != "/") {
-      fileName = this.srcPath + "/" + fileName
-    }
-    let fullPath = this.project.srcDir + fileName
+  // <workspace-dir>/<srcDir>/<src>/<fileName>
+  //  this.project.rootDir == <workspace-dir>
+  //  this.project.srcDir == <workspace-dir>/<rpwProject.srcDir>/
+  //  this.srcPath == <rpwProject.module.src> minus fileName
 
-    // TODO: get default suffix info from project?
-    if (!fs.existsSync(fullPath)) {
-      fullPath = fullPath + ".S"
-      if (!fs.existsSync(fullPath)) {
-        return
+  // extFileName comes from any PUT/include statement in any source code
+  openSourceFile(extFileName: string, currentFile?: SourceFile): SourceFile | undefined {
+
+    const fileName = fixBackslashes(extFileName)
+    const pathList: string[] = []
+    let search = true
+
+    // fileName that start with "/" is an "absolute-ish" path,
+    //  which is always relative to <workspace-dir>/<rpwProject.srcDir>
+    if (fileName[0] == "/") {
+      pathList.push(cleanPath(this.project.srcDir))
+      search = false
+    } else {
+      // first place to look is in the current directory
+      if (currentFile) {
+        let currentDir = currentFile.fullPath
+        const n = currentDir.lastIndexOf("/")
+        if (n >= 0) {
+          currentDir = currentDir.substring(0, n)
+          pathList.push(cleanPath(currentDir))
+        }
+      }
+
+      // next, look relative to <workspace-dir>/<rpwProject.srcDir>
+      pathList.push(cleanPath(this.project.srcDir + this.srcPath))
+    }
+
+    let sourceFile = this.findFile(fileName, pathList)
+    if (!sourceFile) {
+      if (search) {
+        sourceFile = this.findFile(fileName, this.project.includePaths)
+      }
+
+      if (!sourceFile && !currentFile) {
+        // *** this is not getting reported -- extension just fails ***
+        // throw new Error(`File ${extFileName} not found`)
       }
     }
-
-    return this.project.openSourceFile(this, fullPath)
+    return sourceFile
   }
+
+  private findFile(fileName: string, pathList: string[]): SourceFile | undefined {
+    for (let path of pathList) {
+      let fullPath = cleanPath(path + "/" + fileName)
+      if (!fs.existsSync(fullPath)) {
+        // TODO: allow for default suffix override in project?
+        fullPath = fullPath + ".S"
+        if (!fs.existsSync(fullPath)) {
+          continue
+        }
+      }
+      return this.project.openSourceFile(this, fullPath)
+    }
+  }
+}
+
+// flatten out path, removing "//", "./" and "../"
+function cleanPath(path: string): string {
+  const leadingSlash = path[0] == "/"
+  let result = ""
+  while (path != "") {
+    let subDir: string
+    const n = path.indexOf("/")
+    if (n == -1) {
+      subDir = path
+      path = ""
+    } else {
+      subDir = path.substring(0, n)
+      path = path.substring(n + 1)
+    }
+    if (subDir != "") {
+      if (subDir == "..") {
+        const n = result.lastIndexOf("/")
+        if (n != -1) {
+          result = result.substring(0, n)
+        }
+      } else if (subDir != "." && subDir != "") {
+        result += "/" + subDir
+      }
+    }
+  }
+  if (!leadingSlash) {
+    result = result.substring(1)
+  }
+  return result
 }
 
 //------------------------------------------------------------------------------

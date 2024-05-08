@@ -1,5 +1,35 @@
 # RPW 65 Changelog
 
+### [1.2.0] - 2024-05-08
+
+This update includes a large batch of changes to get ACME and CA65 closer to parity with Merlin and DASM.
+It also has changes to make highlighting more automatic, including detecting the syntax type from context and searching more aggressively for include files.
+
+#### Added:
+* Auto-detect of syntax by analyzing keywords and symbol names
+* Show current syntax in status bar next to rpw65
+* ACME: Scoped brace support for !zone, !macro, !pseudopc, !cpu, !for
+* CA65: Support for !enum, !struct, !union, !proc, !scope
+* Folding on macros, repeat loops, enums, structures, ACME brace blocks
+* .l to list of supported file extensions for LISA 2 files
+* Search for include file in current directory
+* Recursively search for include files in all directories under workspace when no project file
+* Throw exception when multiple .rpw-project files found in the workspace directory or JSON parsing fails
+* CA65: full parsing of segment/code/data/bss, import/export, assert, etc.
+* ALL: Full incbin and align argument parsing
+* ALL: Repeat/loop parsing
+* Settings to turn off errors and warnings
+
+#### Fixed:
+* Suppress completions on hex values and addressing mode endings
+* Allow "label jmp label" while still flagging "label = label" as an error
+* Stop hiliting operator words (mod, div, etc.) in red
+* ACME: Parsing of parameters for macro define and invoke
+
+#### Changed
+* ACME: Suppress errors in braced inline code until parsing is supported
+* ACME: Suppress errors in multi-statement lines until parsing is supported
+
 ### [1.1.3] - 2024-02-26
 
 #### Added:
