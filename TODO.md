@@ -6,7 +6,6 @@
   * tabStops by looking at columns (with sanity checking)
 * Format Document and Format Selection support
 * Support files using tabs instead of spaces
-* Code folding on symbol scope/zone borders
 
 ### Minor Features
 

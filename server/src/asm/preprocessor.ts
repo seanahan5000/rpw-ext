@@ -1,8 +1,12 @@
 
 import { SourceFile, Module, LineRecord } from "./project"
-import { Statement, ConditionalStatement, GenericStatement, ClosingBraceStatement, EquStatement, MacroDefStatement, RepeatStatement } from "./statements"
+import { Statement, ConditionalStatement, GenericStatement, ClosingBraceStatement, EquStatement, MacroDefStatement, RepeatStatement, MacroInvokeStatement } from "./statements"
 import { ScopeState, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression } from "./expressions"
+
+// just for the CA65 macro invoke work-around
+import { Parser } from "./parser"
+import { Syntax } from "./syntax"
 
 //------------------------------------------------------------------------------
 
@@ -179,10 +183,28 @@ export class Preprocessor {
     this.module = module
   }
 
+  // (pass 1)
+    // parse all statements in all connected source files (no symbol linkage)
+  // (pass 2)
+    // walk each line, tracking conditional state
+      // enable/disable line
+      // Statement.preprocess(enabled)
+        // handle file includes and state push/pop
+      // Preprocessor.processSymbols(firstPass = true)
+        // symbol scope tracking
+        // create symbol definitions
+        // some symbol reference linking
+    // rewalk each line
+      // Preprocessor.processSymbols(firstPass = false)
+        // remaining symbol reference linking
+      // statement.postProcessSymbols()
+        // mark symbols as constants/code/etc.
+
   preprocess(fileName: string, syntaxStats: number[]): LineRecord[] | undefined {
     const lineRecords: LineRecord[] = []
     this.syntaxStats = syntaxStats
 
+    // NOTE: this causes each source line of each source file to be parsed first
     if (!this.includeFile(fileName)) {
       // *** error messaging?
       return
@@ -227,11 +249,32 @@ export class Preprocessor {
 
           if (!conditional) {
             const enabled = this.conditional.isEnabled()
-            line.statement.preprocess(this, enabled)
-
             if (enabled) {
+              // CA65 allows macro invokes in the first column,
+              //  so if the label of this statement matches a
+              //  known macro name, convert it to a macro invoke
+              //  statement and reparse.
+              //
+              // TODO: Find a better location for this and
+              //  a less-brittle solution for the problem.
+              if (this.module.project.syntax == Syntax.CA65) {
+                if (line.statement.labelExp) {
+                  const labelName = line.statement.labelExp.getString()
+                  const foundSym = this.module.symbolMap.get(labelName)
+                  if (foundSym && foundSym.type == SymbolType.Macro) {
+                    const parser = new Parser()
+                    const newStatement = parser.reparseAsMacroInvoke(line.statement, this.module.project.syntax)
+                    if (newStatement) {
+                      line.statement = newStatement
+                      this.fileReader.state.file.statements[line.lineNumber] = newStatement
+                    }
+                  }
+                }
+              }
+              line.statement.preprocess(this, enabled)
               this.processSymbols(line.statement, true)
             } else {
+              line.statement.preprocess(this, enabled)
               // TODO: reconcile lineRecord and statement use on disabled lines
               line.statement.enabled = false
               line.statement = new GenericStatement()

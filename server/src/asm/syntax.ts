@@ -394,6 +394,8 @@ class DasmSyntax extends SyntaxDef {
 //    (Section: The maths parser)
 //------------------------------------------------------------------------------
 
+// TODO: support all the ACME alias (!h for !hex, etc.)
+
 class AcmeSyntax extends SyntaxDef {
 
   constructor() {
@@ -417,8 +419,9 @@ class AcmeSyntax extends SyntaxDef {
       // data storage
       [ "!byte",      { create: () => { return new stm.DataStatement(1) }}],
       [ "!word",      { create: () => { return new stm.DataStatement(2) }}],
-      [ "!fill",      {}],
+      [ "!hex",       { create: () => { return new stm.HexStatement() }}],
       [ "!align",     { create: () => { return new stm.AlignStatement() }}],
+      [ "!fill",      {}],
 
       [ "!pet",       { create: () => { return new stm.TextStatement() }}],
       [ "!raw",       { create: () => { return new stm.TextStatement() }}],
