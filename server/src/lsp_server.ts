@@ -13,7 +13,8 @@ import { Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
-import { SyntaxMap, SyntaxNames } from "./asm/syntax"
+import { SyntaxNames } from "./asm/syntax"
+import { SourceDoc, SourceLine } from "./code/source_doc"
 
 //------------------------------------------------------------------------------
 
@@ -45,6 +46,21 @@ export enum SemanticModifier {
   local     = 0,
   global    = 1,      // TODO: make use of this?
   external  = 2
+}
+
+//------------------------------------------------------------------------------
+
+// *** TODO: figure out how to share this with client ***
+
+type CodeBytesEntry = {
+	a?: number			// address
+	d?: number[]		// data bytes
+//c?: number			// cycle count *** string instead? "2/3", "4+"
+}
+
+type CodeBytes = {
+	// TODO: other information?
+	entries: CodeBytesEntry[]
 }
 
 //------------------------------------------------------------------------------
@@ -317,6 +333,7 @@ export class LspServer {
 
       const project = new LspProject(this, await this.defaultSettings)
       if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
+        // *** will this get reported? ***
         throw new Error("Failed to load project")
       }
       this.projects.push(project)
@@ -375,6 +392,7 @@ export class LspServer {
     const lowerCase = config.case?.lowerCaseCompletions ?? false
     const upperCase = !lowerCase
     // TODO: could also use "editor.rulers"
+    // *** TODO: should change column settings to match editor.rulers
     const c1 = config.columns?.c1 ?? 16
     const c2 = config.columns?.c2 ?? 4
     const c3 = config.columns?.c3 ?? 20
@@ -589,9 +607,55 @@ export class LspServer {
       return
     }
 
-    if (params.command == "rpw65.renumberLocals") {
+    this.executeUpdate()
 
-      this.executeUpdate()
+    if (params.command == "rpw65.getCodeBytes") {
+      if (!sourceFile.module.sourceDocs) {
+        return
+      }
+
+      // find file in sourceDocs
+      let sourceDoc: SourceDoc | undefined
+      for (let doc of sourceFile.module.sourceDocs) {
+
+        // ***
+        if (doc.name.indexOf("kaboom.s") != -1) {
+          if (filePath.indexOf("kaboom.s") != -1) {
+            sourceDoc = doc
+            break
+          }
+        }
+        // *** this won't work with sub-directories
+        // if (doc.name == filePath) {
+        //   sourceDoc = doc
+        //   break
+        // }
+      }
+      if (!sourceDoc) {
+        return
+      }
+
+      const codeBytes: CodeBytes = {
+        entries: []
+        // *** TODO: other information?
+      }
+      for (let line of sourceDoc.sourceLines) {
+        let entry: CodeBytesEntry = {}
+        if (line.address != -1 && line.objLength != 0) {
+          if (line.objBuffer) {
+            entry.a = line.address
+            entry.d = []
+            for (let i = 0; i < line.objLength; i += 1) {
+              entry.d.push(line.objBuffer[line.objOffset + i])
+            }
+          }
+        }
+        codeBytes.entries.push(entry)
+      }
+      return codeBytes
+    }
+
+    if (params.command == "rpw65.renumberLocals") {
 
       const range = params.arguments[1] as lsp.Range
       if (!range) {
@@ -621,11 +685,9 @@ export class LspServer {
         edits.push(edit)
       }
       return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits }
+    }
 
-    } else if (params.command == "rpw65.getSyntax") {
-
-      this.executeUpdate()
-
+    if (params.command == "rpw65.getSyntax") {
       let syntax = SyntaxNames[sourceFile.module.project.syntax]
       if (syntax) {
         const syntaxes: string[] = []
@@ -635,7 +697,7 @@ export class LspServer {
         }
         return { syntax, syntaxes }
       }
-
+      return
     }
   }
 
