@@ -1,5 +1,15 @@
 # RPW 65 Changelog
 
+### [1.2.1] - 2024-05-23
+
+Minor changes, mainly to make Choplifter and Lode Runner disassemblies parse cleanly.
+
+#### Added:
+* CA65: Macro invoke in first column
+* DASM,ACME: Space delimited HEX statements
+* DASM: Leading "#" in EQU expressions
+* DASM: Report extra spaces in "(ZP), Y", "(ZP, X)", etc. as errors
+
 ### [1.2.0] - 2024-05-08
 
 This update includes a large batch of changes to get ACME and CA65 closer to parity with Merlin and DASM.
@@ -9,7 +19,7 @@ It also has changes to make highlighting more automatic, including detecting the
 * Auto-detect of syntax by analyzing keywords and symbol names
 * Show current syntax in status bar next to rpw65
 * ACME: Scoped brace support for !zone, !macro, !pseudopc, !cpu, !for
-* CA65: Support for !enum, !struct, !union, !proc, !scope
+* CA65: Support for .enum, .struct, .union, .proc, .scope
 * Folding on macros, repeat loops, enums, structures, ACME brace blocks
 * .l to list of supported file extensions for LISA 2 files
 * Search for include file in current directory

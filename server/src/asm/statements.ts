@@ -164,10 +164,17 @@ export class OpStatement extends Statement {
         let res = parser.mustAddToken([",", closingChar], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
           this.mode = OpMode.INDX
+          const c = parser.peekVeryNextChar()
           res = parser.mustAddToken("x", TokenType.Opcode)
           if (res.index == 0 && res.token) {
             if (this.opcode.INDX === undefined) {
               this.opExp?.setError("Opcode does not support this addressing mode")
+            } else {
+              if (parser.syntax == Syntax.DASM) {
+                if (c == " " || c == "\t") {
+                  res.token.setError("DASM doesn't allow space between ',' and X register")
+                }
+              }
             }
             token.type = TokenType.Opcode
           }
@@ -187,10 +194,17 @@ export class OpStatement extends Statement {
             str = token.getString()
             if (str == ",") {
               token.type = TokenType.Opcode
+              const c = parser.peekVeryNextChar()
               res = parser.mustAddToken("y", TokenType.Opcode)
               if (res.index == 0 && res.token) {
                 if (this.opcode.INDY === undefined) {
                   this.opExp?.setError("Opcode does not support this addressing mode")
+                } else {
+                  if (parser.syntax == Syntax.DASM) {
+                    if (c == " " || c == "\t") {
+                      res.token.setError("DASM doesn't allow space between ',' and Y register")
+                    }
+                  }
                 }
               }
             } else {
@@ -243,6 +257,7 @@ export class OpStatement extends Statement {
         } else {
           if (token.getString() == ",") {   // exp,X or exp,Y
             token.type = TokenType.Opcode
+            const c = parser.peekVeryNextChar()
             token = parser.mustAddNextToken("expecting 'X' or 'Y'")
             if (token.type != TokenType.Missing) {
               str = token.getString().toLowerCase()
@@ -254,6 +269,12 @@ export class OpStatement extends Statement {
                 token.type = TokenType.Opcode
               } else if (str != "") {
                 token.setError("Unexpected token, expecting 'X' or 'Y'")
+                return
+              }
+              if (parser.syntax == Syntax.DASM) {
+                if (c == " " || c == "\t") {
+                  token.setError("DASM doesn't allow space between ',' and X or Y register")
+                }
               }
             }
           } else {
@@ -1022,14 +1043,14 @@ export class AlignStatement extends Statement {
 
 //------------------------------------------------------------------------------
 
-// NOTE: caller has checked for odd nibbles
-function scanHex(hexString: string, buffer: number[]) {
-  while (hexString.length > 0) {
-    let byteStr = hexString.substring(0, 2)
-    buffer.push(parseInt(byteStr, 16))
-    hexString = hexString.substring(2)
-  }
-}
+// MERLIN:  HEX <hex-num> [, ...]
+//   DASM:  [.]HEX <hex-num> [ ...]
+//   ACME:  !HEX <hex-num> [ ...]
+//   CA65:  n/a
+//   LISA:  HEX <hex-num>
+
+// odd digits never allowed
+// $ and 0x prefix never allowed
 
 export class HexStatement extends Statement {
   private dataBytes: number[] = []
@@ -1043,22 +1064,29 @@ export class HexStatement extends Statement {
       }
     }
 
+    let token: Token | undefined
     while (true) {
-      let token = parser.addNextToken()
       if (!token) {
-        parser.addMissingToken("Hex value expected")
-        break
+        token = parser.addNextToken()
+        if (!token) {
+          parser.addMissingToken("Hex value expected")
+          break
+        }
       }
 
       let hexString = token.getString().toUpperCase()
-      // *** TODO: which syntaxes is the true for? ***
       if (hexString == "$") {
-        token.setError("$ prefix not allowed on HEX statements")
+        token.setError("$ prefix not allowed on HEX statement values")
         token = parser.addNextToken()
         if (!token) {
           break
         }
         hexString = token.getString().toUpperCase()
+      }
+
+      if (token.type != TokenType.DecNumber && token.type != TokenType.HexNumber) {
+        token.setError("Unexpected token type, expecting hex value")
+        break
       }
 
       token.type = TokenType.HexNumber
@@ -1073,7 +1101,21 @@ export class HexStatement extends Statement {
         break
       }
 
-      if (token.getString() != ",") {
+      if (parser.syntax == Syntax.LISA) {
+        token.setError("Unexpected token")
+        break
+      }
+
+      if (token.getString() == ",") {
+        if (parser.syntax && parser.syntax != Syntax.MERLIN) {
+          token.setError("Comma delimiter not allowed in this syntax")
+          break
+        }
+        token = undefined
+        continue
+      }
+
+      if (parser.syntax == Syntax.MERLIN) {
         token.setError("Unexpected token, expecting ','")
         break
       }
@@ -1082,6 +1124,15 @@ export class HexStatement extends Statement {
 
   getSize(): number | undefined {
     return this.dataBytes.length
+  }
+}
+
+// NOTE: caller has checked for odd nibbles
+function scanHex(hexString: string, buffer: number[]) {
+  while (hexString.length > 0) {
+    let byteStr = hexString.substring(0, 2)
+    buffer.push(parseInt(byteStr, 16))
+    hexString = hexString.substring(2)
   }
 }
 
@@ -1262,7 +1313,7 @@ export class IncBinStatement extends FileStatement {
 
 // MERLIN: symbol EQU exp
 //         symbol = exp
-// DASM:   symbol [.]EQU exp
+// DASM:   symbol [.]EQU [#]exp
 //         symbol = exp
 // CA65:   symbol = exp
 //         symbol := exp
@@ -1277,6 +1328,14 @@ export class EquStatement extends Statement {
       return
     }
     if (!this.labelExp.isVariableType()) {
+      // look for leading "#" for DASM
+      //  TODO: should this be done for expressions in general?
+      if (!parser.syntax || parser.syntax == Syntax.DASM) {
+        const token = parser.peekNextToken()
+        if (token && token.getString() == "#") {
+          parser.addNextToken()
+        }
+      }
       this.value = parser.mustAddNextExpression()
       // TODO: if ":=", mark symbol as address
       this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)

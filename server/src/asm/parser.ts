@@ -237,6 +237,17 @@ export class Parser extends Tokenizer {
     return statements
   }
 
+  public reparseAsMacroInvoke(statement: stm.Statement, syntax: Syntax): stm.Statement | undefined {
+    this.sourceFile = undefined
+    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.lineNumber = 0
+    this.syntax = syntax
+    this.setSourceLine(statement.sourceLine)
+    const token = this.getNextToken()
+    if (token) {
+      return this.parseMacroInvoke(token)
+    }
+  }
 
   private parseStatement(): stm.Statement {
 
@@ -521,7 +532,7 @@ export class Parser extends Tokenizer {
       }
 
       // detected indented variable assignment
-      if (nextChar == " " || nextChar == "\t") {    // *** tabs?
+      if (nextChar == " " || nextChar == "\t") {
         const savedPosition = this.position
         const t1 = token ?? this.getNextToken()
         const t2 = this.peekNextToken()
