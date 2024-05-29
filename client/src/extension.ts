@@ -41,26 +41,22 @@ class CodeLine {
 	public decorations: DecorationTypes
 	// TODO: replacement code overlay
 
-	constructor (address?: number, bytes?: number[]) {
-		this.address = address
-		this.bytes = bytes
-		// *** create decorations here?
-		this.decorations = this.buildDecoration()
+	constructor (emptySrcLine = false) {
 	}
 
 	// *** don't rebuild indents on lines that are already indented ***
 
-	public rebuildDecorations(address?: number, bytes?: number[]) {
+	public rebuildDecorations(address?: number, bytes?: number[], emptySrcLine = false) {
 		this.address = address
 		this.bytes = bytes
-		this.decorations = this.buildDecoration()
+		this.decorations = this.buildDecoration(emptySrcLine)
 	}
 
 	public isIndent(): boolean {
 		return this.address === undefined && this.bytes === undefined
 	}
 
-	private buildDecoration(): DecorationTypes {
+	private buildDecoration(emptySrcLine: boolean): DecorationTypes {
 		const decorations: DecorationTypes = []
 
 		// TODO: this case could eventually fold into general case
@@ -69,18 +65,22 @@ class CodeLine {
 			// TODO: figure out how to work around vscode bug
 			//	and avoid this hack using two decorations
 
-			const contentStr = "".padEnd(5 + 3 + 3 + 3 + 2, "\xA0")
+			const contentStr = "".padEnd(5 + 3 + 3 + 3 + 1/*2*/, "\xA0")
+			// const contentStr = "xxxx: xx xx xx\xA0\xA0"
 			decorations.push(vscode.window.createTextEditorDecorationType({
 				before: {
 					contentText: contentStr,
 					// width: "114px"		// TODO: get rid of
 				}
 			}))
-			// decorationType.push(vscode.window.createTextEditorDecorationType({
+			// decorations.push(vscode.window.createTextEditorDecorationType({
 			// 	before: {
 			// 		contentText: " ",
+			// 		// width: "114px"		// TODO: get rid of
 			// 	}
 			// }))
+
+			emptySrcLine = true
 
 		} else {
 
@@ -136,10 +136,23 @@ class CodeLine {
 			}
 		}
 
+		if (emptySrcLine) {
+			decorations.push(vscode.window.createTextEditorDecorationType({
+				before: {
+					contentText: "\xA0"
+				}
+			}))
+		}
+
 		return decorations.length == 1 ? decorations[0] : decorations
 	}
 }
 
+
+type UpdateRange = {
+	start: number
+	end: number
+}
 
 class CodeList {
 
@@ -155,36 +168,32 @@ class CodeList {
 
 		this.codeLines = []
 		for (let i = 0; i < lines.length; i += 1) {
-
-			let address = 0x1000 + i + 1			// ***
-			let dataBytes = [0, 0, 0]					// ***
-
-			const codeLine = new CodeLine(address, dataBytes)
+			const emptySrcLine = lines[i] == ""
+			const codeLine = new CodeLine(emptySrcLine)
 			this.codeLines.push(codeLine)
-			this.applyDecorations(i, codeLine.decorations)
 		}
 	}
 
 	public applyCodeBytes(codeBytes: CodeBytes) {
-		// clear all of this.codeLines
-			// *** later, smart update
-		this.clearDecorations(0, this.codeLines.length)
-
 		if (this.codeLines.length != codeBytes.entries.length) {
-			// *** figure out what to do on mismatch
+			// TODO: figure out what to do on mismatch (remove all for now)
+			this.clearDecorations(0, this.codeLines.length)
 			return
 		}
 
 		for (let i = 0; i < codeBytes.entries.length; i += 1) {
+			this.clearDecorations(i, 1)
+
 			const codeEntry = codeBytes.entries[i]
 			this.codeLines[i].rebuildDecorations(codeEntry.a, codeEntry.d)
 			this.applyDecorations(i, this.codeLines[i].decorations)
 		}
 	}
 
-	// *** test with multi-selection ***
-	// *** change to applyEdits ***
-	public applyChanges(changes: readonly vscode.TextDocumentContentChangeEvent[]) {
+	public applyEdits(changes: readonly vscode.TextDocumentContentChangeEvent[]) {
+
+		let updateRanges: UpdateRange[] = []
+
 		for (let change of changes) {
 
 			// split new lines to be inserted
@@ -198,7 +207,9 @@ class CodeList {
 			let startLine = change.range.start.line
 			let endLine = change.range.end.line
 			let partialStart = change.range.start.character != 0
-			let partialEnd = change.range.end.character != 0
+
+			// *** simple end of line return ***
+				// *** not possible? ***
 
 			if (startLine == endLine) {
 				// single partial line of text to insert or delete
@@ -222,39 +233,53 @@ class CodeList {
 			// compute full lines to be added/removed
 
 			let fullDeleteCount = endLine - startLine
-			if (partialStart) {
-				fullDeleteCount -= 1
-			}
-			if (partialEnd) {
-				fullDeleteCount += 1
-			}
-
 			let fullInsertCount = newLines.length
 			if (partialInsertEnd) {
 				fullInsertCount -= 1
 			}
 
-			if (fullInsertCount != fullDeleteCount) {
-				if (fullInsertCount > fullDeleteCount) {
-					const newSlots = new Array(fullInsertCount - fullDeleteCount)
-					this.codeLines.splice(startLine, 0, ...newSlots)
+			const deltaCount = fullInsertCount - fullDeleteCount
+			if (deltaCount != 0) {
+				let deltaStart = startLine
+				if (deltaCount > 0) {
+					const newSlots = new Array(deltaCount)
+					if (partialStart) {
+						deltaStart += 1
+					}
+					this.codeLines.splice(deltaStart, 0, ...newSlots)
 				} else {
-					this.codeLines.splice(startLine, fullDeleteCount - fullInsertCount)
+					this.codeLines.splice(deltaStart, -deltaCount)
+				}
+				// adjust previous ranges by number of lines added/removed
+				for (let range of updateRanges) {
+					if (range.start >= deltaStart) {
+						range.start += deltaCount
+						range.end += deltaCount
+					}
 				}
 			}
 
-			// apply indent decorations for all affected lines
-
+			// add indent decorations for all affected lines
 			let indentCount = clearCount + fullInsertCount - fullDeleteCount
 			for (let i = startLine; i < startLine + indentCount; i += 1) {
 				let codeLine = this.codeLines[i]
-				if (codeLine) {
-					codeLine.rebuildDecorations(undefined, undefined)
-				} else {
-					codeLine = new CodeLine(undefined, undefined)
+				if (!codeLine) {
+					codeLine = new CodeLine()
 					this.codeLines[i] = codeLine
 				}
-				this.applyDecorations(i, codeLine.decorations)
+				codeLine.rebuildDecorations(undefined, undefined)
+			}
+
+			// save range for later application
+			updateRanges.push({ start: startLine, end: startLine + indentCount})
+		}
+
+		// now that final ranges are known, apply decorations to current text layout
+		//	(in reverse so updates are top to bottom)
+		for (let i = updateRanges.length; --i >= 0; ) {
+			const range = updateRanges[i]
+			for (let i = range.start; i < range.end; i += 1) {
+				this.applyDecorations(i, this.codeLines[i].decorations)
 			}
 		}
 	}
@@ -274,12 +299,14 @@ class CodeList {
 	private clearDecorations(startLine: number, count: number) {
 		for (let i = startLine; i < startLine + count; i += 1) {
 			const decorations = this.codeLines[i].decorations
-			if (Array.isArray(decorations)) {
-				for (let type of decorations) {
-					this.editor.setDecorations(type, [])
+			if (decorations) {
+				if (Array.isArray(decorations)) {
+					for (let type of decorations) {
+						this.editor.setDecorations(type, [])
+					}
+				} else {
+					this.editor.setDecorations(decorations, [])
 				}
-			} else {
-				this.editor.setDecorations(decorations, [])
 			}
 		}
 	}
@@ -287,28 +314,54 @@ class CodeList {
 
 let codeLists: CodeList[] = []
 
-async function updateDecorations() {
+async function updateDecorations(forceUpdate = false) {
 	let newLists: CodeList[] = []
 	const editors = vscode.window.visibleTextEditors
-	for (let editor of editors) {
+	const activeEditor = vscode.window.activeTextEditor
+
+	// TODO: consider using TextEditor.visibleRanges to
+	//	optimize/reduce the amount of decorations changed.
+
+	for (let i = -1; i < editors.length; i += 1) {
+		let editor: vscode.TextEditor
+
+		// favor active editor among visible editors
+		if (i < 0) {
+			editor = activeEditor
+			if (!editor) {
+				continue
+			}
+		} else {
+			editor = editors[i]
+			if (editor == activeEditor) {
+				continue
+			}
+		}
+
 		if (editor.document.languageId == "rpw65") {
-			let matched = false
-			for (let codeList of codeLists) {
-				if (codeList.editor != editor) {
+
+			let codeList: CodeList | undefined
+			let refresh = forceUpdate
+
+			for (let list of codeLists) {
+				if (list.editor != editor) {
 					continue
 				}
-				if (codeList.document != editor.document) {
+				if (list.document != editor.document) {
 					continue
 				}
+				codeList = list
 				newLists.push(codeList)
-				matched = true
 				break
 			}
 
-			if (!matched) {
-				const codeList = new CodeList(editor)
-				// *** constructor should just have indented ***
+			if (!codeList) {
+				codeList = new CodeList(editor)
 				newLists.push(codeList)
+				refresh = true
+			}
+
+			if (refresh) {
 
 				// request code info from server by file name
 				const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
@@ -326,11 +379,10 @@ async function updateDecorations() {
 	codeLists = newLists
 }
 
-// *** test with same document open in multiple panes ***
 function changeDecorations(document: vscode.TextDocument, changes: readonly vscode.TextDocumentContentChangeEvent[]) {
 	for (let codeList of codeLists) {
 		if (codeList.document == document) {
-			codeList.applyChanges(changes)
+			codeList.applyEdits(changes)
 		}
 	}
 }
@@ -382,19 +434,9 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
 	client.onNotification("rpw.syntaxChanged", () => { updateStatusItem() })
-
-	// *** register for notifications about assembly code
-		// *** turn message contents into decorations on documents
-		// *** support in client for editing files with assembly bytes
-
-	// vscode.window.onDidChangeActiveTextEditor(event => {
-	// 	// *** check language first
-	// 	// openDocument(vscode.window.activeTextEditor)
-	// })
+	client.onNotification("rpw.asmCodeChanged", () => { updateDecorations(true) })
 
 	vscode.workspace.onDidChangeTextDocument(event => {
-		// *** match document to active editor
-		// updateDocument(vscode.window.activeTextEditor/*, event.document*/, event)
 		changeDecorations(event.document, event.contentChanges)
 	})
 
@@ -402,8 +444,10 @@ export function activate(context: vscode.ExtensionContext) {
 		updateDecorations()
 	})
 
-	// *** don't do this until server is known to be up and running ***
-	updateDecorations()
+	// vscode.window.onDidChangeActiveTextEditor(event => {
+	// 	// *** check language first
+	// 	// openDocument(vscode.window.activeTextEditor)
+	// })
 }
 
 export function deactivate(): Thenable<void> | undefined {

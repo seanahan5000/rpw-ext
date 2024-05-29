@@ -112,13 +112,14 @@ export class SourceDocBuilder {
       }
     }
 
+    // TODO: exclude .lst file for RPW65 but not DBUG?
     // prepend .lst file name
-    if (this.lstFileName) {
-      if (!fileName.startsWith("/")) {
-        fileName = "/" + fileName
-      }
-      fileName = this.lstFileName + fileName
-    }
+    // if (this.lstFileName) {
+    //   if (!fileName.startsWith("/")) {
+    //     fileName = "/" + fileName
+    //   }
+    //   fileName = this.lstFileName + fileName
+    // }
 
     let previousDoc = this.currentDoc
     if (!this.currentDoc || this.currentDoc.name != fileName) {

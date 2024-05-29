@@ -174,6 +174,9 @@ export class Project {
     }
   }
 
+  asmCodeChanged() {
+  }
+
   settingsChanged(newDefaultSettings?: RpwSettings) {
 
     if (newDefaultSettings) {
@@ -354,24 +357,31 @@ export class Module {
 
       this.lstFilePath = cleanPath(this.project.binDir + "/" + lstName)
 
-      // *** call SourceDocBuilder
-      // public static buildLstDocs(settings: RpwSettings, lstFileName: string, lines: string[]): SourceDoc[] {
       if (!fs.existsSync(this.lstFilePath)) {
         //*** throw error?
         return
       }
 
-      const lstText = fs.readFileSync(this.lstFilePath, 'utf8')
-      const lstLines = lstText.split(/\r?\n/)
-      const settings = RpwSettingsDefaults    // TODO: clean this up
-      this.sourceDocs = SourceDocBuilder.buildLstDocs(settings, this.lstFilePath/***/, lstLines)
-      // *** builder needs to throw errors ***
+      this.scanLstFile()
 
-      // *** link SourceDocs to modules sources
-
-      // *** set up watch on .lst files to detect change (like after rebuild)
-        // *** reprocess .lst file and notify client on data byte changes
+      // watch for changes in .lst file
+      fs.watchFile(this.lstFilePath, (curStat, prevStat) => {
+        if (curStat.mtime.getTime() != prevStat.mtime.getTime()) {
+          this.scanLstFile()
+          this.project.asmCodeChanged()
+        }
+      })
     }
+  }
+
+  private scanLstFile() {
+    const lstText = fs.readFileSync(this.lstFilePath!, 'utf8')
+    const lstLines = lstText.split(/\r?\n/)
+    const settings = RpwSettingsDefaults    // TODO: clean this up
+    this.sourceDocs = SourceDocBuilder.buildLstDocs(settings, this.lstFilePath!/***/, lstLines)
+    // *** builder needs to throw errors ***
+
+    // *** link SourceDocs to modules sources
   }
 
   update(syntaxStats: number[]) {

@@ -107,6 +107,10 @@ class LspProject extends Project {
     this.server.removeTemporary(fullPath)
     return super.openSourceFile(module, fullPath)
   }
+
+  asmCodeChanged() {
+    this.server.connection.sendNotification("rpw.asmCodeChanged")
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -125,7 +129,7 @@ type DiagnosticState = {
 
 export class LspServer {
 
-  private connection: lsp.Connection
+  /*private*/ connection: lsp.Connection
   /*private*/ documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument)
 
   private isInitialized: Promise<boolean>
@@ -365,6 +369,9 @@ export class LspServer {
     // send this so client will ask for initial syntax
     this.connection.sendNotification("rpw.syntaxChanged")
 
+    // send this so client will ask for initial code bytes
+    this.connection.sendNotification("rpw.asmCodeChanged")
+
     this.scheduleUpdate()
   }
 
@@ -533,8 +540,14 @@ export class LspServer {
         const project = sourceFile.module.project as LspProject
         if (project && project.isTemporary) {
           this.removeDiagnostics(sourceFile)
-          const index = this.projects.indexOf(project)
-          this.projects.splice(index, 1)
+          // remove file from module
+          let index = sourceFile.module.sourceFiles.indexOf(sourceFile)
+          sourceFile.module.sourceFiles.splice(index, 1)
+          // if module now empty, remove project
+          if (sourceFile.module.sourceFiles.length == 0) {
+            index = this.projects.indexOf(project)
+            this.projects.splice(index, 1)
+          }
         }
       }
     }
@@ -617,19 +630,10 @@ export class LspServer {
       // find file in sourceDocs
       let sourceDoc: SourceDoc | undefined
       for (let doc of sourceFile.module.sourceDocs) {
-
-        // ***
-        if (doc.name.indexOf("kaboom.s") != -1) {
-          if (filePath.indexOf("kaboom.s") != -1) {
-            sourceDoc = doc
-            break
-          }
+        if (filePath.endsWith(doc.name)) {
+          sourceDoc = doc
+          break
         }
-        // *** this won't work with sub-directories
-        // if (doc.name == filePath) {
-        //   sourceDoc = doc
-        //   break
-        // }
       }
       if (!sourceDoc) {
         return
