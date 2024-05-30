@@ -329,6 +329,7 @@ export class Module {
   private srcPath: string     // always in the form "/path" or ""
   private srcName: string     // always just the file name (*** without suffix?)
   private lstFilePath?: string
+  public lstModTime = 0
 
   public symbolMap = new Map<string, Symbol>
   public variableMap = new Map<string, Symbol>
@@ -362,11 +363,13 @@ export class Module {
         return
       }
 
+      this.lstModTime = fs.statSync(this.lstFilePath).mtime.getTime()
       this.scanLstFile()
 
       // watch for changes in .lst file
       fs.watchFile(this.lstFilePath, (curStat, prevStat) => {
         if (curStat.mtime.getTime() != prevStat.mtime.getTime()) {
+          this.lstModTime = curStat.mtime.getTime()
           this.scanLstFile()
           this.project.asmCodeChanged()
         }

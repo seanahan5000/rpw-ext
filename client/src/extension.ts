@@ -3,6 +3,7 @@ import * as vscode from 'vscode'
 import * as path from 'path'
 import * as vsclnt from 'vscode-languageclient'
 import * as cmd from "./commands"
+import * as fs from 'fs'
 
 import {
 	LanguageClient,
@@ -22,7 +23,8 @@ type CodeBytesEntry = {
 }
 
 type CodeBytes = {
-	// TODO: other information?
+	modTime: number
+	startLine: number
 	entries: CodeBytesEntry[]
 }
 
@@ -159,6 +161,7 @@ class CodeList {
 	public editor: vscode.TextEditor
 	public document: vscode.TextDocument
 	private codeLines: CodeLine[]
+	private isCleared = true
 
 	constructor(editor: vscode.TextEditor) {
 
@@ -174,23 +177,35 @@ class CodeList {
 		}
 	}
 
+	public clear() {
+		this.clearDecorations(0, this.codeLines.length)
+		this.isCleared = true
+	}
+
 	public applyCodeBytes(codeBytes: CodeBytes) {
-		if (this.codeLines.length != codeBytes.entries.length) {
-			// TODO: figure out what to do on mismatch (remove all for now)
-			this.clearDecorations(0, this.codeLines.length)
+
+		// If this file is dirty or its mod time doesn't match codeBytes content,
+		//	clear all decorations and return.
+		if (this.document.isDirty || fs.statSync(this.document.fileName).mtime.getTime() > codeBytes.modTime) {
+			this.clear()
 			return
 		}
 
-		for (let i = 0; i < codeBytes.entries.length; i += 1) {
+		this.isCleared = false
+		for (let i = codeBytes.startLine; i < codeBytes.startLine + codeBytes.entries.length; i += 1) {
 			this.clearDecorations(i, 1)
-
-			const codeEntry = codeBytes.entries[i]
+			const codeEntry = codeBytes.entries[i - codeBytes.startLine]
 			this.codeLines[i].rebuildDecorations(codeEntry.a, codeEntry.d)
 			this.applyDecorations(i, this.codeLines[i].decorations)
 		}
 	}
 
 	public applyEdits(changes: readonly vscode.TextDocumentContentChangeEvent[]) {
+
+		// modTime mismatch has caused all decorations to have been cleared
+		if (this.isCleared) {
+			return
+		}
 
 		let updateRanges: UpdateRange[] = []
 
@@ -312,77 +327,194 @@ class CodeList {
 	}
 }
 
-let codeLists: CodeList[] = []
+//------------------------------------------------------------------------------
 
-async function updateDecorations(forceUpdate = false) {
-	let newLists: CodeList[] = []
-	const editors = vscode.window.visibleTextEditors
-	const activeEditor = vscode.window.activeTextEditor
+type RequestEntry = {
+	command: string
+	arguments: any[]
+}
 
-	// TODO: consider using TextEditor.visibleRanges to
-	//	optimize/reduce the amount of decorations changed.
+type UpdateEntry = {
+	request: RequestEntry
+	codeList: CodeList
+}
 
-	for (let i = -1; i < editors.length; i += 1) {
-		let editor: vscode.TextEditor
+class Decorator {
 
-		// favor active editor among visible editors
-		if (i < 0) {
-			editor = activeEditor
-			if (!editor) {
-				continue
-			}
-		} else {
-			editor = editors[i]
-			if (editor == activeEditor) {
-				continue
-			}
-		}
+	private enabled = true
+	private codeLists: CodeList[] = []
+	private fullUpdate = false
+  private updateId?: NodeJS.Timeout
 
-		if (editor.document.languageId == "rpw65") {
+	constructor(enabled: boolean) {
+		this.enabled = enabled
+	}
 
-			let codeList: CodeList | undefined
-			let refresh = forceUpdate
-
-			for (let list of codeLists) {
-				if (list.editor != editor) {
-					continue
+	public enable(enabled: boolean) {
+		if (enabled != this.enabled) {
+			if (enabled) {
+				this.enabled = true
+				this.scheduleUpdate(true)
+			} else {
+				if (this.updateId !== undefined) {
+					clearTimeout(this.updateId)
+					delete this.updateId
 				}
-				if (list.document != editor.document) {
-					continue
+				for (let codeList of this.codeLists) {
+					codeList.clear()
 				}
-				codeList = list
-				newLists.push(codeList)
-				break
-			}
-
-			if (!codeList) {
-				codeList = new CodeList(editor)
-				newLists.push(codeList)
-				refresh = true
-			}
-
-			if (refresh) {
-
-				// request code info from server by file name
-				const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
-					command: "rpw65.getCodeBytes",
-					arguments: [
-						editor.document.uri.toString()
-					]
-				})
-				if (content) {
-					codeList.applyCodeBytes(content)
-				}
+				this.codeLists = []
+				this.enabled = false
 			}
 		}
 	}
-	codeLists = newLists
-}
 
-function changeDecorations(document: vscode.TextDocument, changes: readonly vscode.TextDocumentContentChangeEvent[]) {
-	for (let codeList of codeLists) {
-		if (codeList.document == document) {
-			codeList.applyEdits(changes)
+	public scheduleUpdate(fullUpdate = false) {
+		if (this.enabled) {
+			if (fullUpdate) {
+				this.fullUpdate = true
+			}
+			if (this.updateId !== undefined) {
+				clearTimeout(this.updateId)
+			}
+			// delay for at least 10ms so the visible ranges values stabilize
+			const updateTimeout = 10
+			this.updateId = setTimeout(() => { this.executeUpdate() }, updateTimeout)
+		}
+	}
+
+  private async executeUpdate() {
+    if (this.updateId !== undefined) {
+      clearTimeout(this.updateId)
+      delete this.updateId
+
+			await this.updateDecorations()
+    }
+  }
+
+	private async updateDecorations() {
+		const editors = vscode.window.visibleTextEditors
+		const activeEditor = vscode.window.activeTextEditor
+
+		const newLists: CodeList[] = []
+		const updateEntries0: UpdateEntry[] = []
+		const updateEntries1: UpdateEntry[] = []
+
+		// Update order:
+		//	- active text editor visible lines
+		//	- all non-active text editor visible lines
+		//	- active text editor not visible lines
+		//	- all non-active text editor not visible lines
+
+		for (let i = -1; i < editors.length; i += 1) {
+
+			// favor active editor among visible editors
+			let editor: vscode.TextEditor
+			if (i < 0) {
+				editor = activeEditor
+				if (!editor) {
+					continue
+				}
+			} else {
+				editor = editors[i]
+				if (editor == activeEditor) {
+					continue
+				}
+			}
+
+			if (editor.document.languageId == "rpw65") {
+
+				// Flatten visible ranges into a single range
+				//	and pad to cover partial lines.
+				let visibleStart = 999999
+				let visibleEnd = -1
+				for (let range of editor.visibleRanges) {
+					if (visibleStart > range.start.line) {
+						visibleStart = Math.max(range.start.line - 1, 0)
+					}
+					if (visibleEnd < range.end.line) {
+						visibleEnd = range.end.line + 1
+					}
+				}
+				if (visibleEnd < 0) {
+					continue
+				}
+
+				let refresh = this.fullUpdate
+				let codeList: CodeList | undefined
+
+				for (let list of this.codeLists) {
+					if (list.editor != editor) {
+						continue
+					}
+					if (list.document != editor.document) {
+						continue
+					}
+					codeList = list
+					newLists.push(codeList)
+					break
+				}
+
+				if (!codeList) {
+					codeList = new CodeList(editor)
+					newLists.push(codeList)
+					refresh = true
+				}
+
+				if (refresh) {
+					const request0 = {
+						command: "rpw65.getCodeBytes",
+						arguments: []
+					}
+					request0.arguments.push(editor.document.uri.toString())
+					request0.arguments.push({ startLine: visibleStart, endLine: visibleEnd + 1 })
+					updateEntries0.push({ request: request0, codeList })
+
+					if (visibleStart > 0) {
+						const request1 = {
+							command: "rpw65.getCodeBytes",
+							arguments: []
+						}
+						request1.arguments.push(editor.document.uri.toString())
+						request1.arguments.push({ startLine: 0, endLine: visibleStart })
+						updateEntries1.push({ request: request1, codeList })
+					}
+
+					const request1 = {
+						command: "rpw65.getCodeBytes",
+						arguments: []
+					}
+					request1.arguments.push(editor.document.uri.toString())
+					request1.arguments.push({ startLine: visibleEnd })
+					updateEntries1.push({ request: request1, codeList })
+				}
+			}
+		}
+		this.codeLists = newLists
+		this.fullUpdate = false
+
+		for (let entry of updateEntries0) {
+			const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, entry.request)
+			if (content) {
+				entry.codeList.applyCodeBytes(content)
+			}
+		}
+		for (let entry of updateEntries1) {
+			const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, entry.request)
+			if (content) {
+				entry.codeList.applyCodeBytes(content)
+			}
+		}
+	}
+
+	public async onTextChanged(document: vscode.TextDocument, changes: readonly vscode.TextDocumentContentChangeEvent[]) {
+		if (this.enabled) {
+			await this.executeUpdate()
+			for (let codeList of this.codeLists) {
+				if (codeList.document == document) {
+					codeList.applyEdits(changes)
+				}
+			}
 		}
 	}
 }
@@ -391,6 +523,7 @@ function changeDecorations(document: vscode.TextDocument, changes: readonly vsco
 
 let client: LanguageClient
 let statusBarItem: vscode.StatusBarItem
+let decorator: Decorator
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -430,24 +563,33 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.leftArrowIndent", () => { cmd.arrowIndentCmd(true) }))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.rightArrowIndent", () => { cmd.arrowIndentCmd(false) }))
 
+	const config = vscode.workspace.getConfiguration("rpw65")
+	decorator = new Decorator(config.get("showCodeBytes"))
+
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
 	client.onNotification("rpw.syntaxChanged", () => { updateStatusItem() })
-	client.onNotification("rpw.asmCodeChanged", () => { updateDecorations(true) })
+	client.onNotification("rpw.asmCodeChanged", () => { decorator.scheduleUpdate(true) })
 
-	vscode.workspace.onDidChangeTextDocument(event => {
-		changeDecorations(event.document, event.contentChanges)
+	vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
+		decorator.scheduleUpdate()
 	})
 
 	vscode.window.onDidChangeVisibleTextEditors(event => {
-		updateDecorations()
+		decorator.scheduleUpdate()
 	})
 
-	// vscode.window.onDidChangeActiveTextEditor(event => {
-	// 	// *** check language first
-	// 	// openDocument(vscode.window.activeTextEditor)
-	// })
+	vscode.workspace.onDidChangeTextDocument(event => {
+		decorator.onTextChanged(event.document, event.contentChanges)
+	})
+
+	vscode.workspace.onDidChangeConfiguration(event => {
+		if (event.affectsConfiguration("rpw65.showCodeBytes")) {
+			const config = vscode.workspace.getConfiguration("rpw65")
+			decorator.enable(config.get("showCodeBytes"))
+		}
+	})
 }
 
 export function deactivate(): Thenable<void> | undefined {
@@ -495,3 +637,5 @@ async function updateStatusItem() {
 		statusBarItem.hide()
 	}
 }
+
+//------------------------------------------------------------------------------

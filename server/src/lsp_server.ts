@@ -53,14 +53,15 @@ export enum SemanticModifier {
 // *** TODO: figure out how to share this with client ***
 
 type CodeBytesEntry = {
-	a?: number			// address
-	d?: number[]		// data bytes
-//c?: number			// cycle count *** string instead? "2/3", "4+"
+  a?: number    // address
+  d?: number[]  // data bytes
+//c?: number    // cycle count *** string instead? "2/3", "4+"
 }
 
 type CodeBytes = {
-	// TODO: other information?
-	entries: CodeBytesEntry[]
+  modTime: number
+  startLine: number
+  entries: CodeBytesEntry[]
 }
 
 //------------------------------------------------------------------------------
@@ -420,12 +421,13 @@ export class LspServer {
     if (this.updateId !== undefined) {
       clearTimeout(this.updateId)
       delete this.updateId
+
+      for (let project of this.projects) {
+        project.update()
+      }
+      this.scheduleDiagnostics(this.updateFile)
+      delete this.updateFile
     }
-    for (let project of this.projects) {
-      project.update()
-    }
-    this.scheduleDiagnostics(this.updateFile)
-    delete this.updateFile
   }
 
   private scheduleDiagnostics(priorityFile?: SourceFile) {
@@ -639,11 +641,26 @@ export class LspServer {
         return
       }
 
-      const codeBytes: CodeBytes = {
-        entries: []
-        // *** TODO: other information?
+      let startLine: number | undefined
+      let endLine: number | undefined
+      if (params.arguments && params.arguments.length > 1) {
+        startLine = params.arguments[1].startLine
+        endLine = params.arguments[1].endLine
       }
-      for (let line of sourceDoc.sourceLines) {
+      if (startLine === undefined) {
+        startLine = 0
+      }
+      if (endLine === undefined || endLine > sourceDoc.sourceLines.length) {
+        endLine = sourceDoc.sourceLines.length
+      }
+
+      const codeBytes: CodeBytes = {
+        modTime: sourceFile.module.lstModTime,
+        startLine: startLine,
+        entries: []
+      }
+      for (let i = startLine; i < endLine; i += 1) {
+        const line = sourceDoc.sourceLines[i]
         let entry: CodeBytesEntry = {}
         if (line.address != -1 && line.objLength != 0) {
           if (line.objBuffer) {
