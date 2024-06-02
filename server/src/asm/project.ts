@@ -367,7 +367,8 @@ export class Module {
       this.scanLstFile()
 
       // watch for changes in .lst file
-      fs.watchFile(this.lstFilePath, (curStat, prevStat) => {
+      // TODO: change to fs.watch to monitor the entire bin directory
+      fs.watchFile(this.lstFilePath, { interval: 1000 }, (curStat, prevStat) => {
         if (curStat.mtime.getTime() != prevStat.mtime.getTime()) {
           this.lstModTime = curStat.mtime.getTime()
           this.scanLstFile()

@@ -126,7 +126,7 @@ class CodeLine {
 								contentText: curStr,
 								// *** settings to choose these colors? ***
 								// *** dark and light settings? ***
-								color: curChanged ? "#F00" : "#888"
+								color: curChanged ? "#F00" : "#999"
 							}
 						}))
 						curStr = byteStr

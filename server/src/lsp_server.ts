@@ -5,7 +5,7 @@ import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
 
-import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
+import { RpwProject, RpwSettings } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
@@ -14,7 +14,7 @@ import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
 import { SyntaxNames } from "./asm/syntax"
-import { SourceDoc, SourceLine } from "./code/source_doc"
+import { SourceDoc } from "./code/source_doc"
 import { Isa6502 } from "./isa6502"
 
 //------------------------------------------------------------------------------
