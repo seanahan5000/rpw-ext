@@ -409,6 +409,7 @@ class AcmeSyntax extends SyntaxDef {
 
       // disk
       [ "!source",    { create: () => { return new stm.IncludeStatement() }}],
+      [ "!src",       { create: () => { return new stm.IncludeStatement() }}],
       [ "!to",        { create: () => { return new stm.DiskStatement() }}],
       [ "!binary",    { create: () => { return new stm.IncBinStatement() }}],
 

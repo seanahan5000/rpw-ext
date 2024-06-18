@@ -106,7 +106,7 @@ class LspProject extends Project {
   }
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    this.server.removeTemporary(fullPath)
+    this.server.removeTemporary(this, fullPath)
     return super.openSourceFile(module, fullPath)
   }
 
@@ -207,10 +207,11 @@ export class LspServer {
 
   // if a file was opened in a project,
   //  remove a temporary project that already owned the file
-  removeTemporary(filePath: string) {
+  removeTemporary(curProject: Project, filePath: string) {
     for (let project of this.projects) {
-      if (project.isTemporary) {
+      if (project != curProject && project.isTemporary) {
         if (project.findSourceFile(filePath)) {
+          // only remove if it's alone in its project/module
           // NOTE: for now, just disable the project by removing its modules
           // Removing it completely will cause problems because caller is
           //  iterating through list of projects.

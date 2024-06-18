@@ -325,7 +325,7 @@ export class Tokenizer {
           }
           // look for Merlin's "--^"
           if (repeatIndex == 7) { // "-"
-            if (!this.syntax || this.syntax != Syntax.MERLIN) {
+            if (!this.syntax || this.syntax == Syntax.MERLIN) {
               if (this.position - start == 2) {
                 if (this.position < this.sourceLine.length) {
                   if (this.sourceLine[this.position] == "^") {

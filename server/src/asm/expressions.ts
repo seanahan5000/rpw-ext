@@ -228,6 +228,15 @@ export class SymbolExpression extends Expression {
     }
   }
 
+  setIsDefinition() {
+    if (!this.isDefinition) {
+      this.isDefinition = true
+      if (this.symbolType) {
+        this.symbol = new Symbol(this.symbolType, this)
+      }
+    }
+  }
+
   isVariableType(): boolean {
     return this.symbolType == SymbolType.Variable
   }

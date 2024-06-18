@@ -887,8 +887,8 @@ export class DataStatement extends Statement {
         break
       }
 
-      // DASM allows ".byte #<MYLABEL", for example
-      if (!parser.syntax || parser.syntax == Syntax.DASM) {
+      // DASM and MERLIN allow ".byte #<MYLABEL", for example
+      if (!parser.syntax || parser.syntax == Syntax.DASM || parser.syntax == Syntax.MERLIN) {
         if (token.getString() == "#") {
           parser.addToken(token)
           token = undefined
@@ -1383,7 +1383,7 @@ export class VarAssignStatement extends Statement {
 
 //------------------------------------------------------------------------------
 
-// MERLIN:  XC
+// MERLIN:  XC [OFF]
 //   DASM:  [.]PROCESSOR <type>
 //   ACME:  !cpu <type> [ { <block> } ]
 //   CA65:
@@ -1395,8 +1395,8 @@ export class CpuStatement extends Statement {
 
   parse(parser: Parser) {
     if (this.opNameLC == "xc") {
-      // no arguments for Merlin operation
-    } else {
+      const res = parser.mustAddToken(["", "off"], TokenType.Keyword)
+  } else {
 
       const res = parser.mustAddToken(["6502", "65c02", "65816"], TokenType.Keyword)
       if (res.index < 0) {
@@ -1560,9 +1560,13 @@ export class TextStatement extends Statement {
 //   LISA:
 //  SBASM:  <name> .MA [<params-list>]
 
+// ACME: params start with "." and are locals
+// CA65: params are simple symbols
+
 export class MacroDefStatement extends Statement {
 
   public macroName?: exp.SymbolExpression
+  public params: exp.SymbolExpression[] = []
 
   parse(parser: Parser) {
 
@@ -1590,12 +1594,12 @@ export class MacroDefStatement extends Statement {
       parser.insertMissingLabel()
     }
 
-    // TODO: rewrite/split this logic to be clearer
+    // TODO: rewrite/split/subclass this logic to be clearer
     if (parser.syntax != Syntax.MERLIN) {
       let token = parser.getNextToken()
       if (token) {
         // macro name
-        // TODO: generlize this
+        // TODO: generalize this
         if (token.type == TokenType.Symbol
             || token.type == TokenType.HexNumber) {
           const isDefinition = true
@@ -1618,6 +1622,13 @@ export class MacroDefStatement extends Statement {
               const expression = parser.addNextExpression(token)
               if (!expression) {
                 break
+              }
+
+              if (expression instanceof exp.SymbolExpression) {
+                expression.setIsDefinition()
+                this.params.push(expression)
+              } else {
+                expression.setError("Simple symbol expected")
               }
 
               token = parser.getNextToken()
@@ -1669,12 +1680,15 @@ export class MacroDefStatement extends Statement {
 
       prep.pushNesting(NestingType.Macro, () => {
         if (enabled) {
+          // TODO: ACME-only?
+          prep.scopeState.popZone()
           prep.endMacroDef()
         }
       })
 
       // TODO: pass in parameter list too?
-      // TODO: start new label scope here?
+      // TODO: ACME-only?
+      prep.scopeState.pushZone()
       prep.startMacroDef(this.macroName)
     }
   }
@@ -1709,7 +1723,8 @@ export class EndMacroDefStatement extends Statement {
       }
       prep.popNesting()
 
-      // TODO: pop label scope here?
+      // TODO: ACME-only?
+      prep.scopeState.popZone()
       prep.endMacroDef()
     }
   }
@@ -1833,6 +1848,15 @@ export class DummyStatement extends Statement {
 
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
+      // NOTE: With Merlin, the start of a dummy section implicitly
+      //  closes any currently active dummy section first.
+      // TODO: consider controlling this with a strict/lax switch
+      if (prep.module.project.syntax == Syntax.MERLIN) {
+        if (prep.isNested(NestingType.Struct)) {
+          prep.popNesting()
+          prep.scopeState.popScope()
+        }
+      }
       prep.pushNesting(NestingType.Struct)
     }
   }

@@ -1,5 +1,21 @@
 # RPW 65 Changelog
 
+### [1.2.x] - 2024-xx-xx
+
+A few additions to Merlin syntax so Prince of Persia sources parse cleanly-ish.
+
+#### Added:
+* MERLIN: Leading "#" in data directive expressions
+* MERLIN: DUM implicitly closes previous DUM
+* MERLIN: XC off
+* MERLIN: --^ for repeat end
+* ACME: !src alias for !source
+* ACME: !macro definition parameters
+
+#### Fixed:
+* Syntax highlighting on file lost when included file is closed
+* Syntax highlighting missing when file included multiple times
+
 ### [1.2.1] - 2024-05-23
 
 Minor changes, mainly to make Choplifter and Lode Runner disassemblies parse cleanly.
