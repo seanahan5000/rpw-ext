@@ -234,8 +234,10 @@ export class OpStatement extends Statement {
           } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
             parser.addExpression(parser.parseCA65Local(token, isDefinition))
             return
-          } else if ((str[0] == "-" || str[0] == "+")
-              && (str[0] == str[str.length - 1])) {
+          } else if (str[0] == "-" && (str[0] == str[str.length - 1])) {
+            // TODO: This only handles "-", not "+" because it would otherwise
+            //  be parsed as a unary operator.  See Parser.parseValueExpression
+            //  for the code that should be handling this.
             if (!parser.syntax || parser.syntax == Syntax.ACME) {
               if (str.length > 9) {
                 token.setError("Anonymous local is too long")
@@ -1672,20 +1674,20 @@ export class MacroDefStatement extends Statement {
       return
     }
 
-    if (enabled) {
-      if (prep.isNested(NestingType.Macro)) {
-        this.setError("Nested macro definitions not allowed")
-        return
+    if (prep.isNested(NestingType.Macro)) {
+      this.setError("Nested macro definitions not allowed")
+      return
+    }
+
+    prep.pushNesting(NestingType.Macro, () => {
+      if (enabled) {
+        // TODO: ACME-only?
+        prep.scopeState.popZone()
+        prep.endMacroDef()
       }
+    })
 
-      prep.pushNesting(NestingType.Macro, () => {
-        if (enabled) {
-          // TODO: ACME-only?
-          prep.scopeState.popZone()
-          prep.endMacroDef()
-        }
-      })
-
+    if (enabled) {
       // TODO: pass in parameter list too?
       // TODO: ACME-only?
       prep.scopeState.pushZone()
@@ -1710,19 +1712,19 @@ export class EndMacroDefStatement extends Statement {
   }
 
   preprocess(prep: Preprocessor, enabled: boolean) {
+
+    if (!prep.isNested(NestingType.Macro)) {
+      this.setError("End of macro without start")
+      return
+    }
+    if (prep.topNestingType() != NestingType.Macro) {
+      // TODO: figure out what exactly is unclosed and add to message
+      this.setError("End of macro with enclosed nested type")
+      return
+    }
+    prep.popNesting()
+
     if (enabled) {
-
-      if (!prep.isNested(NestingType.Macro)) {
-        this.setError("End of macro without start")
-        return
-      }
-      if (prep.topNestingType() != NestingType.Macro) {
-        // TODO: figure out what exactly is unclosed and add to message
-        this.setError("End of macro with enclosed nested type")
-        return
-      }
-      prep.popNesting()
-
       // TODO: ACME-only?
       prep.scopeState.popZone()
       prep.endMacroDef()

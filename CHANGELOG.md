@@ -11,8 +11,10 @@ A few additions to Merlin syntax so Prince of Persia sources parse cleanly-ish.
 * MERLIN: --^ for repeat end
 * ACME: !src alias for !source
 * ACME: !macro definition parameters
+* ACME: Anonymous locals ("+" and "-") in all expressions
 
 #### Fixed:
+* Macro definitions nested inside if/ifdef conditionals
 * Syntax highlighting on file lost when included file is closed
 * Syntax highlighting missing when file included multiple times
 

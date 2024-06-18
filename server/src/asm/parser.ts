@@ -635,19 +635,20 @@ export class Parser extends Tokenizer {
           if (this.syntax == Syntax.CA65) {
             return this.parseCA65Local(token, isDefinition)
           }
-        } else if ((str[0] == "-" || str[0] == "+")
-            && (str[0] == str[str.length - 1])) {
-          if (!this.syntax || this.syntax == Syntax.ACME) {
-            this.syntaxStats[Syntax.ACME] += 1
-            if (str.length > 9) {
-              token.setError("Anonymous local is too long")
-              return new exp.BadExpression([token])
-            }
-            // *** maybe macro invocation in first column? ***
-            // *** must be whitespace/eol afterwards to be label?
-            token.type = TokenType.Label
-            return this.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
+        }
+      }
+
+      if ((str[0] == "-" || str[0] == "+") && (str[0] == str[str.length - 1])) {
+        if (!this.syntax || this.syntax == Syntax.ACME) {
+          this.syntaxStats[Syntax.ACME] += 1
+          if (str.length > 9) {
+            token.setError("Anonymous local is too long")
+            return new exp.BadExpression([token])
           }
+          // *** maybe macro invocation in first column? ***
+          // *** must be whitespace/eol afterwards to be label?
+          token.type = TokenType.Label
+          return this.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
         }
       }
 
@@ -971,9 +972,17 @@ export class Parser extends Tokenizer {
         return this.parseSymbol(false, token)
       }
 
+      // ACME anonymous locals
+      // TODO: It's currently not possible to arrive here with str == "-" because
+      //  that will have already been treated as a unary operator.
+      if ((str[0] == "-" || str[0] == "+") && (str[0] == str[str.length - 1])) {
+        if (!this.syntax || this.syntax == Syntax.ACME) {
+          return this.parseSymbol(false, token)
+        }
+      }
+
       // NOTE: #>, #< (LISA) and ++,-- (ACME) are handled in OpStatement parsing
 
-      // *** what about str == "." ???
       if (str[0] == ".") {
         // *** look for keywords before looking for symbols ***
         // if not keyword, split off '.'
