@@ -16,15 +16,23 @@ import {
 
 // *** TODO: figure out how to share this with server ***
 
+type GetCodeBytesArgs = {
+  startLine?: number
+  endLine?: number
+  cycleCounts?: boolean
+}
+
 type CodeBytesEntry = {
 	a?: number			// address
 	d?: number[]		// data bytes
-//c?: number			// cycle count *** string instead? "2/3", "4+"
+	e?: boolean			// empty src line
+	c?: string			// cycle count ("3", "2/3", "4+", etc.)
 }
 
 type CodeBytes = {
-	modTime: number
+	modTime?: number
 	startLine: number
+  cycleCounts?: boolean
 	entries: CodeBytesEntry[]
 }
 
@@ -32,42 +40,78 @@ type CodeBytes = {
 
 type DecorationTypes = vscode.TextEditorDecorationType | vscode.TextEditorDecorationType[]
 
-// *** consider showing cycle counts ***
-
-// *** save indent string info to know update is really needed
-	// *** may need to force when lines combine via delete
-
 class CodeLine {
 	public address?: number
-	public bytes?: (number | undefined)[]
-	public decorations: DecorationTypes
-	// TODO: replacement code overlay
+	public data?: (number | undefined)[]
+	public isEmpty?: boolean
+	public cycleCount?: string
+	public decorations?: DecorationTypes
 
 	constructor (emptySrcLine = false) {
+		this.isEmpty = emptySrcLine
+	}
+
+	public rebuildDecorations(entry: CodeBytesEntry, showCycleCounts: boolean): boolean {
+		let changed = true
+		if (this.decorations && entry) {
+			if (this.address == entry.a && !this.data == !entry.d) {
+				if (!this.isEmpty == !entry.e) {
+					if (this.cycleCount == entry.c) {
+						changed = false
+						if (this.data) {
+							if (this.data.length == entry.d.length) {
+								for (let i = 0; i < this.data.length; i += 1) {
+									if (this.data[i] != entry.d[i]) {
+										changed = true
+										break
+									}
+								}
+							} else {
+								changed = true
+							}
+						}
+					}
+				}
+			}
+		}
+		if (changed) {
+			this.address = entry.a
+			this.data = entry.d
+			this.isEmpty = entry.e ?? false
+			this.cycleCount = entry.c
+			this.decorations = this.buildDecoration(showCycleCounts)
+		}
+		return changed
 	}
 
 	// *** don't rebuild indents on lines that are already indented ***
-
-	public rebuildDecorations(address?: number, bytes?: number[], emptySrcLine = false) {
+	public rebuildDecorations_OLD(address: number | undefined, bytes: number[] | undefined, emptySrcLine: boolean, showCycleCounts: boolean) {
 		this.address = address
-		this.bytes = bytes
-		this.decorations = this.buildDecoration(emptySrcLine)
+		this.data = bytes
+		this.isEmpty = emptySrcLine
+		this.decorations = this.buildDecoration(showCycleCounts)
 	}
 
 	public isIndent(): boolean {
-		return this.address === undefined && this.bytes === undefined
+		return this.address === undefined && this.data === undefined
 	}
 
-	private buildDecoration(emptySrcLine: boolean): DecorationTypes {
+	private buildDecoration(showCycleCounts: boolean): DecorationTypes {
 		const decorations: DecorationTypes = []
 
+		let emptySrcLine = this.isEmpty
+
 		// TODO: this case could eventually fold into general case
-		if (this.address === undefined && this.bytes === undefined) {
+		if (this.address === undefined && this.data === undefined) {
 
 			// TODO: figure out how to work around vscode bug
 			//	and avoid this hack using two decorations
 
-			const contentStr = "".padEnd(5 + 3 + 3 + 3 + 1/*2*/, "\xA0")
+			let contentStr = "".padEnd(5 + 3 + 3 + 3 + 2/*1*/ + (showCycleCounts ? 5 : 0), "\xA0")
+
+			// if (emptySrcLine) {
+			// 	contentStr += "\xA0"
+			// }
 			// const contentStr = "xxxx: xx xx xx\xA0\xA0"
 			decorations.push(vscode.window.createTextEditorDecorationType({
 				before: {
@@ -87,12 +131,16 @@ class CodeLine {
 		} else {
 
 			// address is "0000:" or "????:"
-			const addressStr = this.address === undefined ? "????:"
-				: this.address.toString(16).toUpperCase().padStart(4, "0") + ":"
+			let addressStr = this.address?.toString(16).toUpperCase() ?? "????"
+			if (addressStr.length <= 2) {
+				addressStr = addressStr.padStart(2, "0").padStart(4, "\xA0") + ":"
+			} else {
+				addressStr = addressStr.padStart(4, "0") + ":"
+			}
 
 			// just an address/offset, no bytes
-			if (this.bytes === undefined) {
-				const contentStr = addressStr.padEnd(5 + 3 + 3 + 3 + 2, "\xA0")
+			if (this.data === undefined) {
+				let contentStr = addressStr.padEnd(5 + 3 + 3 + 3 + 2 + (showCycleCounts ? 5 : 0), "\xA0")
 				decorations.push(vscode.window.createTextEditorDecorationType({
 					before: {
 						contentText: contentStr
@@ -106,14 +154,22 @@ class CodeLine {
 					let hasChanged = false
 					if (i == 3) {
 						hasChanged = !curChanged	// force final flush
+						if (showCycleCounts) {
+							if (this.cycleCount) {
+								// *** what about red color? ***
+								curStr += "\xA0\xA0" + this.cycleCount.padEnd(3, "\xA0")
+							} else {
+								curStr += "\xA0\xA0\xA0\xA0\xA0"
+							}
+						}
 						curStr += "\xA0\xA0"
 						byteStr = ""
-					} else if (i >= this.bytes.length) {
+					} else if (i >= this.data.length) {
 						byteStr = "\xA0\xA0\xA0"
-					} else if (this.bytes[i] === undefined) {
+					} else if (this.data[i] === undefined || this.data[i] === null) {
 						byteStr = "\xA0??"
 					} else {
-						let byteValue = this.bytes[i]
+						let byteValue = this.data[i]
 						if (byteValue < 0) {
 							hasChanged = true
 							byteValue = -byteValue
@@ -160,12 +216,14 @@ class CodeList {
 
 	public editor: vscode.TextEditor
 	public document: vscode.TextDocument
+	private showCycleCounts: boolean
 	private codeLines: CodeLine[]
 	private isCleared = true
 
-	constructor(editor: vscode.TextEditor) {
+	constructor(editor: vscode.TextEditor, showCycleCounts: boolean) {
 
 		this.editor = editor
+		this.showCycleCounts = showCycleCounts
 		this.document = editor.document
 		const lines = this.document.getText().split(/\r?\n/)
 
@@ -174,6 +232,10 @@ class CodeList {
 			const emptySrcLine = lines[i] == ""
 			const codeLine = new CodeLine(emptySrcLine)
 			this.codeLines.push(codeLine)
+
+			const entry: CodeBytesEntry = { e: emptySrcLine }
+			codeLine.rebuildDecorations(entry, this.showCycleCounts)
+			this.applyDecorations(i, codeLine.decorations)
 		}
 	}
 
@@ -184,19 +246,31 @@ class CodeList {
 
 	public applyCodeBytes(codeBytes: CodeBytes) {
 
-		// If this file is dirty or its mod time doesn't match codeBytes content,
-		//	clear all decorations and return.
-		if (this.document.isDirty || fs.statSync(this.document.fileName).mtime.getTime() > codeBytes.modTime) {
-			this.clear()
-			return
+		// console.log("    applyCodeBytes")	// ***
+
+		if (codeBytes.modTime != undefined) {
+			// If this file is dirty or its mod time doesn't match codeBytes content,
+			//	clear all decorations and return.
+			if (this.document.isDirty || fs.statSync(this.document.fileName).mtime.getTime() > codeBytes.modTime) {
+				this.clear()
+				return
+			}
 		}
 
 		this.isCleared = false
 		for (let i = codeBytes.startLine; i < codeBytes.startLine + codeBytes.entries.length; i += 1) {
-			this.clearDecorations(i, 1)
 			const codeEntry = codeBytes.entries[i - codeBytes.startLine]
-			this.codeLines[i].rebuildDecorations(codeEntry.a, codeEntry.d)
-			this.applyDecorations(i, this.codeLines[i].decorations)
+			if (this.codeLines[i]) {
+				const oldDecorations = this.codeLines[i].decorations
+				if (this.codeLines[i].rebuildDecorations(codeEntry, codeBytes.cycleCounts ?? false)) {
+					if (oldDecorations) {
+						this.removeDecorations(oldDecorations)
+					}
+					this.applyDecorations(i, this.codeLines[i].decorations)
+				}
+			} else {
+				this.clearDecorations(i, 1)
+			}
 		}
 	}
 
@@ -206,6 +280,8 @@ class CodeList {
 		if (this.isCleared) {
 			return
 		}
+
+		// console.log("applyEdits")	// ***
 
 		let updateRanges: UpdateRange[] = []
 
@@ -282,7 +358,8 @@ class CodeList {
 					codeLine = new CodeLine()
 					this.codeLines[i] = codeLine
 				}
-				codeLine.rebuildDecorations(undefined, undefined)
+				// *** empty lines or not? ***
+				codeLine.rebuildDecorations_OLD(undefined, undefined, false, this.showCycleCounts)
 			}
 
 			// save range for later application
@@ -294,6 +371,7 @@ class CodeList {
 		for (let i = updateRanges.length; --i >= 0; ) {
 			const range = updateRanges[i]
 			for (let i = range.start; i < range.end; i += 1) {
+				// *** don't do repeated calls here ***
 				this.applyDecorations(i, this.codeLines[i].decorations)
 			}
 		}
@@ -313,16 +391,20 @@ class CodeList {
 
 	private clearDecorations(startLine: number, count: number) {
 		for (let i = startLine; i < startLine + count; i += 1) {
-			const decorations = this.codeLines[i].decorations
+			const decorations = this.codeLines[i]?.decorations
 			if (decorations) {
-				if (Array.isArray(decorations)) {
-					for (let type of decorations) {
-						this.editor.setDecorations(type, [])
-					}
-				} else {
-					this.editor.setDecorations(decorations, [])
-				}
+				this.removeDecorations(decorations)
 			}
+		}
+	}
+
+	private removeDecorations(decorations: DecorationTypes) {
+		if (Array.isArray(decorations)) {
+			for (let type of decorations) {
+				this.editor.setDecorations(type, [])
+			}
+		} else {
+			this.editor.setDecorations(decorations, [])
 		}
 	}
 }
@@ -347,7 +429,7 @@ class Decorator {
   private updateId?: NodeJS.Timeout
 
 	constructor(enabled: boolean) {
-		this.enabled = enabled
+		this.enabled = false //***enabled
 	}
 
 	public enable(enabled: boolean) {
@@ -369,17 +451,22 @@ class Decorator {
 		}
 	}
 
-	public scheduleUpdate(fullUpdate = false) {
+	public scheduleUpdate(fullUpdate = false, timeout?: number) {
 		if (this.enabled) {
 			if (fullUpdate) {
 				this.fullUpdate = true
 			}
 			if (this.updateId !== undefined) {
+				// console.log("unscheduleUpdate")	// ***
 				clearTimeout(this.updateId)
 			}
 			// delay for at least 10ms so the visible ranges values stabilize
-			const updateTimeout = 10
-			this.updateId = setTimeout(() => { this.executeUpdate() }, updateTimeout)
+			const updateTimeout = timeout ?? 10
+			// console.log(`scheduleUpdate${this.fullUpdate ? " (full)" : ""} ${updateTimeout}`)	// ***
+			this.updateId = setTimeout(() => {
+				// console.log("call executeUpdate")	// ***
+				this.executeUpdate()
+			}, updateTimeout)
 		}
 	}
 
@@ -388,7 +475,8 @@ class Decorator {
       clearTimeout(this.updateId)
       delete this.updateId
 
-			await this.updateDecorations()
+			// console.log("updateDecorations")	// ***
+			await this.updateDecorations()		// *** await?
     }
   }
 
@@ -424,6 +512,8 @@ class Decorator {
 
 			if (editor.document.languageId == "rpw65") {
 
+				const showCycleCounts = true		// TODO: make a setting
+
 				// Flatten visible ranges into a single range
 				//	and pad to cover partial lines.
 				let visibleStart = 999999
@@ -456,18 +546,19 @@ class Decorator {
 				}
 
 				if (!codeList) {
-					codeList = new CodeList(editor)
+					codeList = new CodeList(editor, showCycleCounts)
 					newLists.push(codeList)
 					refresh = true
 				}
 
 				if (refresh) {
+
 					const request0 = {
 						command: "rpw65.getCodeBytes",
 						arguments: []
 					}
 					request0.arguments.push(editor.document.uri.toString())
-					request0.arguments.push({ startLine: visibleStart, endLine: visibleEnd + 1 })
+					request0.arguments.push({ startLine: visibleStart, endLine: visibleEnd + 1, cycleCounts: showCycleCounts })
 					updateEntries0.push({ request: request0, codeList })
 
 					if (visibleStart > 0) {
@@ -476,7 +567,7 @@ class Decorator {
 							arguments: []
 						}
 						request1.arguments.push(editor.document.uri.toString())
-						request1.arguments.push({ startLine: 0, endLine: visibleStart })
+						request1.arguments.push({ startLine: 0, endLine: visibleStart, cycleCounts: showCycleCounts })
 						updateEntries1.push({ request: request1, codeList })
 					}
 
@@ -485,7 +576,7 @@ class Decorator {
 						arguments: []
 					}
 					request1.arguments.push(editor.document.uri.toString())
-					request1.arguments.push({ startLine: visibleEnd })
+					request1.arguments.push({ startLine: visibleEnd, cycleCounts: showCycleCounts })
 					updateEntries1.push({ request: request1, codeList })
 				}
 			}
@@ -494,12 +585,14 @@ class Decorator {
 		this.fullUpdate = false
 
 		for (let entry of updateEntries0) {
+			// console.log("  sendRequest0 getCodeBytes")	// ***
 			const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, entry.request)
 			if (content) {
 				entry.codeList.applyCodeBytes(content)
 			}
 		}
 		for (let entry of updateEntries1) {
+			// console.log("  sendRequest1 getCodeBytes")	// ***
 			const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, entry.request)
 			if (content) {
 				entry.codeList.applyCodeBytes(content)
@@ -509,12 +602,21 @@ class Decorator {
 
 	public async onTextChanged(document: vscode.TextDocument, changes: readonly vscode.TextDocumentContentChangeEvent[]) {
 		if (this.enabled) {
+
+			// console.log("onTextChanged")	// ***
+
 			await this.executeUpdate()
+
 			for (let codeList of this.codeLists) {
 				if (codeList.document == document) {
 					codeList.applyEdits(changes)
 				}
 			}
+
+			// longer delay after text changes
+			// *** only if document matched above?
+			// *** maybe only on save, not periodic?
+			decorator.scheduleUpdate(true, 3000)
 		}
 	}
 }
@@ -570,17 +672,24 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
 	client.onNotification("rpw.syntaxChanged", () => { updateStatusItem() })
-	client.onNotification("rpw.asmCodeChanged", () => { decorator.scheduleUpdate(true) })
+	client.onNotification("rpw.codeBytesChanged", () => {
+		// console.log("onNotification rpw.codeBytesChanged")	// ***
+		decorator.scheduleUpdate(true)
+	})
 
+	// *** why???
 	vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
-		decorator.scheduleUpdate()
+		// console.log("onDidChangeTextEditorVisibleRanges")	// ***
+		// decorator.scheduleUpdate()
 	})
 
 	vscode.window.onDidChangeVisibleTextEditors(event => {
+		// console.log("onDidChangeVisibleTextEditors")	// ***
 		decorator.scheduleUpdate()
 	})
 
 	vscode.workspace.onDidChangeTextDocument(event => {
+		// console.log("onDidChangeTextDocument")	// ***
 		decorator.onTextChanged(event.document, event.contentChanges)
 	})
 
@@ -592,8 +701,8 @@ export function activate(context: vscode.ExtensionContext) {
 	})
 }
 
-export function deactivate(): Thenable<void> | undefined {
-	return client?.stop()
+export async function deactivate() {
+	return await client?.stop()
 }
 
 export async function renumberCmd() {

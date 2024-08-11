@@ -53,15 +53,23 @@ export enum SemanticModifier {
 
 // *** TODO: figure out how to share this with client ***
 
+type GetCodeBytesArgs = {
+  startLine?: number
+  endLine?: number
+  cycleCounts?: boolean
+}
+
 type CodeBytesEntry = {
-  a?: number    // address
-  d?: number[]  // data bytes
-//c?: number    // cycle count *** string instead? "2/3", "4+"
+	a?: number			// address
+	d?: number[]		// data bytes
+	e?: boolean			// empty src line
+	c?: string			// cycle count ("3", "2/3", "4+", etc.)
 }
 
 type CodeBytes = {
-  modTime: number
+  modTime?: number
   startLine: number
+  cycleCounts?: boolean
   entries: CodeBytesEntry[]
 }
 
@@ -110,8 +118,8 @@ class LspProject extends Project {
     return super.openSourceFile(module, fullPath)
   }
 
-  asmCodeChanged() {
-    this.server.connection.sendNotification("rpw.asmCodeChanged")
+  codeBytesChanged() {
+    this.server.connection.sendNotification("rpw.codeBytesChanged")
   }
 }
 
@@ -235,10 +243,10 @@ export class LspServer {
   onInitialize(params: lsp.InitializeParams): lsp.InitializeResult {
 
     // TODO: enable this for debugging immediately after initialize
-    // const n = 1
-    // while (n) {
-    //   console.log()
-    // }
+    const n = 1
+    while (n) {
+      console.log()
+    }
 
     const result: lsp.InitializeResult = {
       capabilities: {
@@ -346,20 +354,6 @@ export class LspServer {
       this.projects.push(project)
     }
 
-    // if no project, scan for ASM.* files
-    // if (this.projects.length == 0) {
-    //   const files = fs.readdirSync(this.workspaceFolderPath)
-    //   for (let i = 0; i < files.length; i += 1) {
-    //     if (files[i].toUpperCase().indexOf("ASM.") != 0) {
-    //       continue
-    //     }
-    //     if (!this.addFileProject(files[i], false)) {
-    //       // TODO: error handling
-    //     }
-    //     break
-    //   }
-    // }
-
     this.isInitialized_resolve(true)
 
     // register for all configuration changes
@@ -369,13 +363,13 @@ export class LspServer {
     //   this.connection.console.log('Workspace folder change event received.')
     // })
 
+    this.scheduleUpdate()
+
     // send this so client will ask for initial syntax
     this.connection.sendNotification("rpw.syntaxChanged")
 
     // send this so client will ask for initial code bytes
-    this.connection.sendNotification("rpw.asmCodeChanged")
-
-    this.scheduleUpdate()
+    this.connection.sendNotification("rpw.codeBytesChanged")
   }
 
   private async onDidChangeConfiguration() {
@@ -389,6 +383,9 @@ export class LspServer {
 
     // send this so client will ask for syntax
     this.connection.sendNotification("rpw.syntaxChanged")
+
+    // send this so client will ask for initial code bytes
+    this.connection.sendNotification("rpw.codeBytesChanged")
   }
 
   // TODO: need fallback if vscode client not present
@@ -427,6 +424,7 @@ export class LspServer {
       for (let project of this.projects) {
         project.update()
       }
+
       this.scheduleDiagnostics(this.updateFile)
       delete this.updateFile
     }
@@ -626,8 +624,88 @@ export class LspServer {
 
     this.executeUpdate()
 
-    if (params.command == "rpw65.getCodeBytes") {
+    if (params.command == "rpw65.getCodeBytesXXX") {
+
+      let startLine: number | undefined
+      let endLine: number | undefined
+      let cycleCounts = false
+      if (params.arguments && params.arguments.length > 1) {
+        startLine = params.arguments[1].startLine
+        endLine = params.arguments[1].endLine
+        cycleCounts = params.arguments[1].cycleCounts ?? false
+      }
+      if (startLine === undefined) {
+        startLine = 0
+      }
+
+      // no .lst file, so try sourceFile.module.lineRecords
       if (!sourceFile.module.sourceDocs) {
+        if (sourceFile.module.lineRecords) {
+          const codeBytes: CodeBytes = {
+            startLine,
+            cycleCounts,
+            entries: []
+          }
+          let lineIndex = 0
+          for (let line of sourceFile.module.lineRecords) {
+            if (line.sourceFile == sourceFile) {
+              if (lineIndex >= startLine) {
+                if (endLine !== undefined && lineIndex >= endLine) {
+                  break
+                }
+                let entry: CodeBytesEntry = {}
+                if (line.address || (line.bytes && line.bytes.length > 0)) {
+                  entry.a = line.address
+                  entry.d = []
+                  if (line.bytes) {
+                    for (let i = 0; i < line.bytes.length; i += 1) {
+                      entry.d.push(line.bytes[i])
+                    }
+                  }
+                  if (line.statement?.sourceLine == "") {
+                    entry.e = true
+                  }
+                  if (cycleCounts) {
+                    if (line.statement instanceof OpStatement) {
+                      if (line.bytes && line.bytes[0]) {
+                        entry.c = Isa6502.ops[line.bytes[0]].cy
+                        if (entry.c == "2/3+") {
+                          let pageCross = false
+                          if (line.address && line.bytes[1]) {
+                            let offset = line.bytes[1]
+                            if (offset > 127) {
+                              offset -= 256
+                            }
+                            const dstPage = (line.address + 2 + offset) >> 8
+                            pageCross = line.address >> 8 != dstPage
+                          }
+                          entry.c = pageCross ? "2/4" : "2/3"
+                          // *** swap to 4/2 and 3/2 if negative branch ***
+                        } else if (entry.c == "4+") {
+                          if (line.bytes[1] == 0x00) {
+                            entry.c = "4"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                // if (line.address != -1 && line.objLength != 0) {
+                //   if (line.objBuffer) {
+                //     entry.a = line.address
+                //     entry.d = []
+                //     for (let i = 0; i < line.objLength; i += 1) {
+                //       entry.d.push(line.objBuffer[line.objOffset + i])
+                //     }
+                //   }
+                // }
+                codeBytes.entries.push(entry)
+              }
+              lineIndex += 1
+            }
+          }
+          return codeBytes
+        }
         return
       }
 
@@ -643,15 +721,6 @@ export class LspServer {
         return
       }
 
-      let startLine: number | undefined
-      let endLine: number | undefined
-      if (params.arguments && params.arguments.length > 1) {
-        startLine = params.arguments[1].startLine
-        endLine = params.arguments[1].endLine
-      }
-      if (startLine === undefined) {
-        startLine = 0
-      }
       if (endLine === undefined || endLine > sourceDoc.sourceLines.length) {
         endLine = sourceDoc.sourceLines.length
       }
@@ -670,6 +739,10 @@ export class LspServer {
             entry.d = []
             for (let i = 0; i < line.objLength; i += 1) {
               entry.d.push(line.objBuffer[line.objOffset + i])
+            }
+            if (line.label == "" && line.opcode == "" &&
+                line.args == "" && line.comment == "") {
+              entry.e = true
             }
           }
         }
@@ -839,7 +912,7 @@ export class LspServer {
                 lineStr = lineStr.padEnd(10, "\xA0")
 
                 // opcode
-                lineStr += upperCase ? opEntry.op.toUpperCase() : opEntry.op + " "
+                lineStr += (upperCase ? opEntry.op.toUpperCase() : opEntry.op) + " "
 
                 // addressing mode expression, if any
                 let opExp = ""
