@@ -12,6 +12,7 @@ A few additions to Merlin syntax so Prince of Persia sources parse cleanly-ish.
 * ACME: !src alias for !source
 * ACME: !macro definition parameters
 * ACME: Anonymous locals ("+" and "-") in all expressions
+* DASM: Allow segment without name
 
 #### Fixed:
 * Macro definitions nested inside if/ifdef conditionals

@@ -249,6 +249,40 @@ export class Parser extends Tokenizer {
     }
   }
 
+  public dotExtend(token: Token) {
+    if (!this.syntax ||
+        this.syntax == Syntax.DASM ||
+        this.syntax == Syntax.ACME ||
+        this.syntax == Syntax.CA65) {
+      if (token.getString() == ".") {
+        const savedPosition = this.position
+        const nextToken = this.getVeryNextToken()
+        if (nextToken) {
+          if (nextToken.type == TokenType.Operator) {
+            this.position = savedPosition
+            return
+          }
+          token.end = nextToken.end
+          token.type = TokenType.Symbol
+          if (this.syntax == Syntax.CA65) {
+            return
+          }
+        }
+      }
+      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+        while (this.peekVeryNextChar() == ".") {
+          this.position += 1
+          const nextToken = this.getVeryNextToken()
+          if (!nextToken) {
+            break
+          }
+          token.end = nextToken.end
+          token.type = TokenType.Symbol
+        }
+      }
+    }
+  }
+
   private parseStatement(): stm.Statement {
 
     this.nodeSet = []
@@ -259,16 +293,32 @@ export class Parser extends Tokenizer {
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
 
-    let symExp = this.parseSymbol(true)
-    if (symExp) {
-      this.addExpression(symExp)
-      if (symExp instanceof exp.SymbolExpression) {
-        this.labelExp = symExp
-        if (symExp.isVariableType()) {
-          // *** this is merlin-only ***
-          const token = this.peekNextToken()
-          if (token?.getString() == "=") {
-            statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+    // check for keyword in the first column
+    if (!this.syntax ||
+        this.syntax == Syntax.ACME ||
+        this.syntax == Syntax.CA65) {
+      const savedPosition = this.position
+      const token = this.getNextToken()
+      if (token) {
+        statement = this.parseKeyword(token)
+        if (!statement) {
+          this.position = savedPosition
+        }
+      }
+    }
+
+    if (!statement) {
+      const symExp = this.parseSymbol(true)
+      if (symExp) {
+        this.addExpression(symExp)
+        if (symExp instanceof exp.SymbolExpression) {
+          this.labelExp = symExp
+          if (symExp.isVariableType()) {
+            // *** this is merlin-only ***
+            const token = this.peekNextToken()
+            if (token?.getString() == "=") {
+              statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+            }
           }
         }
       }
@@ -342,24 +392,39 @@ export class Parser extends Tokenizer {
 
   private parseKeyword(token: Token): stm.Statement | undefined {
     let statement: stm.Statement | undefined
+
+    this.dotExtend(token)
+
     let keywordLC = token.getString().toLowerCase()
     let altwordLC: string | undefined
+
+    if (this.syntax == Syntax.CA65) {
+      // CA65 allows labels that start with "." if they are followed by ":"
+      if (keywordLC[0] == ".") {
+        const nextChar = this.peekVeryNextChar()
+        if (nextChar == ":") {
+          return
+        }
+      }
+    }
 
     // DASM allows optional "." or "#" on all directives
     if (!this.syntax || this.syntax == Syntax.DASM) {
       if (keywordLC[0] == ".") {
         // period has already been prepended elsewhere
-        if (!this.syntax) {
+        // *** why only on no syntax? ***
+        // if (!this.syntax) {
           altwordLC = keywordLC
-        }
+        // }
         // keyword now excludes prefix operator
         keywordLC = keywordLC.substring(1)
       } else if (keywordLC == "#") {
         const nextToken = this.getVeryNextToken()
         if (nextToken) {
-          if (!this.syntax) {
+          // *** why only on no syntax? ***
+          // if (!this.syntax) {
             altwordLC = keywordLC
-          }
+          // }
           // keyword excludes prefix operator
           keywordLC = nextToken.getString().toLowerCase()
           // token includes prefix operator
@@ -507,56 +572,62 @@ export class Parser extends Tokenizer {
         }
       }
 
-      if (nextChar == ".") {
-
-        // look for possible keywords in the first column and
-        //  count them but don't parse them
-        if (!this.syntax) {
-          const savedPosition = this.position
-          const t1 = token ?? this.getNextToken()
-          const keywordLC = t1?.getString().toLowerCase() ?? ""
-          for (let i = 1; i < SyntaxDefs.length; i += 1) {
-            const k = SyntaxDefs[i].keywordMap.get(keywordLC)
-            if (k) {
-              this.syntaxStats[i] += 1
-            }
-          }
-          this.position = savedPosition
-        }
-
-        // can't allow this in generic syntax case because it will
-        //  cause problems in files that use locals starting with '.'
-        if (this.syntax == Syntax.CA65) {
-          return
-        }
-      }
+      // if (nextChar == ".") {
+      //
+      //   // look for possible keywords in the first column and
+      //   //  count them but don't parse them
+      //   if (!this.syntax) {
+      //     const savedPosition = this.position
+      //     const t1 = token ?? this.getNextToken()
+      //     const keywordLC = t1?.getString().toLowerCase() ?? ""
+      //     for (let i = 1; i < SyntaxDefs.length; i += 1) {
+      //       const k = SyntaxDefs[i].keywordMap.get(keywordLC)
+      //       if (k) {
+      //         this.syntaxStats[i] += 1
+      //       }
+      //     }
+      //     this.position = savedPosition
+      //   }
+      // }
 
       // detected indented variable assignment
       if (nextChar == " " || nextChar == "\t") {
-        const savedPosition = this.position
+        const savedPosition1 = this.position
         const t1 = token ?? this.getNextToken()
-        const t2 = this.peekNextToken()
+
+        if (t1) {
+          this.dotExtend(t1)
+        }
+
+        const savedPosition2 = this.position
+        const t2 = this.getNextToken()
+
         // ignore "*=$1000" syntax for setting org
         if (!t1 || !t2 || t1.getString() == "*") {
-          this.position = savedPosition
+          this.position = savedPosition1
           return
         }
+
+        this.dotExtend(t2)
+
         const t2str = t2.getString().toLowerCase()
         if (t2str == "=") {
           if (!this.syntax || this.syntax == Syntax.ACME || this.syntax == Syntax.CA65) {
             this.syntaxStats[Syntax.ACME] += 1
             this.syntaxStats[Syntax.CA65] += 1
             token = t1
+            this.position = savedPosition2
           } else {
-            this.position = savedPosition
+            this.position = savedPosition1
             return
           }
         } else if (t2str == ":=" || t2str == ".set") {
           if (!this.syntax || this.syntax == Syntax.CA65) {
             this.syntaxStats[Syntax.CA65] += 1
             token = t1
+            this.position = savedPosition2
           } else {
-            this.position = savedPosition
+            this.position = savedPosition1
             return
           }
         // TODO: hack for handling indented data defs in .structs
@@ -570,12 +641,13 @@ export class Parser extends Tokenizer {
             || t2str == ".tag") {
           if (this.syntax == Syntax.CA65) {
             token = t1
+            this.position = savedPosition2
           } else {
-            this.position = savedPosition
+            this.position = savedPosition1
             return
           }
         } else {
-          this.position = savedPosition
+          this.position = savedPosition1
           return
         }
       }
@@ -603,15 +675,16 @@ export class Parser extends Tokenizer {
     // a token that starts with a "." could be a local or a keyword
     //  depending on the syntax
     if (token.type == TokenType.Symbol && str[0] == ".") {
-      // *** maybe duplicate in parseValueExpression?
-      // if (isDefinition) {
-        // turn the token into a single character "." and back up
-        // *** TODO: add logic to decide when to do this ***
+      // *** fix parseLocal instead? ***
+    //   // *** maybe duplicate in parseValueExpression?
+    //   // if (isDefinition) {
+    //     // turn the token into a single character "." and back up
+    //     // *** TODO: add logic to decide when to do this ***
         token.type = TokenType.Operator
         token.end = token.start + 1
         this.position = token.end
         str = "."
-      // }
+    //   // }
     }
 
     if (token.type == TokenType.Operator) {
@@ -635,6 +708,22 @@ export class Parser extends Tokenizer {
           if (this.syntax == Syntax.CA65) {
             return this.parseCA65Local(token, isDefinition)
           }
+        } else if (str == ".") {
+          // CA65 allows labels that start with "." if they are followed by ":"
+          if (this.syntax == Syntax.CA65) {
+            this.dotExtend(token)
+            const c = this.peekVeryNextChar()
+            if (c == ":") {
+              token.type = TokenType.Label
+              const result = this.newSymbolExpression([token], SymbolType.Simple, isDefinition)
+              token = this.getVeryNextToken()
+              if (token) {
+                this.addToken(token)
+              }
+              return result
+            }
+            this.ungetToken(token)
+          }
         }
       }
 
@@ -652,8 +741,8 @@ export class Parser extends Tokenizer {
         }
       }
 
+      // TODO: generalize this in syntax
       if (str == ".") {
-        // *** could be directive in first column ***
         if (!this.syntax ||
             this.syntax == Syntax.DASM ||
             this.syntax == Syntax.ACME) {       // *** what others?
@@ -917,6 +1006,7 @@ export class Parser extends Tokenizer {
       }
     } else {
       // built-in call without parens or parameters
+      // TODO: return undefined if no match
     }
     return new exp.Expression(this.endExpression())
   }
@@ -924,15 +1014,22 @@ export class Parser extends Tokenizer {
   // *** what happens to token if not used?
     // *** force this.position = token.end ???
   public parseValueExpression(token: Token): exp.Expression | undefined {
+
+    this.dotExtend(token)
+
     let str = token.getString()
 
     if (token.type == TokenType.Symbol) {
       if (str[0] == ".") {
-        // For CA65, symbol tokens starting with "." are never symbols.
-        //  They're either .define invocations or built-in functions
+        // For CA65, symbol tokens starting with "." are almost never symbols.
+        //  They're either .define invocations or built-in functions,
+        //  unless a label was defined in the form ".label:"
         if (this.syntax == Syntax.CA65) {
+          // TODO: skip this when the token is not a function name
           return this.parseFunctionExpression(token)
         }
+
+        return this.parseSymbol(false, token)
       }
     } else if (token.type == TokenType.Operator) {
       if (str == "$" || str == "%") {
@@ -971,6 +1068,12 @@ export class Parser extends Tokenizer {
         // *** possible cheap locals
         return this.parseSymbol(false, token)
       }
+      if (str == "#") {
+        if (this.syntax == Syntax.DASM) {
+          this.addToken(token)
+          return this.mustAddNextExpression()
+        }
+      }
 
       // ACME anonymous locals
       // TODO: It's currently not possible to arrive here with str == "-" because
@@ -983,13 +1086,13 @@ export class Parser extends Tokenizer {
 
       // NOTE: #>, #< (LISA) and ++,-- (ACME) are handled in OpStatement parsing
 
-      if (str[0] == ".") {
-        // *** look for keywords before looking for symbols ***
-        // if not keyword, split off '.'
-        // *** parse symbol
-        // *** if not symbol, ???
-        return this.parseSymbol(false, token)
-      }
+      // if (str[0] == ".") {
+      //   // *** look for keywords before looking for symbols ***
+      //   // if not keyword, split off '.'
+      //   // *** parse symbol
+      //   // *** if not symbol, ???
+      //   return this.parseSymbol(false, token)
+      // }
       if (str == "]") {
         if (!this.syntax || this.syntax == Syntax.MERLIN) {
           return this.parseVarExpression(token, false)

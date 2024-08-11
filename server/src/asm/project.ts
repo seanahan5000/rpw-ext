@@ -3,8 +3,9 @@ import * as fs from 'fs'
 import { RpwProject, RpwSettings, RpwSettingsDefaults } from "../rpw_types"
 import { Syntax, SyntaxMap, SyntaxDefs } from "./syntax"
 import { Statement } from "./statements"
-import { Preprocessor } from "./preprocessor"
 import { Parser } from "./parser"
+import { Preprocessor } from "./preprocessor"
+import { Assembler } from "./assembler"
 import { Symbol } from "./symbols"
 
 import { SourceDocBuilder } from "../code/source_builder"
@@ -21,6 +22,11 @@ export type LineRecord = {
   lineNumber: number,
   statement?: Statement
   // TODO: isVisible?
+
+  address?: number
+  size?: number       // *** use bytes.length instead separate size?
+                      // *** only valid from pass1 to pass2?
+  bytes?: number[]
 }
 
 
@@ -174,7 +180,7 @@ export class Project {
     }
   }
 
-  asmCodeChanged() {
+  codeBytesChanged() {
   }
 
   settingsChanged(newDefaultSettings?: RpwSettings) {
@@ -372,20 +378,21 @@ export class Module {
         if (curStat.mtime.getTime() != prevStat.mtime.getTime()) {
           this.lstModTime = curStat.mtime.getTime()
           this.scanLstFile()
-          this.project.asmCodeChanged()
+          this.project.codeBytesChanged()
         }
       })
     }
   }
 
   private scanLstFile() {
-    const lstText = fs.readFileSync(this.lstFilePath!, 'utf8')
-    const lstLines = lstText.split(/\r?\n/)
-    const settings = RpwSettingsDefaults    // TODO: clean this up
-    this.sourceDocs = SourceDocBuilder.buildLstDocs(settings, this.lstFilePath!/***/, lstLines)
-    // *** builder needs to throw errors ***
+    return
+    // const lstText = fs.readFileSync(this.lstFilePath!, 'utf8')
+    // const lstLines = lstText.split(/\r?\n/)
+    // const settings = RpwSettingsDefaults    // TODO: clean this up
+    // this.sourceDocs = SourceDocBuilder.buildLstDocs(settings, this.lstFilePath!/***/, lstLines)
+    // // *** builder needs to throw errors ***
 
-    // *** link SourceDocs to modules sources
+    // // *** link SourceDocs to modules sources
   }
 
   update(syntaxStats: number[]) {
@@ -393,9 +400,6 @@ export class Module {
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
     this.variableMap = new Map<string, Symbol>
-
-    // let asm = new Assembler(this)
-    // asm.parse(this.srcName)
 
     const prep = new Preprocessor(this)
     const lineRecords = prep.preprocess(this.srcName, syntaxStats)
@@ -405,6 +409,9 @@ export class Module {
     }
 
     this.lineRecords = lineRecords
+
+    const asm = new Assembler(this)
+    asm.assemble(this.lineRecords)
 
     // link up all symbols
     // TODO: move to assembler?

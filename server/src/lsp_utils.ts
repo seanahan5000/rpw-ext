@@ -239,7 +239,7 @@ export class Completions {
               this.addUnclassified = ++index
               checkXY = true
               break
-            case OpMode.BRANCH:
+            case OpMode.REL:
               // TODO: constrain to only close-by code
               // TODO: handle both zone and cheap locals
               if (prevChar == ":") {

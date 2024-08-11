@@ -104,7 +104,7 @@ export class Expression extends Node {
   }
 
   // TODO: make these abstract?
-
+  // TODO: or also resolve to number array?
   resolve(): number | undefined {
     return
   }
@@ -181,6 +181,8 @@ export class StringExpression extends Expression {
       return
     }
     let str = this.children[0].getString()
+    // TODO: this is merlin-only
+    // TODO: CA65 only allows single character string with single quote
     const highFlip = str == '"' ? 0x80 : 0x00
     str = this.children[1].getString()
     if (str.length == 1) {
@@ -435,15 +437,19 @@ export class PcExpression extends Expression {
     super(token ? [token] : undefined)
   }
 
+  public setValue(pc: number) {
+    this.value = pc
+  }
+
   resolve(): number | undefined {
-    if (this.value === undefined) {
-      // TODO: check for and capture actual PC
-    }
     return this.value
   }
 
-  getSize() {
-    return 2
+  getSize(): number | undefined {
+    if (this.value !== undefined) {
+      return this.value < 256 ? 1 : 2
+    }
+    // *** else return 2???
   }
 }
 
@@ -456,6 +462,8 @@ export class FileNameExpression extends Expression {
 }
 
 //------------------------------------------------------------------------------
+
+// *** get rid of this and handle directly in statements? ***
 
 export class AlignExpression extends Expression {
 

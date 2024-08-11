@@ -1,10 +1,12 @@
 
 import * as exp from "./expressions"
 import { Parser } from "./parser"
+import { Assembler } from "./assembler"
 import { Preprocessor, SymbolUtils, NestingType } from "./preprocessor"
 import { SymbolFrom, SymbolType } from "./symbols"
 import { Syntax, } from "./syntax"
 import { Node, Token, TokenType } from "./tokenizer"
+import { Isa6502 } from "../isa6502"
 
 //------------------------------------------------------------------------------
 
@@ -14,7 +16,7 @@ export abstract class Statement extends exp.Expression {
   public labelExp?: exp.SymbolExpression
   public opExp?: exp.Expression         // FIXME: easy to confuse with opExpression
   public opNameLC = ""
-  public enabled = true
+  public enabled = true   // *** where is this used? updated?
 
   // link between conditional statement groups, used to build code folding ranges
   public foldEnd?: Statement
@@ -51,6 +53,19 @@ export abstract class Statement extends exp.Expression {
   }
 
   // TODO: should any statement need resolve() or getSize()?
+
+  // only called if enabled
+  // return size in bytes
+  pass1(asm: Assembler): number | undefined {
+    // *** layout of instructions, pc tracking
+      // *** think about how this will work with nesting
+    return
+  }
+
+  // only called if enabled
+  pass2(asm: Assembler, dataBytes: number[]) {
+    // *** generation of bytes
+  }
 }
 
 
@@ -74,7 +89,7 @@ export enum OpMode {
   IND,
   INDX,
   INDY,
-  BRANCH
+  REL
 }
 
 export enum OpCpu {
@@ -89,6 +104,7 @@ export class OpStatement extends Statement {
   public opSuffix: string
   public cpu: OpCpu
   public mode: OpMode = OpMode.NONE
+  private opByte?: number
   private expression?: exp.Expression
 
   constructor(opcode: any, opSuffix: string, cpu: OpCpu) {
@@ -121,6 +137,7 @@ export class OpStatement extends Statement {
       }
       // TODO: check for INC/DEC and promote opcode to 65C02
       this.mode = OpMode.NONE
+      this.opByte = this.opcode.NONE
     } else if (token) {
       if (str == "a") {
         parser.addToken(token)
@@ -132,6 +149,7 @@ export class OpStatement extends Statement {
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.A
+        this.opByte = this.opcode.A
       } else if (str == "#") {
         parser.addToken(token)
         if (this.opcode.IMM === undefined) {
@@ -139,6 +157,7 @@ export class OpStatement extends Statement {
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
+        this.opByte = this.opcode.IMM
         this.expression = parser.mustAddNextExpression()
       } else if (str == "/") {			// same as "#>"
         parser.addToken(token)
@@ -150,6 +169,7 @@ export class OpStatement extends Statement {
           // TODO: would be clearer to extend warning to entire expression
         }
         this.mode = OpMode.IMM
+        this.opByte = this.opcode.IMM
         // *** this loses the implied ">" operation
         this.expression = parser.mustAddNextExpression()
       } else if ((str == "(" && !parser.requireBrackets)
@@ -159,11 +179,13 @@ export class OpStatement extends Statement {
         // *** check opcode has this address mode ***
         token.type = TokenType.Opcode
         this.mode = OpMode.IND
+        this.opByte = this.opcode.IND
         this.expression = parser.mustAddNextExpression()
 
         let res = parser.mustAddToken([",", closingChar], TokenType.Opcode)
         if (res.index == 0) {               // (exp,X)
           this.mode = OpMode.INDX
+          this.opByte = this.opcode.INDX
           const c = parser.peekVeryNextChar()
           res = parser.mustAddToken("x", TokenType.Opcode)
           if (res.index == 0 && res.token) {
@@ -183,9 +205,11 @@ export class OpStatement extends Statement {
         }
         if (res.index == 1) {        // (exp) or (exp),Y
           this.mode = OpMode.INDY
+          this.opByte = this.opcode.INDY
           let nextToken = parser.addNextToken()
           if (!nextToken) {
             this.mode = OpMode.IND
+            this.opByte = this.opcode.IND
             if (this.opcode.IND === undefined) {
               this.opExp?.setError("Opcode does not support this addressing mode")
             }
@@ -218,21 +242,32 @@ export class OpStatement extends Statement {
       } else {
 
         // handle special case branch/jump labels
+        // *** TODO: this should all be folded into expression parsing
 
-        if (this.opcode.BRAN || (this.opcode.ABS &&
+        if (this.opcode.REL || (this.opcode.ABS &&
             (this.opNameLC == "jmp" || this.opNameLC == "jsr"))) {
 
           // *** move to parser ***
           // *** these are valid outside of branch/jump opcodes ***
 
+          if (this.opcode.REL) {
+            this.mode = OpMode.REL            // exp
+            this.opByte = this.opcode.REL
+          } else {
+            this.mode = OpMode.ABS            // exp
+            this.opByte = this.opcode.ABS
+          }
+
           const isDefinition = false
           if (str == ">" || str == "<") {
             if (!parser.syntax || parser.syntax == Syntax.LISA) {
-              parser.addExpression(parser.parseLisaLocal(token, isDefinition))
+              this.expression = parser.parseLisaLocal(token, isDefinition)
+              parser.addExpression(this.expression)
               return
             }
           } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
-            parser.addExpression(parser.parseCA65Local(token, isDefinition))
+            this.expression = parser.parseCA65Local(token, isDefinition)
+            parser.addExpression(this.expression)
             return
           } else if (str[0] == "-" && (str[0] == str[str.length - 1])) {
             // TODO: This only handles "-", not "+" because it would otherwise
@@ -245,7 +280,8 @@ export class OpStatement extends Statement {
                 return
               }
               token.type = TokenType.Label
-              parser.addExpression(parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition))
+              this.expression = parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
+              parser.addExpression(this.expression)
               return
             }
           }
@@ -255,7 +291,13 @@ export class OpStatement extends Statement {
 
         token = parser.addNextToken()
         if (!token) {
-          this.mode = OpMode.ABS            // exp
+          if (this.opcode.REL) {
+            this.mode = OpMode.REL            // exp
+            this.opByte = this.opcode.REL
+          } else {
+            this.mode = OpMode.ABS            // exp
+            this.opByte = this.opcode.ABS
+          }
         } else {
           if (token.getString() == ",") {   // exp,X or exp,Y
             token.type = TokenType.Opcode
@@ -265,9 +307,11 @@ export class OpStatement extends Statement {
               str = token.getString().toLowerCase()
               if (str == "x") {             // exp,X
                 this.mode = OpMode.ABSX
+                this.opByte = this.opcode.ABSX
                 token.type = TokenType.Opcode
               } else if (str == "y") {      // exp,Y
                 this.mode = OpMode.ABSY
+                this.opByte = this.opcode.ABSY
                 token.type = TokenType.Opcode
               } else if (str != "") {
                 token.setError("Unexpected token, expecting 'X' or 'Y'")
@@ -314,8 +358,8 @@ export class OpStatement extends Statement {
         return this.opcode.INDX !== undefined
       case OpMode.INDY:
         return this.opcode.INDY !== undefined
-      case OpMode.BRANCH:
-        return this.opcode.BRANCH !== undefined
+      case OpMode.REL:
+        return this.opcode.REL !== undefined
     }
     return false
   }
@@ -345,11 +389,6 @@ export class OpStatement extends Statement {
           // will never be ZPAGE at this point
           break
         case OpMode.ABS:
-          if (this.opcode.BRAN) {
-            this.mode = OpMode.BRANCH
-            symUtils.markCode(this.expression)
-            break
-          }
           if (this.opNameLC == "jmp") {
             symUtils.markCode(this.expression)
             break
@@ -363,9 +402,21 @@ export class OpStatement extends Statement {
         case OpMode.ABSY:
           const size = this.expression.getSize() ?? 0
           if (size == 1) {
-            const newMode = this.mode - OpMode.ABS + OpMode.ZP
+            let newMode: OpMode
+            let newOpByte: number
+            if (this.mode == OpMode.ABS) {
+              newMode = OpMode.ZP
+              newOpByte = this.opcode.ZP
+            } else if (this.mode == OpMode.ABSX) {
+              newMode = OpMode.ZPX
+              newOpByte = this.opcode.ZPX
+            } else {
+              newMode = OpMode.ZPY
+              newOpByte = this.opcode.ZPY
+            }
             if (this.checkMode(newMode)) {
               this.mode = newMode
+              this.opByte = newOpByte
               symUtils.markZPage(this.expression)
             } else {
               // TODO: warn that ABS mode will be used instead of ZP?
@@ -393,8 +444,8 @@ export class OpStatement extends Statement {
             }
           }
           break
-        case OpMode.BRANCH:
-          // will never be BRANCH at this point
+        case OpMode.REL:
+          symUtils.markCode(this.expression)
           break
       }
     }
@@ -402,6 +453,43 @@ export class OpStatement extends Statement {
     // if opcode has label, label must be code
     if (this.labelExp) {
       symUtils.markCode(this.labelExp)
+    }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    if (this.opByte !== undefined) {
+      return Isa6502.ops[this.opByte].bc
+    }
+  }
+
+  pass2(asm: Assembler, dataBytes: number[]): void {
+    if (this.opByte !== undefined) {
+      dataBytes[0] = this.opByte
+      if (this.expression) {
+        let value = this.expression.resolve()
+        if (value !== undefined) {
+          const bc = Isa6502.ops[this.opByte].bc
+          if (bc == 2) {
+            if (this.mode == OpMode.REL) {
+              value = value - asm.getPC() - 2
+              if (value > 255 || value <= -128) {
+                this.expression.setError("Branch out of range")
+                return
+              }
+            } else {
+              if (value > 255 || value < -128) {
+                this.expression.setWarning("Value will be truncated to 8 bits")
+              }
+            }
+            dataBytes[1] = value & 0xff
+          } if (bc == 3) {
+            dataBytes[1] = (value >> 0) & 0xff
+            dataBytes[2] = (value >> 8) & 0xff
+          }
+        } else {
+          value = this.expression.resolve() // ***
+        }
+      }
     }
   }
 }
@@ -423,6 +511,10 @@ export abstract class ConditionalStatement extends Statement {
       }
     }
     return false
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -939,12 +1031,52 @@ export class DataStatement extends Statement {
       }
     }
   }
+
+  // *** TODO: handle strings and other types of expressions
+
+  pass1(asm: Assembler): number | undefined {
+    return this.dataElements.length * this.dataSize
+  }
+
+  pass2(asm: Assembler, dataBytes: number[]) {
+    let index = 0
+    for (let element of this.dataElements) {
+      const value = element.resolve()
+      if (value === undefined) {
+        index += this.dataSize
+        continue
+      }
+      if (this.dataSize == 1) {
+        if (value > 255 || value < -128) {
+          element.setWarning("Value overflows 8 bits")
+        }
+        dataBytes[index++] = value & 0xff
+      } else if (this.dataSize == 2) {
+        const value0 = (value >> 0) & 0xff
+        const value8 = (value >> 8) & 0xff
+        if (this.bigEndian) {
+          dataBytes[index++] = value8
+          dataBytes[index++] = value0
+        } else {
+          dataBytes[index++] = value0
+          dataBytes[index++] = value8
+        }
+      } else {
+        // TODO: deal with 24 bit values
+      }
+    }
+  }
 }
 
 //------------------------------------------------------------------------------
 
-//  CA65: .res <count> [, <fill-value>]
-//        .tag <struct-name>
+// MERLIN:  ds <count-exp> [, <fill-value>]
+//          ds \ [, <fill-value>]
+//   DASM:  ds [{.b|.w|.l|.s}] <count-exp> [, <fill-value> ]
+//   ACME:  !fill <count-exp> [, <fill-value>]
+//   CA65:  .res <count-exp> [, <fill-value>]
+//          .tag <struct-name>
+//   LISA:  ???
 
 export class StorageStatement extends Statement {
 
@@ -988,6 +1120,8 @@ export class StorageStatement extends Statement {
 
     if (token.getString() == "\\") {
       if (!parser.syntax || parser.syntax == Syntax.MERLIN) {
+        // *** ??? ***
+        // *** get rid of? ***
         this.sizeArg = new exp.AlignExpression(new exp.NumberExpression([token], 256, false))
         parser.addExpression(this.sizeArg)
       } else {
@@ -1009,6 +1143,31 @@ export class StorageStatement extends Statement {
     }
 
     this.patternArg = parser.mustAddNextExpression()
+  }
+
+  // TODO: ".tag" handled differently?
+
+  pass1(asm: Assembler): number | undefined {
+    let sizeValue = this.sizeArg?.resolve()
+    if (sizeValue === undefined) {
+      if (this.sizeArg?.getString() == "\\") {
+        sizeValue = -asm.getPC() & 0xff
+      } else {
+        return
+      }
+    }
+    return sizeValue * this.dataSize
+  }
+
+  pass2(asm: Assembler, dataBytes: number[]): void {
+    let fillValue = 0
+    if (this.patternArg) {
+      const patternValue = this.patternArg?.resolve()
+      if (patternValue === undefined) {
+        return
+      }
+    }
+    dataBytes.fill(fillValue)
   }
 }
 
@@ -1040,6 +1199,40 @@ export class AlignStatement extends Statement {
       this.equal = this.fill
       this.fill = parser.mustAddNextExpression()
     }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    const boundaryValue = this.boundary?.resolve()
+    if (boundaryValue === undefined) {
+      this.boundary?.setError("Must resolve on first pass")
+      return
+    }
+    if (this.fill) {
+      const fillValue = this.fill.resolve()
+      if (fillValue === undefined) {
+        this.fill.setError("Must resolve on first pass")
+      }
+    }
+    if (asm.syntax == Syntax.ACME) {
+      const equalValue = this.equal?.resolve()
+      if (equalValue === undefined) {
+        this.equal?.setError("Must resolve on first pass")
+        return
+      }
+      return (equalValue - asm.getPC()) & boundaryValue
+    } else {
+      const misalign = asm.getPC() % boundaryValue
+      return misalign ? boundaryValue - misalign : 0
+    }
+  }
+
+  pass2(asm: Assembler, dataBytes: number[]): void {
+    let fillValue = asm.syntax == Syntax.ACME ? 0xEA : 0x00
+    if (this.fill) {
+      // resolved in first pass
+      fillValue = this.fill.resolve()!
+    }
+    dataBytes.fill(fillValue)
   }
 }
 
@@ -1124,8 +1317,19 @@ export class HexStatement extends Statement {
     }
   }
 
+  // *** needed?
   getSize(): number | undefined {
     return this.dataBytes.length
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return this.dataBytes.length
+  }
+
+  pass2(asm: Assembler, dataBytes: number[]): void {
+    for (let i = 0; i < this.dataBytes.length; i += 1) {
+      dataBytes[i] = this.dataBytes[i]
+    }
   }
 }
 
@@ -1161,6 +1365,10 @@ class FileStatement extends Statement {
     // TODO: check for quoted fileName, based on syntax
       // optional on DASM
       // never on MERLIN
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -1304,6 +1512,11 @@ export class IncBinStatement extends FileStatement {
       }
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    // TODO: return actual data size
+    return
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -1344,6 +1557,10 @@ export class EquStatement extends Statement {
     } else {
       this.labelExp.setError("Variable label not allowed")
     }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -1443,6 +1660,14 @@ export class OrgStatement extends Statement {
 
     this.value = parser.mustAddNextExpression()
   }
+
+  pass1(asm: Assembler): number | undefined {
+    const org = this.value?.resolve()
+    if (org !== undefined) {
+      asm.setPC(org)
+    }
+    return 0
+  }
 }
 
 
@@ -1474,6 +1699,10 @@ export class ErrorStatement extends Statement {
     if (this.errExpression) {
       parser.addExpression(this.errExpression)
     }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 
   // ***
@@ -1547,6 +1776,11 @@ export class TextStatement extends Statement {
       }
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    // TODO: temporary to force "??"
+    return 1
+  }
 }
 
 //==============================================================================
@@ -1602,6 +1836,12 @@ export class MacroDefStatement extends Statement {
       if (token) {
         // macro name
         // TODO: generalize this
+
+        // CA65 allows macro names to start with a "." (undocumented?)
+        if (parser.syntax == Syntax.CA65) {
+          parser.dotExtend(token)
+        }
+
         if (token.type == TokenType.Symbol
             || token.type == TokenType.HexNumber) {
           const isDefinition = true
@@ -1694,6 +1934,10 @@ export class MacroDefStatement extends Statement {
       prep.startMacroDef(this.macroName)
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
+  }
 }
 
 // MERLIN:  EOM       (label is allowed)
@@ -1729,6 +1973,10 @@ export class EndMacroDefStatement extends Statement {
       prep.scopeState.popZone()
       prep.endMacroDef()
     }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -1830,6 +2078,11 @@ export class MacroInvokeStatement extends Statement {
       this.params.push(expression)
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    // TODO: for now, just so ??'s are generated
+    return 1
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -1862,6 +2115,14 @@ export class DummyStatement extends Statement {
       prep.pushNesting(NestingType.Struct)
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    const orgValue = this.value?.resolve()
+    if (orgValue !== undefined) {
+      asm.setPC(orgValue)
+      return 0
+    }
+  }
 }
 
 export class DummyEndStatement extends Statement {
@@ -1880,10 +2141,15 @@ export class DummyEndStatement extends Statement {
       prep.scopeState.popScope()
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    // TODO: restore PC?
+    return 0
+  }
 }
 
 
-// DASM:  SEG[.U] <name>
+// DASM:  SEG[.U] [<name>]
 // CA65:  .segment "<name>" [: (direct|zeropage|absolute)]
 
 // TODO: reconcile seg.u and dummy statements (currently DASM-only)
@@ -1903,7 +2169,17 @@ export class SegmentStatement extends Statement {
 
     if (!this.impliedName) {
 
-      const nameToken = parser.mustGetNextToken("expecting segment name")
+      let nameToken: Token | undefined
+
+      if (parser.syntax == Syntax.DASM) {
+        nameToken = parser.getNextToken()
+        if (!nameToken) {
+          return
+        }
+      } else {
+        nameToken = parser.mustGetNextToken("expecting segment name")
+      }
+
       if (nameToken.getString() == '"') {
         if (!parser.syntax || parser.syntax == Syntax.CA65) {
           const strExpression = parser.parseStringExpression(nameToken, true, false)
@@ -1939,6 +2215,10 @@ export class SegmentStatement extends Statement {
       }
     }
   }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -1949,7 +2229,7 @@ export class ListStatement extends Statement {
     let options: string[] = []
     if (this.opNameLC == "tr") {
       options = ["on", "off"]
-    } else if (this.opNameLC == "lst") {
+    } else if (this.opNameLC == "lst" || this.opNameLC == "list") {
       options = ["on", "off", ""]
     } else if (this.opNameLC == "lstdo") {
       options = ["off", ""]
@@ -1976,6 +2256,10 @@ export class ListStatement extends Statement {
     } else if (token) {
       token.type = TokenType.Keyword
     }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -2232,6 +2516,10 @@ export class AssertStatement extends Statement {
 
     const strExpression = parser.parseStringExpression(token)
     parser.addExpression(strExpression)
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
