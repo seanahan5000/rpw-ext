@@ -239,7 +239,7 @@ export class Completions {
               this.addUnclassified = ++index
               checkXY = true
               break
-            case OpMode.BRANCH:
+            case OpMode.REL:
               // TODO: constrain to only close-by code
               // TODO: handle both zone and cheap locals
               if (prevChar == ":") {
@@ -345,7 +345,7 @@ export class Completions {
         || this.addMacros || this.addUnclassified) {
       for (const [key, symbol] of sourceFile.module.symbolMap) {
 
-        if (symbol.type == SymbolType.Macro) {
+        if (symbol.type == SymbolType.MacroName) {
           if (this.addMacros) {
             // TODO: add leading "+" for ACME syntax? trigger character?
             const item = lsp.CompletionItem.create(key)

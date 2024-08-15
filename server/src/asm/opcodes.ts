@@ -29,41 +29,41 @@ export const Opcodes6502 = {
 		"ABSX": 0x1E
 	},
 	"bcc": {
-		"BRAN": 0x90
+		"REL" : 0x90
 	},
 	"bcs": {
-		"BRAN": 0xB0
+		"REL" : 0xB0
 	},
 	"beq": {
-		"BRAN": 0xF0
+		"REL" : 0xF0
 	},
 	"bge": {				// alias of BCS
-		"BRAN": 0xB0
+		"REL" : 0xB0
 	},
 	"bit": {
 		"ZP"  : 0x24,
 		"ABS" : 0x2C
 	},
 	"blt": {				// alias of BCC
-		"BRAN": 0x90
+		"REL" : 0x90
 	},
 	"bmi": {
-		"BRAN": 0x30
+		"REL" : 0x30
 	},
 	"bne": {
-		"BRAN": 0xD0
+		"REL" : 0xD0
 	},
 	"bpl": {
-		"BRAN": 0x10
+		"REL" : 0x10
 	},
 	"brk": {
 		"NONE": 0x00
 	},
 	"bvc": {
-		"BRAN": 0x50
+		"REL" : 0x50
 	},
 	"bvs": {
-		"BRAN": 0x70
+		"REL" : 0x70
 	},
 	"clc": {
 		"NONE": 0x18
@@ -281,7 +281,7 @@ export const Opcodes6502 = {
 
 export const Opcodes65C02 = {
 	"bra": {
-		"BRAN": 0x80
+		"REL" : 0x80
 	},
 	"phx": {
 		"NONE": 0xDA

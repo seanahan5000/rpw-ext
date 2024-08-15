@@ -261,7 +261,7 @@ export class Preprocessor {
                 if (line.statement.labelExp) {
                   const labelName = line.statement.labelExp.getString()
                   const foundSym = this.module.symbolMap.get(labelName)
-                  if (foundSym && foundSym.type == SymbolType.Macro) {
+                  if (foundSym && foundSym.type == SymbolType.MacroName) {
                     const parser = new Parser()
                     const newStatement = parser.reparseAsMacroInvoke(line.statement, this.module.project.syntax)
                     if (newStatement) {
@@ -428,7 +428,9 @@ export class Preprocessor {
                 if (!symExp.isVariableType()) {
                   const foundSym = this.module.symbolMap.get(symExp.fullName)
                   if (foundSym) {
-                    symExp.setError("Duplicate symbol (use Go To Definition)")
+                    if (symExp.symbolFrom != SymbolFrom.Import) {
+                      symExp.setError("Duplicate symbol (use Go To Definition)")
+                    }
                     // turn symExp into a reference to the original symbol
                     symExp.symbol = foundSym
                     symExp.isDefinition = false
@@ -504,7 +506,7 @@ export class Preprocessor {
                 if (!symExp.suppressUnknown) {
                   // TODO: make temporary project check a setting
                   if (symExp.isLocalType() || !this.module.project.isTemporary) {
-                    if (symExp.symbolType == SymbolType.Macro) {
+                    if (symExp.symbolType == SymbolType.MacroName) {
                       symExp.setError("Unknown macro or opcode")
                     } else if (!firstPass) {
                       symExp.setError("Symbol not found")

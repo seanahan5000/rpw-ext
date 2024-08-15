@@ -9,11 +9,12 @@ import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
-import { Statement } from "./asm/statements"
+import { OpStatement, Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
-import { SyntaxMap, SyntaxNames } from "./asm/syntax"
+import { SyntaxNames } from "./asm/syntax"
+import { Isa6502 } from "./isa6502"
 
 //------------------------------------------------------------------------------
 
@@ -88,7 +89,7 @@ class LspProject extends Project {
   }
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    this.server.removeTemporary(fullPath)
+    this.server.removeTemporary(this, fullPath)
     return super.openSourceFile(module, fullPath)
   }
 }
@@ -185,10 +186,11 @@ export class LspServer {
 
   // if a file was opened in a project,
   //  remove a temporary project that already owned the file
-  removeTemporary(filePath: string) {
+  removeTemporary(curProject: Project, filePath: string) {
     for (let project of this.projects) {
-      if (project.isTemporary) {
+      if (project != curProject && project.isTemporary) {
         if (project.findSourceFile(filePath)) {
+          // only remove if it's alone in its project/module
           // NOTE: for now, just disable the project by removing its modules
           // Removing it completely will cause problems because caller is
           //  iterating through list of projects.
@@ -704,6 +706,123 @@ export class LspServer {
               + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
               + ", %" + value.toString(2).padStart(8, "0")
           }
+        } else if (statement instanceof OpStatement) {
+          if (res.expression == statement.opExp) {
+            const opName = res.expression.getString()
+            const opNameLC = opName.toLowerCase()
+            const upperCase = (opName != opNameLC)
+            let opMatches = []
+            for (let i = 0; i < Isa6502.ops.length; i += 1) {
+              const opEntry = Isa6502.ops[i]
+              if (opEntry.op == opNameLC) {
+                const opCopy: any = { ...opEntry }
+                opCopy.opValue = i
+                opMatches.push(opCopy)
+              }
+            }
+            // add opcode description
+            hoverStr += Isa6502.opDescs.get(opNameLC) ?? ""
+            if (opMatches.length > 0) {
+              hoverStr += "\n"
+
+              // sort opMatches by addressing mode
+
+              const sortOrder = [
+                "","a","imm","zp","abs","jsr","jab","zpx","abx","zpy","aby","idx","idy","rel","jin"
+              ]
+
+              opMatches.sort((a, b): number => {
+                const ia = sortOrder.indexOf(a.ad)
+                const ib = sortOrder.indexOf(b.ad)
+                if (ia < ib) {
+                  return -1
+                }
+                if (ia > ib) {
+                  return 1
+                }
+                return 0
+              })
+
+              for (let opEntry of opMatches) {
+
+                // data bytes
+                let lineStr = (opEntry as any).opValue.toString(16).padStart(2, "0").toUpperCase()
+                if (opEntry.bc == 2) {
+                  lineStr += " 12"
+                } else if (opEntry.bc == 3) {
+                  lineStr += " 34 12"
+                }
+
+                lineStr = lineStr.padEnd(10, "\xA0")
+
+                // opcode
+                lineStr += (upperCase ? opEntry.op.toUpperCase() : opEntry.op) + " "
+
+                // addressing mode expression, if any
+                let opExp = ""
+                if (opEntry.bc == 2) {
+                  opExp = "$12"
+                } else if (opEntry.bc == 3) {
+                  opExp = "$1234"
+                }
+
+                switch (opEntry.ad) {
+                  case "":
+                  case "a":
+                    break
+                  case "imm":
+                    lineStr += "#" + opExp
+                    break
+                  case "zp":
+                  case "abs":
+                  case "jsr":
+                  case "jab":
+                    lineStr += opExp
+                    break
+                  case "zpx":
+                  case "abx":
+                    lineStr += opExp + (upperCase ? ",X" : ",x")
+                    break
+                  case "zpy":
+                  case "aby":
+                    lineStr += opExp + (upperCase ? ",Y" : ",y")
+                    break
+                  case "idx":
+                    lineStr += "(" + opExp + (upperCase ? ",X)" : ",x)")
+                    break
+                  case "idy":
+                    lineStr += "(" + opExp + (upperCase ? "),Y" : "),y")
+                    break
+                  case "rel":
+                    lineStr += "*+" + opExp
+                    break
+                  case "jin":
+                    lineStr += "(" + opExp + ")"
+                    break
+                }
+
+                lineStr = lineStr.padEnd(22, "\xA0")
+
+                // cycle count
+                if (opEntry.cy) {
+                  lineStr += " ; " + opEntry.cy
+                }
+
+                hoverStr += lineStr + "\n"
+              }
+
+              // add status flags affected
+
+              const flags = opMatches[0].sf
+              let affected = ""
+              if (flags) {
+                affected = flags.toUpperCase()
+              } else {
+                affected = "none"
+              }
+              hoverStr += "Affects: " + affected
+            }
+          }
         }
       }
     }
@@ -1033,7 +1152,7 @@ export class LspServer {
             } else if (symExp.isVariableType()) {
               index = SemanticToken.var
             } else if (symExp.symbol) {
-              if (symExp.symbol.type == SymbolType.Macro) {
+              if (symExp.symbol.type == SymbolType.MacroName) {
                 index = SemanticToken.macro
               } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage

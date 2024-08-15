@@ -1,8 +1,8 @@
 
 import { SourceFile } from "./project"
 import { Node, NodeRange, Token } from "./tokenizer"
-import { Op } from "./syntax"
-import { Symbol, SymbolType, isLocalType } from "./symbols"
+import { Syntax, Op } from "./syntax"
+import { Symbol, SymbolType, SymbolFrom, isLocalType } from "./symbols"
 
 //------------------------------------------------------------------------------
 
@@ -104,7 +104,7 @@ export class Expression extends Node {
   }
 
   // TODO: make these abstract?
-
+  // TODO: or also resolve to number array?
   resolve(): number | undefined {
     return
   }
@@ -169,11 +169,14 @@ export class ParenExpression extends Expression {
 
 export class StringExpression extends Expression {
 
+  private syntax: Syntax
+
   // Node[] contains all segments of the string,
   //  including quotes and escape codes.
-  // constructor(children: Node[]) {
-  //   super(children)
-  // }
+  constructor(children: Node[], syntax: Syntax) {
+    super(children)
+    this.syntax = syntax
+  }
 
   // only resolve if string is a single character (string literal)
   resolve(): number | undefined {
@@ -181,7 +184,21 @@ export class StringExpression extends Expression {
       return
     }
     let str = this.children[0].getString()
-    const highFlip = str == '"' ? 0x80 : 0x00
+
+    // CA65 only allows single character string with single quote
+    if (this.syntax == Syntax.CA65) {
+      if (str != "'") {
+        return
+      }
+    }
+
+    let highFlip = 0x00
+    if (this.syntax == Syntax.MERLIN) {
+      if (str == '"') {
+        highFlip = 0x80
+      }
+    }
+
     str = this.children[1].getString()
     if (str.length == 1) {
       return str.charCodeAt(0) ^ highFlip
@@ -223,9 +240,24 @@ export class SymbolExpression extends Expression {
     this.isDefinition = isDefinition
     this.sourceFile = sourceFile
     this.lineNumber = lineNumber ?? 0
-    if (isDefinition && symbolType) {
-      this.symbol = new Symbol(symbolType, this)
+    if (isDefinition) {
+      this.symbol = new Symbol(this, SymbolFrom.Unknown)
     }
+  }
+
+  get symbolFrom(): SymbolFrom {
+    return this.symbol?.from ?? SymbolFrom.Unknown
+  }
+
+  setIsDefinition(from: SymbolFrom) {
+    if (!this.isDefinition) {
+      this.isDefinition = true
+      this.symbol = new Symbol(this, from)
+    }
+  }
+
+  setSymbolType(symbolType: SymbolType) {
+    this.symbolType = symbolType
   }
 
   isVariableType(): boolean {
@@ -426,15 +458,19 @@ export class PcExpression extends Expression {
     super(token ? [token] : undefined)
   }
 
+  public setValue(pc: number) {
+    this.value = pc
+  }
+
   resolve(): number | undefined {
-    if (this.value === undefined) {
-      // TODO: check for and capture actual PC
-    }
     return this.value
   }
 
-  getSize() {
-    return 2
+  getSize(): number | undefined {
+    if (this.value !== undefined) {
+      return this.value < 256 ? 1 : 2
+    }
+    // *** else return 2???
   }
 }
 
@@ -447,6 +483,8 @@ export class FileNameExpression extends Expression {
 }
 
 //------------------------------------------------------------------------------
+
+// *** get rid of this and handle directly in statements? ***
 
 export class AlignExpression extends Expression {
 

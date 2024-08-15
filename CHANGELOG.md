@@ -1,5 +1,34 @@
 # RPW 65 Changelog
 
+### [1.2.2] - 2024-08-15
+
+General collection of improvements, including Merlin additions so Prince of Persia sources parse cleanly-ish.
+
+#### Added:
+* Hovering over opcodes shows addressing modes, cycles counts, and flag effects.
+* MERLIN: Leading "#" in data directive expressions
+* MERLIN: DUM implicitly closes previous DUM
+* MERLIN: XC off
+* MERLIN: --^ for repeat end
+* MERLIN: Leading "#" in EQU expressions
+* MERLIN: Trailing ":" on opcodes to force 16-bit
+* ACME: !src, !bin aliases for !source, !binary
+* ACME: !macro definition parameters
+* ACME: Anonymous locals ("+" and "-") in all expressions
+* DASM: Allow segment without name
+* DASM: Macro invoke parameter parsing
+* DASM: Leading "#" on keywords
+* CA65: Error on immediate/byte values -1 to -128
+* CA65: Improved .import parsing/handling
+* CA65: Error on double-quoted text in opcodes (CMP #"C", for example)
+* All: Maintain local scope across equate assignment
+
+#### Fixed:
+* Macro definitions nested inside if/ifdef conditionals
+* Syntax highlighting on file lost when included file is closed
+* Syntax highlighting missing when file included multiple times
+* Rename symbol to larger size sometimes consumes non-whitespace
+
 ### [1.2.1] - 2024-05-23
 
 Minor changes, mainly to make Choplifter and Lode Runner disassemblies parse cleanly.

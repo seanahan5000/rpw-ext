@@ -272,40 +272,6 @@ export class Tokenizer {
         }
       }
 
-      // several non-Merlin assemblers support '.' in symbols
-      if (char == ".") {
-
-        // DASM treats a stand-alone period as the PC counter
-        if (this.syntax == Syntax.DASM) {
-          if (this.position == start) {
-            const nextChar = this.sourceLine[this.position + 1] ?? " "
-            if (nextChar == " " || nextChar == "\t") {
-              this.position += 1
-              sawOperator = true
-              break
-            }
-          }
-        }
-
-        // CA65 doesn't allow '.' in symbol but allows as start of keyword,
-        //  define invocation, and built-in functions. Treat it as a stand-alone
-        //  operator here and let other code combine as necessary.
-        // if (this.syntax == Syntax.CA65) {
-        //   this.position += 1
-        //   sawOperator = true
-        //   break
-        // }
-
-        // TODO: immediately set token to TokenType.Keyword? Macro?
-
-        // TODO: constrain this to the specific subset of assemblers
-        if (!this.syntax || this.syntax != Syntax.MERLIN) {
-          sawSymbol = true
-          this.position += 1
-          continue
-        }
-      }
-
       if (start == this.position) {
         sawOperator = true
         this.position += 1
@@ -325,7 +291,7 @@ export class Tokenizer {
           }
           // look for Merlin's "--^"
           if (repeatIndex == 7) { // "-"
-            if (!this.syntax || this.syntax != Syntax.MERLIN) {
+            if (!this.syntax || this.syntax == Syntax.MERLIN) {
               if (this.position - start == 2) {
                 if (this.position < this.sourceLine.length) {
                   if (this.sourceLine[this.position] == "^") {

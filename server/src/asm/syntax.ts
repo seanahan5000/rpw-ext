@@ -332,6 +332,8 @@ class DasmSyntax extends SyntaxDef {
 
       // scope
       [ "subroutine", { create: () => { return new stm.SubroutineStatement() }}],
+
+      [ "list",       { create: () => { return new stm.ListStatement() }}]
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([
@@ -409,8 +411,10 @@ class AcmeSyntax extends SyntaxDef {
 
       // disk
       [ "!source",    { create: () => { return new stm.IncludeStatement() }}],
+      [ "!src",       { create: () => { return new stm.IncludeStatement() }}],
       [ "!to",        { create: () => { return new stm.DiskStatement() }}],
       [ "!binary",    { create: () => { return new stm.IncBinStatement() }}],
+      [ "!bin",       { create: () => { return new stm.IncBinStatement() }}],
 
       // macros
       [ "!mac",       { create: () => { return new stm.MacroDefStatement() }}],
@@ -421,7 +425,7 @@ class AcmeSyntax extends SyntaxDef {
       [ "!word",      { create: () => { return new stm.DataStatement(2) }}],
       [ "!hex",       { create: () => { return new stm.HexStatement() }}],
       [ "!align",     { create: () => { return new stm.AlignStatement() }}],
-      [ "!fill",      {}],
+      [ "!fill",      { create: () => { return new stm.StorageStatement(1) }}],
 
       [ "!pet",       { create: () => { return new stm.TextStatement() }}],
       [ "!raw",       { create: () => { return new stm.TextStatement() }}],

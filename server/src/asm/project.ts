@@ -3,8 +3,9 @@ import * as fs from 'fs'
 import { RpwProject, RpwSettings } from "../rpw_types"
 import { Syntax, SyntaxMap, SyntaxDefs } from "./syntax"
 import { Statement } from "./statements"
-import { Preprocessor } from "./preprocessor"
 import { Parser } from "./parser"
+import { Preprocessor } from "./preprocessor"
+import { Assembler } from "./assembler"
 import { Symbol } from "./symbols"
 
 function fixBackslashes(inString: string): string {
@@ -18,6 +19,11 @@ export type LineRecord = {
   lineNumber: number,
   statement?: Statement
   // TODO: isVisible?
+
+  address?: number
+  size?: number       // *** use bytes.length instead separate size?
+                      // *** only valid from pass1 to pass2?
+  bytes?: number[]
 }
 
 
@@ -338,9 +344,6 @@ export class Module {
     this.symbolMap = new Map<string, Symbol>
     this.variableMap = new Map<string, Symbol>
 
-    // let asm = new Assembler(this)
-    // asm.parse(this.srcName)
-
     const prep = new Preprocessor(this)
     const lineRecords = prep.preprocess(this.srcName, syntaxStats)
     if (!lineRecords) {
@@ -349,6 +352,9 @@ export class Module {
     }
 
     this.lineRecords = lineRecords
+
+    const asm = new Assembler(this)
+    asm.assemble(this.lineRecords)
 
     // link up all symbols
     // TODO: move to assembler?
