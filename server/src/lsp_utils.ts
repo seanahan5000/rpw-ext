@@ -345,7 +345,7 @@ export class Completions {
         || this.addMacros || this.addUnclassified) {
       for (const [key, symbol] of sourceFile.module.symbolMap) {
 
-        if (symbol.type == SymbolType.Macro) {
+        if (symbol.type == SymbolType.MacroName) {
           if (this.addMacros) {
             // TODO: add leading "+" for ACME syntax? trigger character?
             const item = lsp.CompletionItem.create(key)

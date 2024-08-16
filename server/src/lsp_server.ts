@@ -1308,7 +1308,7 @@ export class LspServer {
             } else if (symExp.isVariableType()) {
               index = SemanticToken.var
             } else if (symExp.symbol) {
-              if (symExp.symbol.type == SymbolType.Macro) {
+              if (symExp.symbol.type == SymbolType.MacroName) {
                 index = SemanticToken.macro
               } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage

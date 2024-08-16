@@ -196,6 +196,9 @@ function renameSymExp(symExp: SymbolExpression, oldName: string,
     // grow old selection to match new name, while space available
     let oldSize = editEnd - editStart
     while (editText.length > oldSize) {
+      if (statement.sourceLine[editStart + oldSize] != " ") {
+        break
+      }
       oldSize += 1
       editEnd += 1
       // don't consume last available space before next text run

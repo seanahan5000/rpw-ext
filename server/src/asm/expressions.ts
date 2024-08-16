@@ -1,8 +1,8 @@
 
 import { SourceFile } from "./project"
 import { Node, NodeRange, Token } from "./tokenizer"
-import { Op } from "./syntax"
-import { Symbol, SymbolType, isLocalType } from "./symbols"
+import { Syntax, Op } from "./syntax"
+import { Symbol, SymbolType, SymbolFrom, isLocalType } from "./symbols"
 
 //------------------------------------------------------------------------------
 
@@ -169,11 +169,14 @@ export class ParenExpression extends Expression {
 
 export class StringExpression extends Expression {
 
+  private syntax: Syntax
+
   // Node[] contains all segments of the string,
   //  including quotes and escape codes.
-  // constructor(children: Node[]) {
-  //   super(children)
-  // }
+  constructor(children: Node[], syntax: Syntax) {
+    super(children)
+    this.syntax = syntax
+  }
 
   // only resolve if string is a single character (string literal)
   resolve(): number | undefined {
@@ -181,9 +184,21 @@ export class StringExpression extends Expression {
       return
     }
     let str = this.children[0].getString()
-    // TODO: this is merlin-only
-    // TODO: CA65 only allows single character string with single quote
-    const highFlip = str == '"' ? 0x80 : 0x00
+
+    // CA65 only allows single character string with single quote
+    if (this.syntax == Syntax.CA65) {
+      if (str != "'") {
+        return
+      }
+    }
+
+    let highFlip = 0x00
+    if (this.syntax == Syntax.MERLIN) {
+      if (str == '"') {
+        highFlip = 0x80
+      }
+    }
+
     str = this.children[1].getString()
     if (str.length == 1) {
       return str.charCodeAt(0) ^ highFlip
@@ -225,18 +240,24 @@ export class SymbolExpression extends Expression {
     this.isDefinition = isDefinition
     this.sourceFile = sourceFile
     this.lineNumber = lineNumber ?? 0
-    if (isDefinition && symbolType) {
-      this.symbol = new Symbol(symbolType, this)
+    if (isDefinition) {
+      this.symbol = new Symbol(this, SymbolFrom.Unknown)
     }
   }
 
-  setIsDefinition() {
+  get symbolFrom(): SymbolFrom {
+    return this.symbol?.from ?? SymbolFrom.Unknown
+  }
+
+  setIsDefinition(from: SymbolFrom) {
     if (!this.isDefinition) {
       this.isDefinition = true
-      if (this.symbolType) {
-        this.symbol = new Symbol(this.symbolType, this)
-      }
+      this.symbol = new Symbol(this, from)
     }
+  }
+
+  setSymbolType(symbolType: SymbolType) {
+    this.symbolType = symbolType
   }
 
   isVariableType(): boolean {

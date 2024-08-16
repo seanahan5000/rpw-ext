@@ -3,7 +3,7 @@ import * as exp from "./expressions"
 import { Parser } from "./parser"
 import { Assembler } from "./assembler"
 import { Preprocessor, SymbolUtils, NestingType } from "./preprocessor"
-import { SymbolFrom, SymbolType } from "./symbols"
+import { SymbolType, SymbolFrom } from "./symbols"
 import { Syntax, } from "./syntax"
 import { Node, Token, TokenType } from "./tokenizer"
 import { Isa6502 } from "../isa6502"
@@ -36,12 +36,19 @@ export abstract class Statement extends exp.Expression {
   parse(parser: Parser) {
     // TODO: does this default implementation still make sense?
     // TODO: just eat expressions? do nothing instead?
-    const token = parser.getNextToken()
-    if (token) {
+    let token = parser.getNextToken()
+    while (token) {
       const expression = parser.parseExpression(token)
-      if (expression) {
-        this.children.push(expression)
+      if (!expression) {
+        break
       }
+      this.children.push(expression)
+
+      const res = parser.mustAddToken(["", ","])
+      if (res.index <= 0) {
+        break
+      }
+      token = parser.getNextToken()
     }
   }
 
@@ -103,15 +110,17 @@ export class OpStatement extends Statement {
   public opcode: any
   public opSuffix: string
   public cpu: OpCpu
+  private forceLong: boolean
   public mode: OpMode = OpMode.NONE
   private opByte?: number
   private expression?: exp.Expression
 
-  constructor(opcode: any, opSuffix: string, cpu: OpCpu) {
+  constructor(opcode: any, opSuffix: string, cpu: OpCpu, forceLong: boolean) {
     super()
     this.opcode = opcode
     this.opSuffix = opSuffix
     this.cpu = cpu
+    this.forceLong = forceLong
   }
 
   parse(parser: Parser) {
@@ -377,7 +386,11 @@ export class OpStatement extends Statement {
           // mode already checked
           symUtils.markConstants(this.expression)
           const immValue = this.expression.resolve()
-          if (immValue !== undefined) {
+          if (immValue === undefined) {
+            if (this.expression instanceof exp.StringExpression) {
+              this.expression.setError("String expression not valid here")
+            }
+          } else {
             if (immValue > 255) {
               this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
             }
@@ -401,7 +414,7 @@ export class OpStatement extends Statement {
         case OpMode.ABSX:
         case OpMode.ABSY:
           const size = this.expression.getSize() ?? 0
-          if (size == 1) {
+          if (size == 1 && !this.forceLong) {
             let newMode: OpMode
             let newOpByte: number
             if (this.mode == OpMode.ABS) {
@@ -472,13 +485,19 @@ export class OpStatement extends Statement {
           if (bc == 2) {
             if (this.mode == OpMode.REL) {
               value = value - asm.getPC() - 2
-              if (value > 255 || value <= -128) {
-                this.expression.setError("Branch out of range")
+              if (value < -128 || value > 127) {
+                this.expression.setError(`Branch delta ${value} out of range}`)
                 return
               }
             } else {
-              if (value > 255 || value < -128) {
-                this.expression.setWarning("Value will be truncated to 8 bits")
+              if (asm.syntax == Syntax.CA65) {
+                // TODO: add this once structure offsets are implemented
+                // if (value < 0 || value > 255) {
+                //   this.expression.setError(`Expression value ${value} out of range 0..255`)
+                //   return
+                // }
+              } else if (value < -128 || value > 255) {
+                this.expression.setWarning(`Value ${value} will be truncated to 8 bits`)
               }
             }
             dataBytes[1] = value & 0xff
@@ -1000,8 +1019,12 @@ export class DataStatement extends Statement {
       if (this.dataSize == 1) {
         const value = expression.resolve()
         if (value != undefined) {
-          if (value < -127 || value > 255) {
-            expression.setError("Expression value too large")
+          if (parser.syntax == Syntax.CA65) {
+            if (value < 0 || value > 255) {
+              expression.setError(`Expression value ${value} out of range 0..255`)
+            }
+          } else if (value < -128 || value > 255) {
+            expression.setError(`Expression value ${value} too large`)
           }
         }
       }
@@ -1047,8 +1070,12 @@ export class DataStatement extends Statement {
         continue
       }
       if (this.dataSize == 1) {
-        if (value > 255 || value < -128) {
-          element.setWarning("Value overflows 8 bits")
+        if (asm.syntax == Syntax.CA65) {
+          if (value < 0 || value > 255) {
+            element.setError(`Value ${value} out of range 0..255`)
+          }
+        } else if (value > 255 || value < -128) {
+          element.setWarning(`Value ${value} overflows 8 bits`)
         }
         dataBytes[index++] = value & 0xff
       } else if (this.dataSize == 2) {
@@ -1526,7 +1553,7 @@ export class IncBinStatement extends FileStatement {
 // *** SBASM requires resolvable value with no forward references
 // *** mark symbol as being assigned rather than just a label?
 
-// MERLIN: symbol EQU exp
+// MERLIN: symbol EQU [#]exp
 //         symbol = exp
 // DASM:   symbol [.]EQU [#]exp
 //         symbol = exp
@@ -1543,9 +1570,11 @@ export class EquStatement extends Statement {
       return
     }
     if (!this.labelExp.isVariableType()) {
-      // look for leading "#" for DASM
+      // look for leading "#" for DASM and Merlin
       //  TODO: should this be done for expressions in general?
-      if (!parser.syntax || parser.syntax == Syntax.DASM) {
+      if (!parser.syntax
+          || parser.syntax == Syntax.DASM
+          || parser.syntax == Syntax.MERLIN) {
         const token = parser.peekNextToken()
         if (token && token.getString() == "#") {
           parser.addNextToken()
@@ -1554,6 +1583,7 @@ export class EquStatement extends Statement {
       this.value = parser.mustAddNextExpression()
       // TODO: if ":=", mark symbol as address
       this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
+
     } else {
       this.labelExp.setError("Variable label not allowed")
     }
@@ -1583,10 +1613,8 @@ export class VarAssignStatement extends Statement {
     }
 
     if (this.opNameLC == "set" || this.opNameLC == ".set") {
-      this.labelExp!.symbolType = SymbolType.Variable
-      if (this.labelExp!.symbol) {
-        this.labelExp!.symbol.type = SymbolType.Variable
-      }
+      this.labelExp?.setSymbolType(SymbolType.Variable)
+
     } else if (this.opNameLC == "!set") {
       // TODO: fix this
       parser.getNextToken()   // var symbol
@@ -1816,10 +1844,7 @@ export class MacroDefStatement extends Statement {
           this.labelExp.setError("Local label not allowed")
         } else {
           this.macroName = this.labelExp
-          this.macroName.symbolType = SymbolType.Macro
-          if (this.macroName.symbol) {
-            this.macroName.symbol.type = SymbolType.Macro
-          }
+          this.macroName.setSymbolType(SymbolType.MacroName)
         }
       } else {
         this.labelExp.setError("Variable label not allowed")
@@ -1845,7 +1870,7 @@ export class MacroDefStatement extends Statement {
         if (token.type == TokenType.Symbol
             || token.type == TokenType.HexNumber) {
           const isDefinition = true
-          this.macroName = new exp.SymbolExpression([token], SymbolType.Macro,
+          this.macroName = new exp.SymbolExpression([token], SymbolType.MacroName,
             isDefinition, parser.sourceFile, parser.lineNumber)
           parser.addExpression(this.macroName)
           token = parser.getNextToken()
@@ -1867,7 +1892,7 @@ export class MacroDefStatement extends Statement {
               }
 
               if (expression instanceof exp.SymbolExpression) {
-                expression.setIsDefinition()
+                expression.setIsDefinition(SymbolFrom.MacroParam)
                 this.params.push(expression)
               } else {
                 expression.setError("Simple symbol expected")
@@ -1985,7 +2010,7 @@ export class EndMacroDefStatement extends Statement {
 // TODO: probably needs to be split by syntax
 
 // MERLIN:  <label> <macro> [<param>;...]
-//   DASM:
+//   DASM:  <label> <macro> [<param>, ...]
 //   ACME:  <label> +<macro> [<param>, ...]
 //   CA65:
 //   LISA:
@@ -2040,7 +2065,10 @@ export class MacroInvokeStatement extends Statement {
       }
 
       // TODO: which other syntaxes for this?
-      if (!parser.syntax || parser.syntax == Syntax.ACME || parser.syntax == Syntax.CA65) {
+      if (!parser.syntax
+          || parser.syntax == Syntax.ACME
+          || parser.syntax == Syntax.DASM
+          || parser.syntax == Syntax.CA65) {
 
         // TODO: shouldn't look for comma on first iteration
         if (str == ",") {
@@ -2440,8 +2468,10 @@ export class ImportExportStatement extends Statement {
         if (!this.isExport) {
           const isDefinition = true //***
           // *** external symbol? ***
-          parser.addExpression(new exp.SymbolExpression([token], SymbolType.Simple,
-            isDefinition, parser.sourceFile, parser.lineNumber))
+          const symExp = new exp.SymbolExpression([token], SymbolType.Simple,
+            isDefinition, parser.sourceFile, parser.lineNumber)
+          symExp.symbol!.from = SymbolFrom.Import
+          parser.addExpression(symExp)
         }
       } else {
         token.setError("Unexpected token, expecting symbol")

@@ -6,7 +6,7 @@ import { Expression, SymbolExpression} from "./expressions"
 
 export enum SymbolType {
   Variable    = 0,
-  Macro       = 1,
+  MacroName   = 1,
 
   Simple      = 2,
   Scoped      = 3,  // explicit scope, fully specified
@@ -23,18 +23,19 @@ export function isLocalType(symbolType: SymbolType): boolean {
 }
 
 export enum SymbolFrom {
-  Unknown   = 0,
-  Equate    = 1,
-  Statement = 2,
-  // Structure = 3,
-  // Macro
+  Unknown    = 0,
+  Org        = 1,   // implicit from current org
+  Equate     = 2,   // assigned with "="
+  Import     = 3,   // .import statement
+  MacroParam = 4    // macro input parameter
 }
 
 //------------------------------------------------------------------------------
 
+// TODO: isolate info shared by SymbolExpression and Symbol (SymbolTemplate?)
+
 export class Symbol {
-  public type: SymbolType
-  public from = SymbolFrom.Unknown
+  public from: SymbolFrom
 
   // NOTE: could pack these into bits
   public isZPage = false
@@ -57,9 +58,13 @@ export class Symbol {
   //  and symbol has been added to map.
   public fullName?: string
 
-  constructor(type: SymbolType, definition: SymbolExpression) {
-    this.type = type
+  constructor(definition: SymbolExpression, from: SymbolFrom) {
     this.definition = definition
+    this.from = from
+  }
+
+  get type(): SymbolType {
+    return this.definition.symbolType
   }
 
   addReference(symExp: SymbolExpression) {
@@ -121,7 +126,7 @@ export class ScopeState {
         return symExp.getString()
       }
 
-      case SymbolType.Macro: {
+      case SymbolType.MacroName: {
         let nameToken = symExp.children[0]
         let nameStr = nameToken?.getString() ?? ""
         if (nameStr == "+") {
@@ -148,15 +153,23 @@ export class ScopeState {
           this.zoneIndex += 1
         }
 
+        const symFrom = symExp.symbol?.from ?? SymbolFrom.Unknown
+
         if (this.scopePath) {
           nameStr = this.scopePath + "::" + nameStr
         }
+
         if (symExp.isDefinition && symExp.symbol) {
-          this.cheapScope = nameStr
-          if (symExp.symbol.isZoneStart) {
-            this.zoneName = nameStr
+          // Only implicit symbols should change local scope,
+          //  not assignments or imports.
+          if (symFrom == SymbolFrom.Org) {
+            this.cheapScope = nameStr
+            if (symExp.symbol.isZoneStart) {
+              this.zoneName = nameStr
+            }
           }
         }
+
         return nameStr
       }
 

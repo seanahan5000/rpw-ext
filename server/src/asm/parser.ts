@@ -296,6 +296,7 @@ export class Parser extends Tokenizer {
     // check for keyword in the first column
     if (!this.syntax ||
         this.syntax == Syntax.ACME ||
+        this.syntax == Syntax.DASM ||
         this.syntax == Syntax.CA65) {
       const savedPosition = this.position
       const token = this.getNextToken()
@@ -382,7 +383,7 @@ export class Parser extends Tokenizer {
       if (statement.labelExp && statement.labelExp instanceof exp.SymbolExpression) {
         const symValue = statement.labelExp.symbol?.getValue()
         if (!symValue) {
-          statement.labelExp?.symbol?.setValue(new exp.PcExpression(), SymbolFrom.Statement)
+          statement.labelExp?.symbol?.setValue(new exp.PcExpression(), SymbolFrom.Org)
         }
       }
     }
@@ -515,8 +516,18 @@ export class Parser extends Tokenizer {
       let opcode = (opcodeSet as {[key: string]: any})[opNameLC]
       if (opcode !== undefined) {
         token.type = TokenType.Opcode
+        let forceLong = false
+        if (!this.syntax || this.syntax == Syntax.MERLIN) {
+          // on Merlin, ":" immediately after opcode forces 16-bit addressing
+          const c = this.peekVeryNextChar()
+          if (c == ":") {
+            this.position += 1
+            token.end += 1
+            forceLong = true
+          }
+        }
         // TODO: pass in suffix?
-        return this.initStatement(new stm.OpStatement(opcode, opSuffix, i), token)
+        return this.initStatement(new stm.OpStatement(opcode, opSuffix, i, forceLong), token)
       }
     }
   }
@@ -542,7 +553,7 @@ export class Parser extends Tokenizer {
     if (token.type != TokenType.Symbol && token.type != TokenType.HexNumber && token.type != TokenType.Macro) {
       token.setError("Unexpected token")
     }
-    const symExp = this.newSymbolExpression(this.endExpression(), SymbolType.Macro, false)
+    const symExp = this.newSymbolExpression(this.endExpression(), SymbolType.MacroName, false)
     return this.initStatement(new stm.MacroInvokeStatement(), symExp)
   }
 
@@ -1232,7 +1243,7 @@ export class Parser extends Tokenizer {
       }
     }
 
-    return new exp.StringExpression(this.endExpression())
+    return new exp.StringExpression(this.endExpression(), this.syntax)
   }
 
   // TODO: pass in a list of required quote characters
