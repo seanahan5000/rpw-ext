@@ -54,11 +54,11 @@ export class MerlinSyntax extends SyntaxDef {
       [ "usr",    { create: () => { return new stm.UsrStatement() }}],
 
       // data storage
-      // [ "db",     { create: () => { return new stm.DataStatement_U8() }}],
-      // [ "dfb",    { alias: "db" }],
-      // [ "ddb",    { create: () => { return new stm.DataStatement_U16(true) }}],
-      // [ "dw",     { create: () => { return new stm.DataStatement_U16() }}],
-      // [ "da",     { alias: "dw" }],
+      [ "db",     { create: () => { return new stm.DataStatement_U8() }}],
+      [ "dfb",    { alias: "db" }],
+      [ "ddb",    { create: () => { return new stm.DataStatement_U16(true) }}],
+      [ "dw",     { create: () => { return new stm.DataStatement_U16() }}],
+      [ "da",     { alias: "dw" }],
       [ "ds",     { create: () => { return new stm.StorageStatement(1) }}],
       [ "hex",    { create: () => { return new stm.HexStatement() }}],
 

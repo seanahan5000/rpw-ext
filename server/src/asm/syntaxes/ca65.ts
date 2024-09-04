@@ -48,12 +48,12 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".endmac",    { alias: ".endmacro" }],
 
       // data storage
-      // [ ".byte",      { create: () => { return new stm.DataStatement_U8() }}],
-      // [ ".dbyt",      { create: () => { return new stm.DataStatement_U16(true) }}],
-      // [ ".word",      { create: () => { return new stm.DataStatement_U16() }}],
-      // [ ".addr",      { create: () => { return new stm.DataStatement_U16() }}],
-      // [ ".faraddr",   { create: () => { return new stm.DataStatement_U24() }}],
-      // [ ".dword",     { create: () => { return new stm.DataStatement_U32() }}],
+      [ ".byte",      { create: () => { return new stm.DataStatement_U8() }}],
+      [ ".dbyt",      { create: () => { return new stm.DataStatement_U16(true) }}],
+      [ ".word",      { create: () => { return new stm.DataStatement_U16() }}],
+      [ ".addr",      { create: () => { return new stm.DataStatement_U16() }}],
+      [ ".faraddr",   { create: () => { return new stm.DataStatement_U24() }}],
+      [ ".dword",     { create: () => { return new stm.DataStatement_U32() }}],
       [ ".res",       { create: () => { return new stm.StorageStatement(1) }}],
       [ ".tag",       { create: () => { return new stm.StorageStatement(-1) }}],
       [ ".align",     { create: () => { return new stm.AlignStatement() }}],

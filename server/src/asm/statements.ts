@@ -968,15 +968,17 @@ export class EndRepStatement extends Statement {
 //          "string"
 //          'string'
 
-export class DataStatement extends Statement {
+class DataStatement extends Statement {
 
   protected dataSize: number
+  protected signType: string
   protected bigEndian: boolean
   protected dataElements: exp.Expression[] = []
 
-  constructor(dataSize: number, bigEndian = false) {
+  constructor(dataSize: number, signType: string, bigEndian = false) {
     super()
     this.dataSize = dataSize
+    this.signType = signType
     this.bigEndian = bigEndian
   }
 
@@ -1019,12 +1021,18 @@ export class DataStatement extends Statement {
       if (this.dataSize == 1) {
         const value = expression.resolve()
         if (value != undefined) {
-          if (parser.syntax == Syntax.CA65) {
-            if (value < 0 || value > 255) {
-              expression.setError(`Expression value ${value} out of range 0..255`)
+          if (this.signType == "s") {
+            if (value < -128 || value > 127) {
+              expression.setError(`Expression value ${value} too large`)
             }
-          } else if (value < -128 || value > 255) {
-            expression.setError(`Expression value ${value} too large`)
+          } else if (this.signType == "u") {
+            if (value < 0 || value > 255) {
+              expression.setError(`Expression value ${value} too large`)
+            }
+          } else if (this.signType == "x") {
+            if (value < -128 || value > 255) {
+              expression.setError(`Expression value ${value} too large`)
+            }
           }
         }
       }
@@ -1092,6 +1100,57 @@ export class DataStatement extends Statement {
         // TODO: deal with 24 bit values
       }
     }
+  }
+}
+
+// TODO: review all syntaxes uses of these types
+//  (which enforce sign bounds and which don't?)
+
+export class DataStatement_U8 extends DataStatement {
+  constructor() {
+    super(1, "u", false)
+  }
+}
+
+export class DataStatement_S8 extends DataStatement {
+  constructor() {
+    super(1, "s", false)
+  }
+}
+
+export class DataStatement_X8 extends DataStatement {
+  constructor() {
+    super(1, "x", false)
+  }
+}
+
+export class DataStatement_U16 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(2, "u", bigEndian)
+  }
+}
+
+export class DataStatement_S16 extends DataStatement {
+  constructor() {
+    super(2, "s", false)
+  }
+}
+
+export class DataStatement_X16 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(2, "x", bigEndian)
+  }
+}
+
+export class DataStatement_U24 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(3, "u", bigEndian)
+  }
+}
+
+export class DataStatement_U32 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(4, "u", bigEndian)
   }
 }
 

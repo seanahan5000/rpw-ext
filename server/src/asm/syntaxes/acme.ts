@@ -50,9 +50,9 @@ export class AcmeSyntax extends SyntaxDef {
       [ "!mac",       { alias: "!macro" }],
 
       // data storage
-      // [ "!byte",      { create: () => { return new stm.DataStatement_X8() }}],
-      // [ "!by",        { alias: "!byte" }],
-      // [ "!word",      { create: () => { return new stm.DataStatement_X16() }}],
+      [ "!byte",      { create: () => { return new stm.DataStatement_X8() }}],
+      [ "!by",        { alias: "!byte" }],
+      [ "!word",      { create: () => { return new stm.DataStatement_X16() }}],
       [ "!hex",       { create: () => { return new stm.HexStatement() }}],
       [ "!align",     { create: () => { return new stm.AlignStatement() }}],
       [ "!fill",      { create: () => { return new stm.StorageStatement(1) }}],

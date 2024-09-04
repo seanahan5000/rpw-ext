@@ -46,7 +46,7 @@ export class LisaSyntax extends SyntaxDef {
 
       // data storage
       [ "dfs",  { create: () => { return new stm.StorageStatement(1) }}],
-      // [ ".da",  { create: () => { return new stm.DataStatement_U8() }}],
+      [ ".da",  { create: () => { return new stm.DataStatement_U8() }}],
       [ "hex",  { create: () => { return new stm.HexStatement() }}],
 
       [ "str",  {}],
