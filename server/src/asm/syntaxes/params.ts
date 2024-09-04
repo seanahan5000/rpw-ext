@@ -59,9 +59,9 @@ export class ParamParser {
   constructor() {
     // this.parse('{"6502"|"65c02"|"65816"|"default"}')
     // this.parse("<expression>")
-    this.parse("<expression>[, <expression> ...]")
-// params: "<length>[, <fill>]",
-// params: "[<name>][=<default>]][, [<name>][=<default>] ...]",
+    // this.parse("<expression>[, <expression> ...]")
+    // this.parse("<length>[, <fill>]")
+    // this.parse("[[<name>][=<default>][, [<name>][=<default>] ...]]")
   }
 
   public parse(str: string) {
@@ -74,16 +74,21 @@ export class ParamParser {
   }
 
   private parseParam(): Param {
-    const char = this.str[this.offset++]
-    if (char == "<") {
-      return this.parseTerm()
-    } else if (char == "{") {
-      return this.parseBraces()
-    } else if (char == "[") {
-      return this.parseOptional()
-    } else {
-      this.offset -= 1
-      return this.parseConstant()
+    while (true) {
+      const char = this.str[this.offset++]
+      if (char == " " || char == "\t") {
+        continue
+      }
+      if (char == "<") {
+        return this.parseTerm()
+      } else if (char == "{") {
+        return this.parseBraces()
+      } else if (char == "[") {
+        return this.parseOptional()
+      } else {
+        this.offset -= 1
+        return this.parseConstant()
+      }
     }
   }
 
@@ -118,16 +123,26 @@ export class ParamParser {
 
   private parseOptional(): Param {
     let params: Param[] = []
+    let repeat = false
     while (true) {
       const char = this.str[this.offset]
+      if (char == " " || char == "\t") {
+        this.offset += 1
+        continue
+      }
       if (char == "]") {
         this.offset += 1
         break
       }
+      if (char == ".") {
+        // for now, assume a single "." always starts "..."
+        this.offset += 3
+        repeat = true
+        continue
+      }
       params.push(this.parseParam())
     }
 
-    const repeat = false  // ***
     return new OptionalParam(params, repeat)
   }
 
@@ -135,7 +150,7 @@ export class ParamParser {
     let str = ""
     while (true) {
       const char = this.str[this.offset++]
-      if ("<{[|]}>".includes(char)) {
+      if ("<{[|]}> \t".includes(char)) {
         this.offset -= 1
         break
       }

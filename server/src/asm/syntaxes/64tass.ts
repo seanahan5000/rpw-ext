@@ -55,7 +55,7 @@ export class Tass64Syntax extends SyntaxDef {
 
       // macros
       [ ".macro",   { create: () => { return new stm.MacroDefStatement() },
-                      params: "[<name>][=<default>]][, [<name>][=<default>] ...]",
+                      params: "[[<name>][=<default>][, [<name>][=<default>] ...]]",
                       desc:   "Start of macro block"}],
       [ ".endmacro",{ create: () => { return new stm.EndMacroDefStatement() },
                       params: "[<result>][, <result> ...]",
