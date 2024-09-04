@@ -127,13 +127,9 @@ export class ScopeState {
       }
 
       case SymbolType.MacroName: {
-        let nameToken = symExp.children[0]
-        let nameStr = nameToken?.getString() ?? ""
-        if (nameStr == "+") {
-          nameToken = symExp.children[1]
-          nameStr = nameToken?.getString() ?? ""
-        }
-        return nameStr
+        // skip invoke prefix token if present
+        const nameToken = symExp.children[symExp.children.length - 1]
+        return nameToken?.getString() ?? ""
       }
 
       case SymbolType.Simple: {

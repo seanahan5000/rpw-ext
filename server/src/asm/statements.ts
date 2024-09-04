@@ -4,7 +4,7 @@ import { Parser } from "./parser"
 import { Assembler } from "./assembler"
 import { Preprocessor, SymbolUtils, NestingType } from "./preprocessor"
 import { SymbolType, SymbolFrom } from "./symbols"
-import { Syntax } from "./syntaxes/syntax_types"
+import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
 import { Isa6502 } from "../isa6502"
 
@@ -544,12 +544,18 @@ export abstract class ConditionalStatement extends Statement {
 //   CA65:  .if <exp>
 //   LISA:  .IF <exp>
 //          NOTE: LISA does not support nested IF's.
-//  SBASM:  .DO <exp>
+// 64TASS:  .if <exp>
 
 export class IfStatement extends ConditionalStatement {
 
+  private op?: Op
   private expression?: exp.Expression
   private isInline = false
+
+  constructor(op?: Op) {
+    super()
+    this.op = op
+  }
 
   parse(parser: Parser) {
     // TODO: give hint that this expression is for conditional code
@@ -592,6 +598,8 @@ export class IfStatement extends ConditionalStatement {
 
   applyConditional(prep: Preprocessor): void {
 
+    // *** do something with this.op ***
+
     const conditional = prep.conditional
 
     // TODO: fix this hack for ACME inline code
@@ -627,7 +635,6 @@ export class IfStatement extends ConditionalStatement {
 //          !ifndef <symbol> { <block> }
 //   CA65:
 //   LISA:
-//  SBASM:
 
 export class IfDefStatement extends ConditionalStatement {
 
@@ -678,7 +685,7 @@ export class IfDefStatement extends ConditionalStatement {
 //   ACME:
 //   CA65:  .elseif <exp>
 //   LISA:
-//  SBASM:
+// 64TASS:  .elsif <exp>
 
 export class ElseIfStatement extends ConditionalStatement {
 
@@ -728,7 +735,7 @@ export class ElseIfStatement extends ConditionalStatement {
 //   ACME:  } else {
 //   CA65:  .else
 //   LISA:  .EL
-//  SBASM:  .EL
+// 64TASS:  .else
 
 export class ElseStatement extends ConditionalStatement {
 
@@ -782,7 +789,8 @@ export class ElseStatement extends ConditionalStatement {
 //   ACME:  }
 //   CA65:  .endif
 //   LISA:  .FI
-//  SBASM:  .FI
+// 64TASS:  .endif
+//          .fi
 
 export class EndIfStatement extends ConditionalStatement {
 
@@ -1163,6 +1171,7 @@ export class DataStatement_U32 extends DataStatement {
 //   CA65:  .res <count-exp> [, <fill-value>]
 //          .tag <struct-name>
 //   LISA:  ???
+// 64TASS:  .fill <count-exp> [, <fill-value]
 
 export class StorageStatement extends Statement {
 
@@ -1465,6 +1474,7 @@ class FileStatement extends Statement {
 //          !SOURCE <filename>
 //   CA65:  .INCLUDE "filename"
 //   LISA:  ICL "filename"
+// 64TASS:  .include "filename"
 
 export class IncludeStatement extends FileStatement {
 
@@ -1542,6 +1552,7 @@ export class IncDirStatement extends FileStatement {
 //   ACME:  !BINARY "filename" [, [size] [, [skip]]]
 //   CA65:  .INCBIN "filename" [, start [, size]]
 //   LISA:  n/a
+// 64TASS:  .binary "filename"
 
 export class IncBinStatement extends FileStatement {
 
@@ -1609,7 +1620,6 @@ export class IncBinStatement extends FileStatement {
 
 // *** watch for assigning a value to a local label
 //  *** LISA, for example, doesn't allow that
-// *** SBASM requires resolvable value with no forward references
 // *** mark symbol as being assigned rather than just a label?
 
 // MERLIN: symbol EQU [#]exp
@@ -1641,6 +1651,7 @@ export class EquStatement extends Statement {
       }
       this.value = parser.mustAddNextExpression()
       // TODO: if ":=", mark symbol as address
+      // TODO: deal with ":?=" conditional assignment
       this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
 
     } else {
@@ -1694,6 +1705,7 @@ export class VarAssignStatement extends Statement {
 //   ACME:  !cpu <type> [ { <block> } ]
 //   CA65:
 //   LISA:  n/a
+// 64TASS:  .cpu "<type>"
 
 export class CpuStatement extends Statement {
 
@@ -1702,7 +1714,28 @@ export class CpuStatement extends Statement {
   parse(parser: Parser) {
     if (this.opNameLC == "xc") {
       const res = parser.mustAddToken(["", "off"], TokenType.Keyword)
-  } else {
+    } else {
+
+      if (parser.syntax == Syntax.TASS64) {
+
+        // *** TODO: need parser.mustAddStringExpression()
+
+        const token = parser.getNextToken()
+        if (!token) {
+          parser.addMissingToken("expecting quoted string")
+          return
+        }
+        if (token.getString() != '"') {
+          parser.addToken(token)
+          token.setError("Expecting quoted string")
+          return
+        }
+
+        const strExpression = parser.parseStringExpression(token)
+        // TODO: verify that string is one of valid CPUs
+        parser.addExpression(strExpression)
+        return
+      }
 
       const res = parser.mustAddToken(["6502", "65c02", "65816"], TokenType.Keyword)
       if (res.index < 0) {
@@ -1844,6 +1877,8 @@ export class UsrStatement extends Statement {
 //          !scr <string-args>
 //          !text <string-args>
 
+// 64TASS:  .text <string-args>
+
 // TODO: make this the basis for all the various string/text statements
 export class TextStatement extends Statement {
 
@@ -1877,11 +1912,11 @@ export class TextStatement extends Statement {
 // MERLIN:  <name> MAC           (label required)
 //   DASM:         MAC <name>    (no label allowed)
 //                 MACRO <name>
-//   ACME:  !macro <name> [<param>,...] {
+//   ACME:         !macro <name> [<param>,...] {
 //   CA65:         .mac <name> [<param>,...]
 //                 .macro <name> [<param>,...]
-//   LISA:
-//  SBASM:  <name> .MA [<params-list>]
+// 64TASS:  <name> .macro [<param>,...]
+//   LISA:  n/a
 
 // ACME: params start with "." and are locals
 // CA65: params are simple symbols
@@ -1894,97 +1929,81 @@ export class MacroDefStatement extends Statement {
   parse(parser: Parser) {
 
     if (this.labelExp) {
-      if (!this.labelExp.isVariableType()) {
-        if (parser.syntax == Syntax.DASM
-            || parser.syntax == Syntax.ACME
-            || parser.syntax == Syntax.CA65) {
-          this.labelExp.setError("Label not allowed")
-        } else if (this.labelExp.isLocalType()) {
-          this.labelExp.setError("Local label not allowed")
-        } else {
-          this.macroName = this.labelExp
-          this.macroName.setSymbolType(SymbolType.MacroName)
-        }
-      } else {
-        this.labelExp.setError("Variable label not allowed")
-        return
+      if (parser.syntax && !parser.syntaxDef.macroDefineWithLabel) {
+        this.labelExp.setError("Label not allowed")
       }
-    } else if (parser.syntax == Syntax.MERLIN) {
-      /*|| parser.syntax == Syntax.SBASM*/
+    } else if (parser.syntax && parser.syntaxDef.macroDefineWithLabel) {
       parser.insertMissingLabel()
     }
 
-    // TODO: rewrite/split/subclass this logic to be clearer
-    if (parser.syntax != Syntax.MERLIN) {
-      let token = parser.getNextToken()
+    if (parser.syntaxDef.macroDefineWithLabel) {
+      if (this.labelExp) {
+        this.macroName = this.labelExp
+        this.macroName.setSymbolType(SymbolType.MacroName)
+      }
+    } else {
+      const token = parser.getNextToken()
       if (token) {
         // macro name
         // TODO: generalize this
 
-        // CA65 allows macro names to start with a "." (undocumented?)
-        if (parser.syntax == Syntax.CA65) {
-          parser.dotExtend(token)
-        }
+        // TODO: CA65 allows macro names to start with a "." (undocumented?)
 
-        if (token.type == TokenType.Symbol
-            || token.type == TokenType.HexNumber) {
+        if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
           const isDefinition = true
           this.macroName = new exp.SymbolExpression([token], SymbolType.MacroName,
             isDefinition, parser.sourceFile, parser.lineNumber)
           parser.addExpression(this.macroName)
-          token = parser.getNextToken()
         }
-        if (token) {
-          if (token.getString() == "{") {
-            if (!this.macroName) {
-              token.setError("Unexpected token, expected macro name")
-            } else if (parser.syntax && parser.syntax != Syntax.ACME) {
+      }
+    }
+
+    if (parser.syntaxDef.macroDefineParams) {
+      let token = parser.getNextToken()
+      if (token) {
+        if (token.getString() == "{") {
+          if (!this.macroName) {
+            token.setError("Unexpected token, expected macro name")
+          } else if (parser.syntax && parser.syntax != Syntax.ACME) {
+            token.setError("Unexpected token")
+          }
+          parser.addToken(token)
+        } else {
+          // parse comma-delimited parameter list
+          while (token) {
+            const expression = parser.addNextExpression(token)
+            if (!expression) {
+              break
+            }
+
+            if (expression instanceof exp.SymbolExpression) {
+              expression.setIsDefinition(SymbolFrom.MacroParam)
+              this.params.push(expression)
+            } else {
+              expression.setError("Simple symbol expected")
+            }
+
+            token = parser.getNextToken()
+            if (!token) {
+              break
+            }
+            const str = token.getString()
+            if (!parser.syntax || parser.syntax == Syntax.ACME) {
+              if (str == "{") {
+                parser.addToken(token)
+                break
+              }
+            }
+            if (str != ",") {
               token.setError("Unexpected token")
+              break
             }
             parser.addToken(token)
-          } else {
-            // parse comma-delimited parameter list
-            while (token) {
-              const expression = parser.addNextExpression(token)
-              if (!expression) {
-                break
-              }
-
-              if (expression instanceof exp.SymbolExpression) {
-                expression.setIsDefinition(SymbolFrom.MacroParam)
-                this.params.push(expression)
-              } else {
-                expression.setError("Simple symbol expected")
-              }
-
-              token = parser.getNextToken()
-              if (!token) {
-                break
-              }
-              const str = token.getString()
-              if (!parser.syntax || parser.syntax == Syntax.ACME) {
-                if (str == "{") {
-                  parser.addToken(token)
-                  break
-                }
-              }
-              if (str != ",") {
-                token.setError("Unexpected token")
-                break
-              }
-              parser.addToken(token)
-              token = parser.getNextToken()
-            }
+            token = parser.getNextToken()
           }
-        } else if (parser.syntax == Syntax.ACME) {
-          parser.addMissingToken("opening brace expected")
         }
-      } else {
-        if (parser.syntax == Syntax.DASM
-            || parser.syntax == Syntax.ACME
-            || parser.syntax == Syntax.CA65) {
-          parser.addMissingToken("macro name expected")
-        }
+      } else if (parser.syntax == Syntax.ACME) {
+        parser.addMissingToken("opening brace expected")
       }
 
       // *** explicit trailing brace? ***
@@ -2028,10 +2047,11 @@ export class MacroDefStatement extends Statement {
 //          <<<
 //   DASM:  ENDM      (no label allowed)
 //   ACME:  }
-//   CA65:  .endmac
-//          .endmacro
-//   LISA:
-//  SBASM:  <name> .EM
+//   CA65:  .endmacro
+//          .endmac
+// 64TASS:  .endmacro
+//          .endm
+//   LISA:  n/a
 
 export class EndMacroDefStatement extends Statement {
 
@@ -2066,37 +2086,24 @@ export class EndMacroDefStatement extends Statement {
 
 //------------------------------------------------------------------------------
 
-// TODO: probably needs to be split by syntax
-
 // MERLIN:  <label> <macro> [<param>;...]
 //   DASM:  <label> <macro> [<param>, ...]
 //   ACME:  <label> +<macro> [<param>, ...]
 //   CA65:
-//   LISA:
-//  SBASM:
+// 64TASS:  <label> #<macro> [<param>, ...]
+//   LISA:  n/a
 
 export class MacroInvokeStatement extends Statement {
 
+  // *** where is this coming from? in this.labelExp?
   public macroName?: exp.SymbolExpression
   protected params: exp.Expression[] = []
 
   parse(parser: Parser) {
 
-    if (this.opNameLC.startsWith("+")) {
-      // *** maybe make parser.parseOpcode smarter instead? ***
-      if (!parser.syntax || parser.syntax == Syntax.ACME) {
-        // *** split into two tokens and replace in this.children
-        // *** this.opToken becomes second new token
-      } else {
-        // *** force error ***
-      }
-    }
-
-    // *** create symExpression from opToken
-    // *** replace opToken in this.children
-
+    let pushedExpression = false
     while (true) {
-      const token = parser.getNextToken()
+      let token = parser.getNextToken()
       if (!token) {
         break
       }
@@ -2104,7 +2111,7 @@ export class MacroInvokeStatement extends Statement {
       const str = token.getString()
 
       // TODO: hacks to allow macros to look like opcodes
-      if (parser.syntax == Syntax.CA65) {
+      if (parser.syntax == Syntax.CA65) {   // HACK
         if (str == "#") {
           parser.addToken(token)
           continue
@@ -2115,46 +2122,26 @@ export class MacroInvokeStatement extends Statement {
         }
       }
 
-      // TODO: not on first pass
-      if (!parser.syntax || parser.syntax == Syntax.MERLIN) {
-        if (str == ";") {
-          parser.addToken(token)
-          continue
+      // TODO: fix this multi-statement hack to suppress errors
+      if (parser.syntax == Syntax.ACME) {   // HACK
+        if (str == ":") {
+          parser.ungetToken(token)
+          break
         }
       }
 
-      // TODO: which other syntaxes for this?
-      if (!parser.syntax
-          || parser.syntax == Syntax.ACME
-          || parser.syntax == Syntax.DASM
-          || parser.syntax == Syntax.CA65) {
-
-        // TODO: shouldn't look for comma on first iteration
-        if (str == ",") {
-          parser.addToken(token)
-          continue
+      if (parser.syntaxDef.macroInvokeDelimiters.includes(str)) {
+        if (!pushedExpression) {
+          // TODO: push empty expression
         }
-
-        // TODO: fix this multi-statement hack to suppress errors
-        if (parser.syntax == Syntax.ACME) {
-          if (str == ":") {
-            parser.ungetToken(token)
-            break
-          }
-        }
+        parser.addToken(token)
+        pushedExpression = false
+        continue
       }
 
-      // TODO: clean up this hack support for Naja text macros
-      if (parser.syntax == Syntax.MERLIN) {
-        if (str == "(") {
-          // *** must at least one ";" before doing this??? ***
-          const strExpression = parser.parseStringExpression(token, true, false)
-          parser.addExpression(strExpression)
-          continue
-
-          // *** attempt NajaText
-          // *** attempt 6502 addressing
-        }
+      if (pushedExpression) {
+        parser.addMissingToken(`Missing delimiter "${parser.syntaxDef.macroInvokeDelimiters}"`)
+        break
       }
 
       const expression = parser.addNextExpression(token)
@@ -2163,6 +2150,7 @@ export class MacroInvokeStatement extends Statement {
       }
 
       this.params.push(expression)
+      pushedExpression = true
     }
   }
 
@@ -2621,7 +2609,6 @@ export class AssertStatement extends Statement {
 //   ACME:  (see !zone below)
 //   CA65:
 //   LISA:
-//  SBASM:
 
 export class SubroutineStatement extends Statement {
 

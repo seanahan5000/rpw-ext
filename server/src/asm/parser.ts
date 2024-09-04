@@ -78,7 +78,7 @@
 import { SourceFile } from "./project"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
 import { OpcodeSets } from "./opcodes"
-import { Syntax, SyntaxMap, SyntaxDef, OpDef, Op } from "./syntaxes/syntax_types"
+import { Op, OpDef, SyntaxDef, Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { SymbolType, SymbolFrom } from "./symbols"
 import * as exp from "./expressions"
@@ -250,40 +250,6 @@ export class Parser extends Tokenizer {
     }
   }
 
-  public dotExtend(token: Token) {
-    if (!this.syntax ||
-        this.syntax == Syntax.DASM ||
-        this.syntax == Syntax.ACME ||
-        this.syntax == Syntax.CA65) {
-      if (token.getString() == ".") {
-        const savedPosition = this.position
-        const nextToken = this.getVeryNextToken()
-        if (nextToken) {
-          if (nextToken.type == TokenType.Operator) {
-            this.position = savedPosition
-            return
-          }
-          token.end = nextToken.end
-          token.type = TokenType.Symbol
-          if (this.syntax == Syntax.CA65) {
-            return
-          }
-        }
-      }
-      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-        while (this.peekVeryNextChar() == ".") {
-          this.position += 1
-          const nextToken = this.getVeryNextToken()
-          if (!nextToken) {
-            break
-          }
-          token.end = nextToken.end
-          token.type = TokenType.Symbol
-        }
-      }
-    }
-  }
-
   private parseStatement(): stm.Statement {
 
     this.nodeSet = []
@@ -294,11 +260,11 @@ export class Parser extends Tokenizer {
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
 
+    // *** get token here ***
+
     // check for keyword in the first column
-    if (!this.syntax ||
-        this.syntax == Syntax.ACME ||
-        this.syntax == Syntax.DASM ||
-        this.syntax == Syntax.CA65) {
+    // TODO: this happens frequently -- could it be more efficient?
+    if (this.syntaxDef.keywordsInColumn1) {
       const savedPosition = this.position
       const token = this.getNextToken()
       if (token) {
@@ -395,8 +361,6 @@ export class Parser extends Tokenizer {
   private parseKeyword(token: Token): stm.Statement | undefined {
     let statement: stm.Statement | undefined
 
-    this.dotExtend(token)
-
     let keywordLC = token.getString().toLowerCase()
     let altwordLC: string | undefined
 
@@ -412,41 +376,12 @@ export class Parser extends Tokenizer {
 
     // DASM allows optional "." or "#" on all directives
     if (!this.syntax || this.syntax == Syntax.DASM) {
-      if (keywordLC[0] == ".") {
-        // period has already been prepended elsewhere
-        // *** why only on no syntax? ***
-        // if (!this.syntax) {
-          altwordLC = keywordLC
-        // }
-        // keyword now excludes prefix operator
-        keywordLC = keywordLC.substring(1)
-      } else if (keywordLC == "#") {
-        const nextToken = this.getVeryNextToken()
-        if (nextToken) {
-          // *** why only on no syntax? ***
-          // if (!this.syntax) {
-            altwordLC = keywordLC
-          // }
-          // keyword excludes prefix operator
-          keywordLC = nextToken.getString().toLowerCase()
-          // token includes prefix operator
-          token.end = nextToken.end
-          token.type = TokenType.Symbol
-        }
+      if (keywordLC[0] == "." || keywordLC[0] == "#") {
+        altwordLC = keywordLC.substring(1)
       }
     }
 
-    // ACME syntax uses '!' prefix for keywords
-    if (keywordLC == "!") {
-      if (!this.syntax || this.syntax == Syntax.ACME) {
-        const nextToken = this.getVeryNextToken()
-        if (nextToken) {
-          token.end = nextToken.end
-          token.type = TokenType.Symbol
-          keywordLC = token.getString().toLowerCase()
-        }
-      }
-    } else if (keywordLC == "}") {
+    if (keywordLC == "}") {
       // ACME syntax ends conditionals, zones, and other blocks with '}'
       if (!this.syntax || this.syntax == Syntax.ACME) {
         const elseToken = this.peekNextToken()
@@ -454,7 +389,7 @@ export class Parser extends Tokenizer {
           if (elseToken.getString().toLowerCase() == "else") {
             statement = new stm.ElseStatement()
             this.syntaxStats[Syntax.ACME] += 1
-            // TODO: may need to look for anoher opening brace here?
+            // TODO: may need to look for another opening brace here?
           }
         } else {
           statement = new stm.ClosingBraceStatement()
@@ -472,6 +407,13 @@ export class Parser extends Tokenizer {
             k = SyntaxDefs[i].keywordMap.get(altwordLC)
           }
           if (k) {
+
+            if (k.alias) {
+              k = SyntaxDefs[i].keywordMap.get(k.alias)
+              if (!k) {
+                continue
+              }
+            }
 
             // count every keyword match in order to later guess the syntax
             this.syntaxStats[i] += 1
@@ -534,26 +476,23 @@ export class Parser extends Tokenizer {
   }
 
   private parseMacroInvoke(token: Token): stm.Statement | undefined {
-    this.startExpression()
-    if (token.getString() == "+") {
-      this.addToken(token)
-      if (!this.syntax || this.syntax == Syntax.ACME) {
-        token.type = TokenType.Macro
-        const nextToken = this.getVeryNextToken()
-        if (nextToken && (nextToken.type == TokenType.Symbol || nextToken.type == TokenType.HexNumber)) {
-          token = nextToken
-          token.type = TokenType.Macro
-        } else {
-          token.setError("Expecting macro name")
-        }
-      } else {
-        token.setError("Unexpected token")
+    const prefixes = this.syntaxDef.macroInvokePrefixes
+    if (prefixes != "") {
+      const str = token.getString()
+      if (!prefixes.includes(str[0])) {
+        return
       }
+      this.startExpression()
+      const tokens = token.split(1)
+      token = tokens[0]
+      token.type = TokenType.Macro
+      this.addToken(token)
+      token = tokens[1]
+    } else {
+      this.startExpression()
     }
+    token.type = TokenType.Macro
     this.addToken(token)
-    if (token.type != TokenType.Symbol && token.type != TokenType.HexNumber && token.type != TokenType.Macro) {
-      token.setError("Unexpected token")
-    }
     const symExp = this.newSymbolExpression(this.endExpression(), SymbolType.MacroName, false)
     return this.initStatement(new stm.MacroInvokeStatement(), symExp)
   }
@@ -607,10 +546,6 @@ export class Parser extends Tokenizer {
         const savedPosition1 = this.position
         const t1 = token ?? this.getNextToken()
 
-        if (t1) {
-          this.dotExtend(t1)
-        }
-
         const savedPosition2 = this.position
         const t2 = this.getNextToken()
 
@@ -619,8 +554,6 @@ export class Parser extends Tokenizer {
           this.position = savedPosition1
           return
         }
-
-        this.dotExtend(t2)
 
         const t2str = t2.getString().toLowerCase()
         if (t2str == "=") {
@@ -675,7 +608,7 @@ export class Parser extends Tokenizer {
     let str = token.getString()
 
     // handle Merlin vars before everything else
-    if (str == "]") {
+    if (str[0] == "]") {
       if (!this.syntax || this.syntax == Syntax.MERLIN) {
         this.syntaxStats[Syntax.MERLIN] += 1
         // *** enforce/handle var assignment
@@ -684,19 +617,31 @@ export class Parser extends Tokenizer {
       }
     }
 
-    // a token that starts with a "." could be a local or a keyword
-    //  depending on the syntax
-    if (token.type == TokenType.Symbol && str[0] == ".") {
-      // *** fix parseLocal instead? ***
-    //   // *** maybe duplicate in parseValueExpression?
-    //   // if (isDefinition) {
-    //     // turn the token into a single character "." and back up
-    //     // *** TODO: add logic to decide when to do this ***
+    if (token.type == TokenType.Symbol) {
+
+      let split = false
+
+      // a token that starts with a "." could be a local or a keyword
+      //  depending on the syntax
+      if (str[0] == ".") {
+        // *** fix parseLocal instead? ***
+      //   // *** maybe duplicate in parseValueExpression?
+      //   // if (isDefinition) {
+      //     // *** TODO: add logic to decide when to do this ***
+          split = true
+      //   // }
+      } else if (this.syntaxDef.cheapLocalPrefixes.includes(str[0])) {
+        // NOTE: currently used to handle leading "_" prefix
+        split = true
+      }
+
+      if (split) {
+        // turn the token into a single character and back up
         token.type = TokenType.Operator
         token.end = token.start + 1
         this.position = token.end
-        str = "."
-    //   // }
+        str = str[0]
+      }
     }
 
     if (token.type == TokenType.Operator) {
@@ -723,7 +668,6 @@ export class Parser extends Tokenizer {
         } else if (str == ".") {
           // CA65 allows labels that start with "." if they are followed by ":"
           if (this.syntax == Syntax.CA65) {
-            this.dotExtend(token)
             const c = this.peekVeryNextChar()
             if (c == ":") {
               token.type = TokenType.Label
@@ -753,26 +697,14 @@ export class Parser extends Tokenizer {
         }
       }
 
-      // TODO: generalize this in syntax
-      if (str == ".") {
-        if (!this.syntax ||
-            this.syntax == Syntax.DASM ||
-            this.syntax == Syntax.ACME) {       // *** what others?
-          return this.parseLocal(token, SymbolType.ZoneLocal, isDefinition)
-        }
-      } else if (str == ":") {
-        if (this.syntax == Syntax.CA65) {
-          // TODO: when would this hit?
-        } else if (!this.syntax ||
-            this.syntax == Syntax.MERLIN) {   // *** any others?
-          return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
-        }
-      } else if (str == "@") {
-        if (!this.syntax ||
-            this.syntax == Syntax.ACME ||
-            this.syntax == Syntax.CA65) {       // *** what others?
-          return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
-        }
+      if (this.syntaxDef.cheapLocalPrefixes.includes(str)) {
+        // TODO: if !this.syntax, count by syntax match?
+        return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
+      }
+
+      if (this.syntaxDef.zoneLocalPrefixes.includes(str)) {
+        // TODO: if !this.syntax, count by syntax match?
+        return this.parseLocal(token, SymbolType.ZoneLocal, isDefinition)
       }
     }
 
@@ -1026,8 +958,6 @@ export class Parser extends Tokenizer {
   // *** what happens to token if not used?
     // *** force this.position = token.end ???
   public parseValueExpression(token: Token): exp.Expression | undefined {
-
-    this.dotExtend(token)
 
     let str = token.getString()
 
@@ -1291,23 +1221,15 @@ export class Parser extends Tokenizer {
     }
   }
 
-  // caller has already checked for Merlin and that token == "]"
-  parseVarExpression(bracketToken: Token, isDefinition: boolean): exp.SymbolExpression {
-    bracketToken.type = TokenType.Variable
-    const nameToken = this.mustGetVeryNextToken("expecting var name")
-    if (nameToken.type != TokenType.Symbol
-      && nameToken.type != TokenType.HexNumber
-      && nameToken.type != TokenType.DecNumber)
-    {
-      nameToken.setError("Unexpected token, expecting var name")
-    }
+  // caller has already checked for Merlin and that token starts with "]"
+  parseVarExpression(varToken: Token, isDefinition: boolean): exp.SymbolExpression {
+    varToken.type = TokenType.Variable
 
     // TODO: for now, treat all variables as definitions
     //  until reference tracking and macro usage is resolved
     isDefinition = true
 
-    nameToken.type = TokenType.Variable
-    return new exp.SymbolExpression([bracketToken, nameToken], SymbolType.Variable, isDefinition)
+    return new exp.SymbolExpression([varToken], SymbolType.Variable, isDefinition)
   }
 
   private pushNextComment() {
@@ -1542,7 +1464,7 @@ class ExpressionBuilder {
     }
     if (opDef) {
       // turn symbols like "mod" and "div" into operators
-      if (token.type = TokenType.Symbol) {
+      if (token.type == TokenType.Symbol) {
         token.type = TokenType.Operator
       }
       return new OpEntry(token, opDef, isUnary)
