@@ -13,7 +13,7 @@ import { OpStatement, Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
-import { SyntaxNames } from "./asm/syntax"
+import { SyntaxNames } from "./asm/syntaxes/syntax_types"
 import { Isa6502 } from "./isa6502"
 
 //------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 
-import { Syntax } from "./syntax"
+import { Syntax } from "./syntaxes/syntax_types"
 
 //------------------------------------------------------------------------------
 

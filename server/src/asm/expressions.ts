@@ -1,7 +1,7 @@
 
 import { SourceFile } from "./project"
 import { Node, NodeRange, Token } from "./tokenizer"
-import { Syntax, Op } from "./syntax"
+import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Symbol, SymbolType, SymbolFrom, isLocalType } from "./symbols"
 
 //------------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import { SymbolExpression } from "./expressions"
 
 // just for the CA65 macro invoke work-around
 import { Parser } from "./parser"
-import { Syntax } from "./syntax"
+import { Syntax } from "./syntaxes/syntax_types"
 
 //------------------------------------------------------------------------------
 
@@ -525,7 +525,7 @@ export class Preprocessor {
 //------------------------------------------------------------------------------
 
 import * as exp from "./expressions"
-import { Op } from "./syntax"
+import { Op } from "./syntaxes/syntax_types"
 
 export class SymbolUtils {
 

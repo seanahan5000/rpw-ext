@@ -4,7 +4,7 @@ import { Parser } from "./parser"
 import { Assembler } from "./assembler"
 import { Preprocessor, SymbolUtils, NestingType } from "./preprocessor"
 import { SymbolType, SymbolFrom } from "./symbols"
-import { Syntax, } from "./syntax"
+import { Syntax } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
 import { Isa6502 } from "../isa6502"
 

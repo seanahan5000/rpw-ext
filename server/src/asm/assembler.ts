@@ -2,7 +2,7 @@
 import { PcExpression, SymbolExpression } from "./expressions"
 import { Module, LineRecord } from "./project"
 import { GenericStatement } from "./statements"
-import { Syntax } from "./syntax"
+import { Syntax } from "./syntaxes/syntax_types"
 
 // - update while typing
 

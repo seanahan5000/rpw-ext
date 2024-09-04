@@ -1,7 +1,8 @@
 
 import * as fs from 'fs'
 import { RpwProject, RpwSettings } from "../rpw_types"
-import { Syntax, SyntaxMap, SyntaxDefs } from "./syntax"
+import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
+import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
 import { Parser } from "./parser"
 import { Preprocessor } from "./preprocessor"
