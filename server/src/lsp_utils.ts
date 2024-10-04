@@ -5,11 +5,11 @@ import { SourceFile } from "./asm/project"
 import { Token, TokenType } from "./asm/tokenizer"
 import { OpStatement, OpMode } from "./asm/statements"
 import { OpcodeSets } from "./asm/opcodes"
-import { Syntax } from "./asm/syntaxes/syntax_types"
 import { SyntaxDefs } from "./asm/syntaxes/syntax_defs"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
 import { Expression, SymbolExpression } from "./asm/expressions"
+import { ParamsParser } from "./asm/syntaxes/params"
 
 //------------------------------------------------------------------------------
 
@@ -78,6 +78,7 @@ export class Completions {
 
   addOpcodes = 0
   addKeywords = 0
+  addKeyConstants = 0
   addMacros = 0
   addConstants = 0
   addZpage = 0
@@ -96,6 +97,8 @@ export class Completions {
     let checkInd = false
     let appendIndY = false
     let leadingSymbol = ""
+
+    const syntaxDef = SyntaxDefs[sourceFile.module.project.syntax]
 
     // no completions when in comment (top-level token)
     for (let token of statement.children) {
@@ -157,10 +160,12 @@ export class Completions {
       // use default completions
     } else if (loc == Loc.inOpcode) {
       const firstChar = opRange ? opRange.sourceLine[opRange.start] : ""
-      const syntax = sourceFile.module.project.syntax
-      // TODO: more logic here
-      if ((firstChar == "." || firstChar == ":") && syntax == Syntax.CA65) {
+      if (syntaxDef.keywordPrefixes.includes(firstChar)) {
+        // TODO: what if prefix is also used for symbol? (dasm)
         this.addKeywords = ++index
+        leadingSymbol = firstChar
+      } else if (syntaxDef.macroInvokePrefixes.includes(firstChar)) {
+        this.addMacros = ++index
         leadingSymbol = firstChar
       } else {
         // might depend on statement type
@@ -256,6 +261,7 @@ export class Completions {
         if (!inHex) {
           // TODO: need better auto completes based on keyword
           // TODO: better completes for macros
+          this.addKeyConstants = ++index
           this.addConstants = ++index
           this.addZpage = ++index
           this.addData = ++index
@@ -323,17 +329,40 @@ export class Completions {
     if (this.addKeywords) {
       const syntax = sourceFile.module.project.syntax
       if (syntax) {
-        for (let [key] of SyntaxDefs[syntax].keywordMap) {
+        for (let [key, keywordDef] of syntaxDef.keywordMap) {
           if (sourceFile.module.project.upperCase) {
             key = key.toUpperCase()
           }
-          // TODO: only pad keywords that have arguements
-          // TODO: use settings instead of 4
-          key = key.padEnd(4 - leadingSymbol.length, " ")
+
+          // don't include keywords that don't start with the leading symbol
+          if (leadingSymbol != "" && !key.startsWith(leadingSymbol)) {
+            continue
+          }
+
+          const params = keywordDef.params ?? ""
+          const desc = keywordDef.desc ?? ""
+
+          // only pad keywords that have arguments
+          if (params != "") {
+            // TODO: use settings instead of 4
+            key = key.padEnd(3 - leadingSymbol.length, " ")
+            key += " "
+          }
           let item = lsp.CompletionItem.create(key)
           item.sortText = `${this.addKeywords}_${key}`
           item.kind = lsp.CompletionItemKind.Text
-          // TODO: tie this to syntax, check for "!", and/or "+"
+
+          // add keyword documentation
+          // TODO: better formatting (markdown?)
+          if (params != "") {
+            // TODO: sanitize parameter string to human-readable
+            item.detail = params
+          }
+          if (desc != "") {
+            item.documentation = desc
+          }
+
+          // *** TODO: tie this to syntax, check for "!", and/or "+"
           if (leadingSymbol == key[0]) {
             item.insertText = key.substring(1)
           }
@@ -460,6 +489,18 @@ export class Completions {
             item.kind = lsp.CompletionItemKind.Function
             completions.push(item)
           }
+        }
+      }
+    }
+
+    if (this.addKeyConstants) {
+      if (statement.keywordDef?.paramsList) {
+        const constNames = ParamsParser.getConstantNames(statement.keywordDef.paramsList)
+        for (let name of constNames) {
+          const item = lsp.CompletionItem.create(name)
+          item.sortText = `${this.addKeyConstants}_${name}`
+          item.kind = lsp.CompletionItemKind.Constant
+          completions.push(item)
         }
       }
     }

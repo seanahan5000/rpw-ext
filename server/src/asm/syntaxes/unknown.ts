@@ -5,15 +5,17 @@ import { SyntaxDef, KeywordDef, OpDef, Op } from "./syntax_types"
 
 export class UnknownSyntax extends SyntaxDef {
 
-  public symbolTokenPrefixes = "@:.]_"
+  public symbolTokenPrefixes = "!@:.]_"
   public symbolTokenContents = "."
   public cheapLocalPrefixes = "@:"
   public zoneLocalPrefixes = "."
+  public anonLocalChars = "+-"
+  public keywordPrefixes = ".!"
   public keywordsInColumn1 = true
-  public macroDefineWithLabel = false
-  public macroDefineParams = true
   public macroInvokePrefixes = ""
-  public macroInvokeDelimiters = ";,"
+  public macroInvokeDelimiters = ","
+  public allowLabelTrailingColon = true
+  public allowIndentedAssignment = true
 
   constructor() {
     super()

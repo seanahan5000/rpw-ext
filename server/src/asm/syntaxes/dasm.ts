@@ -21,77 +21,187 @@ export class DasmSyntax extends SyntaxDef {
   public symbolTokenContents = "."
   public cheapLocalPrefixes = ""
   public zoneLocalPrefixes = "."
+  public anonLocalChars = ""
+  public keywordPrefixes = ".#"
   public keywordsInColumn1 = true
-  public macroDefineWithLabel = false  // mac <name> [<params>]
-  public macroDefineParams = false
   public macroInvokePrefixes = ""
   public macroInvokeDelimiters = ","
+  public allowLabelTrailingColon = true
+  public allowIndentedAssignment = false
 
   constructor() {
     super()
 
     this.keywordMap = new Map<string, KeywordDef>([
-      [ "processor",  { create: () => { return new stm.CpuStatement() }}],
-      [ "err",        { create: () => { return new stm.ErrorStatement() }}],
+      // target
+      [ "processor",  { create: () => { return new stm.CpuStatement() },
+                        params: "{ 6502 }",
+                        desc:   "Set processor target" } ],
+
+      [ "err",        { create: () => { return new stm.ErrorStatement() },
+                        params: "",
+                        desc:   "Abort assembly" } ],
 
       // equates
-      [ "equ",        { create: () => { return new stm.EquStatement() }}],
+      [ "equ",        { create: () => { return new stm.EquStatement() },
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Assign expression value to symbol" } ],
       [ "=",          { alias: "equ" }],
-      [ "set",        { create: () => { return new stm.VarAssignStatement() }}],
+      [ "set",        { create: () => { return new stm.VarAssignStatement() },
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Change value of reassignable symbol" } ],
+      [ "eqm",        { // TODO
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Assign expression string to symbol" } ],
+      [ "setstr",     { // TODO
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Change var to expression as string to symbol" } ],
 
       // pc
-      [ "org",        { create: () => { return new stm.OrgStatement() }}],
+      [ "org",        { create: () => { return new stm.OrgStatement() },
+                        params: "<expression>[, <fill>]",
+                        desc:   "Set the current origin" } ],
+      [ "rorg",       { // TODO
+                        params: "<expression>",
+                        desc:   "Activate the relocatable origin" } ],
+      [ "rend",       { // TODO
+                        params: "",
+                        desc:   "Deactivate the relocatable origin" } ],
 
       // disk
-      [ "include",    { create: () => { return new stm.IncludeStatement() }}],
-      [ "incdir",     { create: () => { return new stm.IncDirStatement() }}],
-      [ "incbin",     { create: () => { return new stm.IncBinStatement() }}],
+      [ "include",    { create: () => { return new stm.IncludeStatement() },
+                        params: "<filename>",
+                        desc:   "Insert source file" } ],
+      [ "incdir",     { create: () => { return new stm.IncDirStatement() },
+                        params: "<dirname>",
+                        desc:   "Add given directory to search path" } ],
+      [ "incbin",     { create: () => { return new stm.IncBinStatement() },
+                        params: "<filename>[, <offset>]"}],
 
       // macros
-      [ "macro",      { create: () => { return new stm.MacroDefStatement() }}],
+      [ "macro",      { create: () => { return new stm.MacroDefStatement() },
+                        label:  "",
+                        params: "<macro-name>",
+                        desc:   "Start of macro definition" } ],
       [ "mac",        { alias: "macro" }],
-      [ "endm",       { create: () => { return new stm.EndMacroDefStatement() }}],
-      [ "mexit",      {}],
+      [ "endm",       { create: () => { return new stm.EndMacroDefStatement() },
+                        label:  "",
+                        params: "",
+                        desc:   "End of macro definition" } ],
+      [ "mexit",      { // TODO
+                        params: "",
+                        desc:   "Exit the current macro level" } ],
 
       // segments
-      [ "seg",        { create: () => { return new stm.SegmentStatement() }}],
-      [ "seg.u",      { create: () => { return new stm.SegmentStatement() }}],
+      [ "seg",        { create: () => { return new stm.SegmentStatement() },
+                        params: "[<name>]",
+                        desc:   "Switch to new segment, creating if necessary" } ],
+      [ "seg.u",      { alias:   "seg" } ],
 
-      [ "echo",       {}],
+      [ "echo",       { // TODO
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "" } ],
 
       // data storage
-      [ "ds",         { create: () => { return new stm.StorageStatement(1) }}],
-      [ "ds.b",       { create: () => { return new stm.StorageStatement(1) }}],
-      [ "ds.w",       { create: () => { return new stm.StorageStatement(2) }}],
-      [ "ds.s",       { create: () => { return new stm.StorageStatement(2, true) }}],
-      [ "dc",         { create: () => { return new stm.DataStatement_X8() }}],
-      [ "dc.b",       { create: () => { return new stm.DataStatement_X8() }}],
-      [ "dc.w",       { create: () => { return new stm.DataStatement_X16() }}],
-      [ "dc.l",       { create: () => { return new stm.DataStatement_U32() }}],
-      [ "dc.s",       { create: () => { return new stm.DataStatement_X16(true) }}],
+      [ "ds",         { create: () => { return new stm.StorageStatement(1) },
+                        params: "<expression>[, <fill>]",
+                        desc:   "Declare space and fill with value or 0" } ],
+      [ "ds.b",       { create: () => { return new stm.StorageStatement(1) },
+                        params: "<expression>[, <fill>]",
+                        desc:   "Declare space and fill with value or 0" } ],
+      [ "ds.w",       { create: () => { return new stm.StorageStatement(2) },
+                        params: "<expression>[, <fill>]",
+                        desc:   "Declare space and fill with value or 0" } ],
+      [ "ds.l",       { create: () => { return new stm.StorageStatement(4) },
+                        params: "<expression>[, <fill>]",
+                        desc:   "Declare space and fill with value or 0" } ],
+
+      [ "dc",         { create: () => { return new stm.DataStatement_X8() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Declare byte data in the current segment" } ],
+      [ "dc.b",       { create: () => { return new stm.DataStatement_X8() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Declare byte data in the current segment" } ],
+      [ "dc.w",       { create: () => { return new stm.DataStatement_X16() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Declare word data in the current segment (little endian)" } ],
+      [ "dc.l",       { create: () => { return new stm.DataStatement_U32() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Declare long data in the current segment" } ],
+      [ "dc.s",       { create: () => { return new stm.DataStatement_X16(true) },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Declare word data in the current segment (big endian)" } ],
+
+      [ "dv",         { // TODO
+                        params: "<eqmlabel:symbol> <expression>[, <expression> ...]",
+                        desc:   "Equivalent to DC but each expression is passed through eqmlabel" } ],
+      [ "dv.b",       { // TODO
+                        params: "<eqmlabel:symbol> <expression>[, <expression> ...]",
+                        desc:   "Equivalent to DC but each expression is passed through eqmlabel" } ],
+      [ "dv.w",       { // TODO
+                        params: "<eqmlabel:symbol> <expression>[, <expression> ...]",
+                        desc:   "Equivalent to DC but each expression is passed through eqmlabel" } ],
+      [ "dv.l",       { // TODO
+                        params: "<eqmlabel:symbol> <expression>[, <expression> ...]",
+                        desc:   "Equivalent to DC but each expression is passed through eqmlabel" } ],
+
       [ "byte",       { alias: "dc.b" }],
       [ "word",       { alias: "dc.w" }],
-      [ "hex",        { create: () => { return new stm.HexStatement() }}],
-      [ "align",      { create: () => { return new stm.AlignStatement() }}],
+      [ "long",       { alias: "dc.l" }],
+      [ "hex",        { create: () => { return new stm.HexStatement() },
+                        params: "<hex> [<hex> ...]",
+                        desc:   "Raw hexidecimal data" } ],
+      [ "align",      { create: () => { return new stm.AlignStatement() },
+                        params: "<boundary>[, <fill>]",
+                        desc:   "Align the current program counter to an n-byte boundary" } ],
+      // RES not supported
 
       // conditionals
-      [ "if",         { create: () => { return new stm.IfStatement() }}],
-      [ "ifconst",    { create: () => { return new stm.IfDefStatement(true) }}],
-      [ "ifnconst",   { create: () => { return new stm.IfDefStatement(false) }}],
-      [ "else",       { create: () => { return new stm.ElseStatement() }}],
-      [ "elif",       { create: () => { return new stm.ElseIfStatement() }}],
-      [ "endif",      { create: () => { return new stm.EndIfStatement() }}],
+      [ "if",         { create: () => { return new stm.IfStatement() },
+                        params: "<condition>",
+                        desc:   "Compile if condition is true" } ],
+      [ "ifconst",    { create: () => { return new stm.IfConstStatement(true) },
+                        params: "<condition>",
+                        desc:   "Compile if condition is constant" } ],
+      [ "ifnconst",   { create: () => { return new stm.IfConstStatement(false) },
+                        params: "<condition>",
+                        desc:   "Compile if condition is not constant" } ],
+      [ "else",       { create: () => { return new stm.ElseStatement() },
+                        params: "",
+                        desc:   "Compile if previous conditions were not met" } ],
+      [ "elif",       { create: () => { return new stm.ElseIfStatement() },
+                        params: "<condition>",
+                        desc:   "Compile if previous conditions were not met and the condition is true" } ],
+      [ "endif",      { create: () => { return new stm.EndIfStatement() },
+                        params: "",
+                        desc:   "End of conditional compilation" } ],
       [ "eif",        { alias: "endif" }],
-      [ "end",        {}],
+
+      [ "end",        { // TODO:
+                        params: "",
+                        desc:   "End assembly immediately" } ],
 
       // looping
-      [ "repeat",     { create: () => { return new stm.RepeatStatement() }}],
-      [ "repend",     { create: () => { return new stm.EndRepStatement() }}],
+      [ "repeat",     { create: () => { return new stm.RepeatStatement() },
+                        params: "<expression>",
+                        desc:   "Start of repeated block" } ],
+      [ "repend",     { create: () => { return new stm.EndRepStatement() },
+                        params: "",
+                        desc:   "End of repeat block" } ],
 
       // scope
-      [ "subroutine", { create: () => { return new stm.SubroutineStatement() }}],
+      [ "subroutine", { create: () => { return new stm.SubroutineStatement() },
+                        params: "",
+                        desc:   "Set boundary that resets the scope of local labels" } ],
 
-      [ "list",       { create: () => { return new stm.ListStatement() }}]
+      // misc
+      [ "list",       { create: () => { return new stm.ListStatement() },
+                        params: "{off|on}",
+                        desc:   "Globally turn listing on or off" } ]
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

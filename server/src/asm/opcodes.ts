@@ -57,7 +57,8 @@ export const Opcodes6502 = {
 		"REL" : 0x10
 	},
 	"brk": {
-		"NONE": 0x00
+		"NONE": 0x00,
+		"IMM":  0x00	// allow optional immediate argument
 	},
 	"bvc": {
 		"REL" : 0x50

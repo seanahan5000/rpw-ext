@@ -18,67 +18,182 @@ export class AcmeSyntax extends SyntaxDef {
   public symbolTokenContents = "."
   public cheapLocalPrefixes = "@"
   public zoneLocalPrefixes = "."
+  public anonLocalChars = "+-"
+  public keywordPrefixes = "!"
   public keywordsInColumn1 = true
-  public macroDefineWithLabel = false  // mac <name> [<params>]
-  public macroDefineParams = true
   public macroInvokePrefixes = "+"
   public macroInvokeDelimiters = ","
+  public allowLabelTrailingColon = true
+  public allowIndentedAssignment = true
 
   constructor() {
     super()
 
+    // *** TODO: filenames can be "" or <> quoted ***
+
     this.keywordMap = new Map<string, KeywordDef>([
-      [ "!cpu",       { create: () => { return new stm.CpuStatement() }}],
+      [ "!cpu",       { create: () => { return new stm.CpuStatement() },
+                        params: "{6502|6510|65c02|65816} [ \\{ [<block> \\} ]]",
+                        desc:   "Select the processor to produce code for" } ],
 
       // equates
-      [ "=",          { create: () => { return new stm.EquStatement() }}],
-      [ "!set",       { create: () => { return new stm.VarAssignStatement() }}],
+      [ "=",          { create: () => { return new stm.EquStatement() },
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Assign value to symbol" } ],
+      [ "!set",       { create: () => { return new stm.VarAssignStatement() },
+                        params: "<symbol> = <value>",
+                        desc:   "Assign given value to symbol even if the symbol already has a different value" } ],
+      [ "!address",   { create: () => { return new stm.AddressStatement() },
+                        params: "{\\{ [<block> \\}] | <symbol-def> = <value>}",
+                        desc:   'Mark a block or a statement as "explicitly defined symbols are holding addresses"' } ],
+      [ "!addr",      { alias: "!address" }],
 
       // pc
-      [ "*",          { create: () => { return new stm.OrgStatement() }}],
-      [ "!pseudopc",  { create: () => { return new stm.PseudoPcStatement() }}],
+      [ "*",          { create: () => { return new stm.OrgStatement() },
+                        params: "= <expression>[, {overlay|invisible} ...]",
+                        desc:   "Set program counter to given value and start new segment" } ],
+      [ "!pseudopc",  { create: () => { return new stm.PseudoPcStatement() },
+                        params: "<expression> \\{ [<block> \\}]",
+                        desc:   "Assemble code as if the program counter had the given value" } ],
 
       // disk
-      [ "!source",    { create: () => { return new stm.IncludeStatement() }}],
+      [ "!source",    { create: () => { return new stm.IncludeStatement() },
+                        params: "<filename>",
+                        desc:   "Assemble another source code file" } ],
       [ "!src",       { alias: "!source" }],
-      [ "!to",        { create: () => { return new stm.DiskStatement() }}],
-      [ "!binary",    { create: () => { return new stm.IncBinStatement() }}],
+      [ "!to",        { create: () => { return new stm.DiskStatement() },
+                        params: "<filename>[,{cbm|plain|apple}]",
+                        desc:   "Define the output file name and file type" } ],
+      [ "!binary",    { create: () => { return new stm.IncBinStatement() },
+                        params: "<filename>[, [<size>] [, <offset>]]",
+                        desc:   "Insert binary file directly into output file" } ],
       [ "!bin",       { alias: "!binary" }],
 
       // macros
-      [ "!macro",     { create: () => { return new stm.MacroDefStatement() }}],
-      [ "!mac",       { alias: "!macro" }],
+      [ "!macro",     { create: () => { return new stm.MacroDefStatement() },
+                        label:  "",
+                        params: "<macro-name> [ [~]<symbol> [, [~]<symbol> ...] ] \\{ [<block> \\}]",
+                        desc:   "Define a macro" } ],
 
       // data storage
-      [ "!byte",      { create: () => { return new stm.DataStatement_X8() }}],
+      [ "!byte",      { create: () => { return new stm.DataStatement_X8() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 8-bit values" } ],
       [ "!by",        { alias: "!byte" }],
-      [ "!word",      { create: () => { return new stm.DataStatement_X16() }}],
-      [ "!hex",       { create: () => { return new stm.HexStatement() }}],
-      [ "!align",     { create: () => { return new stm.AlignStatement() }}],
-      [ "!fill",      { create: () => { return new stm.StorageStatement(1) }}],
+      [ "!08",        { alias: "!byte" }],
+      [ "!word",      { create: () => { return new stm.DataStatement_X16() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 16-bit values in little endian byte order" } ],
+      [ "!wo",        { alias: "!word" }],
+      [ "!16",        { alias: "!word" }],
+      [ "!le16",      { alias: "!word" }],
+      [ "!be16",      { create: () => { return new stm.DataStatement_X16(true) },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 16-bit values in big endian byte order" } ],
+      [ "!24",        { create: () => { return new stm.DataStatement_X24() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 24-bit values in little endian byte order" } ],
+      [ "!le24",      { alias: "!24" }],
+      [ "!be24",      { create: () => { return new stm.DataStatement_X24(true) },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 24-bit values in big endian byte order" } ],
+      [ "!32",        { create: () => { return new stm.DataStatement_X32() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 32-bit values in little endian byte order" } ],
+      [ "!le32",      { alias: "!32" }],
+      [ "!be32",      { create: () => { return new stm.DataStatement_X32(true) },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Insert 32-bit values in big endian byte order" } ],
+      [ "!hex",       { create: () => { return new stm.HexStatement() },
+                        params: "<hex>[ <hex> ...]",
+                        desc:   "Insert byte values with a minimum of additional syntax" } ],
+      [ "!h",         { alias: "!hex" }],
+      [ "!align",     { create: () => { return new stm.AlignStatement() },
+                        params: "<and>, <equal>[, <fill>]",
+                        desc:   "Fill memory until a matching address is reached" } ],
+      [ "!fill",      { create: () => { return new stm.StorageStatement(1) },
+                        params: "<amount>[, <value>]",
+                        desc:   "Fill amount of memory with value" } ],
+      [ "!fi",        { alias: "!fill" }],
+      [ "!skip",      { // TODO
+                        params: "<amount>",
+                        desc:   "Advance in output buffer without starting a new segment" } ],
+      [ "!initmem",   { // TODO
+                        params: "<expression>",
+                        desc:   'Define "unchanged" memory' } ],
+      [ "!xor",       { create: () => { return new stm.XorStatement() },
+                        params: "<expression> [\\{ [<block> \\}]]",
+                        desc:   "Change the value to XOR all output bytes" } ],
 
       // text
-      [ "!pet",       { create: () => { return new stm.TextStatement() }}],
-      [ "!raw",       { create: () => { return new stm.TextStatement() }}],
-      [ "!scr",       { create: () => { return new stm.TextStatement() }}],
-      [ "!text",      { create: () => { return new stm.TextStatement() }}],
-      [ "!convtab",   {}],
+      [ "!pet",       { create: () => { return new stm.TextStatement() },
+                        params: "<string-value>[, <string-value> ...]",
+                        desc:   "Output the given string(s) using PetSCII" } ],
+      [ "!raw",       { create: () => { return new stm.TextStatement() },
+                        params: "<string-value>[, <string-value> ...]",
+                        desc:   "Output the given string(s) without any conversion" } ],
+      [ "!scr",       { create: () => { return new stm.TextStatement() },
+                        params: "<string-value>[, <string-value> ...]",
+                        desc:   "Output the given string(s) using the C64 screen code" } ],
+      [ "!text",      { create: () => { return new stm.TextStatement() },
+                        params: "<string-value>[, <string-value> ...]",
+                        desc:   "Output the given string(s) using the current conversion table" } ],
+      [ "!scrxor",    { // TODO
+                        params: "<xor>, <string-value>[, <string-value> ...]",
+                        desc:   "Output the given string(s) using the C64 screen code xor value" } ],
+      [ "!tx",        { alias: "!text" }],
+      [ "!convtab",   { create: () => { return new stm.ConvTabStatement() },
+                        params: "{pet|raw|scr|<filename>} [\\{ [<block> \\}]]",
+                        desc:   "Choose text conversion table" } ],
+      [ "!ct",        { alias: "!convtab" }],
 
       // conditionals
-      [ "!if",        { create: () => { return new stm.IfStatement() }}],
-      [ "!ifdef",     { create: () => { return new stm.IfDefStatement(true) }}],
-      [ "!ifndef",    { create: () => { return new stm.IfDefStatement(false) }}],
+      [ "!if",        { create: () => { return new stm.IfStatement() },
+                        params: "<condition> \\{ [<block> \\} [else \\{ <block> \\}]]",
+                        desc:   "If the given condition is true, parse the first block of statements" } ],
+      [ "!ifdef",     { create: () => { return new stm.IfDefStatement(true) },
+                        params: "<symbol-weak> \\{ [<block> \\} [ else \\{ <block> \\} ]]",
+                        desc:   "If the given symbol is defined, parse the first block of statements" } ],
+      [ "!ifndef",    { create: () => { return new stm.IfDefStatement(false) },
+                        params: "<symbol-weak> \\{ [<block> \\} [ else \\{ <block> \\} ]]",
+                        desc:   "If the given symbol is not defined, parse the first block of statements" } ],
+
+      [ "!endoffile", { // TODO
+                        params: "",
+                        desc:   "Stop processing the current source file" } ],
+      [ "!eof",       { alias: "!endoffile" }],
 
       // looping
-      [ "!for",       { create: () => { return new stm.RepeatStatement() }}],
-      [ "!do",        {}],
+      [ "!for",       { create: () => { return new stm.RepeatStatement() },
+                        params: "<symbol-def>, <start>, <end> \\{ [<block> \\}]",
+                        desc:   "Looping assembly" } ],
+      [ "!do",        { // TODO
+                        params: "[<condition>] \\{ [<block> \\} [<condition>]]",
+                        desc:   "Looping assembly" } ],
 
       // scope
-      [ "!zone",      { create: () => { return new stm.ZoneStatement() }}],
+      [ "!zone",      { create: () => { return new stm.ZoneStatement() },
+                        params: "[<name:symbol-def>] [\\{ [<block> \\}]]",
+                        desc:   "Switch to new zone of local symbols" } ],
       [ "!zn",        { alias: "!zone" }],
+      [ "!symbollist",{ // TODO
+                        params: "<filename>",
+                        desc:   "Write a symbol list to the given file after assembly" } ],
+      [ "!sl",        { alias: "!symbollist" }],
+      // TODO: bother with "VICE label dumping?"
+      [ "!svl",       { alias: "!symbollist" }],
 
       // messages
-      [ "!serious",   {}],
+      [ "!warn",      { // TODO
+                        params: "<string-value> [, <string-value> ...]",
+                        desc:   "Show a warning during assembly" } ],
+      [ "!error",     { // TODO
+                        params: "<string-value> [, <string-value> ...]",
+                        desc:   "Generate an error during assembly" } ],
+      [ "!serious",   { // TODO
+                        params: "<string-value> [, <string-value> ...]",
+                        desc:   "Generate a serious error, immediately stopping assembly" } ],
     ])
 
     /*

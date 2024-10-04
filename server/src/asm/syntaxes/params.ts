@@ -1,90 +1,366 @@
 
+import { Parser } from "../parser"
+import { TokenType } from "../tokenizer"
+import { SymbolType } from "../symbols"
+import { ParamDef } from "../syntaxes/syntax_types"
+import * as exp from "../expressions"
 
-// OneOf
-  // expression array
-
-// Optional
+enum ParamType {
+  List     = 0,
+  Constant = 1,
+  Term     = 2,
+  OneOf    = 3,
+  Optional = 4,
+}
 
 class Param {
-  // ***
+  public paramType: ParamType
+  public childParams?: Param[] = []
+  public repeat: boolean
 
-  // *** parse string on Statement ***
-}
+  private startPosition = 0
+  private startIndex = 0
 
-class TermParam extends Param {
-  private name: string
-
-  constructor(name: string) {
-    super()
-    this.name = name
-  }
-}
-
-class OneOfParam extends Param {
-  private params: Param[] = []
-
-  constructor(params: Param[]) {
-    super()
-    this.params = params
-  }
-}
-
-class OptionalParam extends Param {
-  private params: Param[] = []
-  private repeat: boolean = false
-
-  constructor(params: Param[], repeat: boolean) {
-    super()
-    this.params = params
+  constructor(paramType: ParamType, childParams?: Param[], repeat = false) {
+    this.paramType = paramType
+    this.childParams = childParams
     this.repeat = repeat
+  }
+
+  public parse(parser: Parser): boolean {
+    if (this.childParams) {
+      for (let param of this.childParams) {
+        if (!param.parse(parser)) {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  protected savePosition(parser: Parser) {
+    this.startPosition = parser.getPosition()
+    this.startIndex = parser.nodeSet.length
+  }
+
+  protected restorePosition(parser: Parser) {
+    parser.setPosition(this.startPosition)
+    parser.nodeSet.splice(this.startIndex)
+  }
+}
+
+export class ParamList extends Param {
+  constructor(params: Param[]) {
+    super(ParamType.List, params)
   }
 }
 
 class ConstantParam extends Param {
-  private contents: string
+
+  public contents: string
 
   constructor(contents: string) {
-    super()
+    super(ParamType.Constant)
     this.contents = contents
+  }
+
+  parse(parser: Parser): boolean {
+    const token = parser.getNextToken()
+    if (token) {
+      if (token.getString() == '"') {
+        const expression = parser.parseStringExpression(token)
+        if (expression.getString() == this.contents) {
+          return true
+        }
+        expression.setError("Unexpected expression: expected " + this.contents)
+        return false
+      }
+      parser.addToken(token)
+      if (token.getString().toLowerCase() == this.contents) {
+        if (token.type != TokenType.Operator) {
+          token.type = TokenType.Keyword
+        }
+        return true
+      }
+      token.setError("Unexpected expression: expected " + this.contents)
+    } else {
+      parser.addMissingToken("expected " + this.contents)
+    }
+    return false
   }
 }
 
-export class ParamParser {
+class TermParam extends Param {
 
-  private params: Param[] = []
+  public termName = ""
+  public termType = ""
+
+  constructor(name: string) {
+    super(ParamType.Term)
+
+    const index = name.indexOf(":")
+    if (index >= 0) {
+      this.termName = name.substring(0, index)
+      this.termType = name.substring(index + 1)
+    } else {
+      this.termName = name
+      this.termType = name
+    }
+  }
+
+  parse(parser: Parser): boolean {
+
+    // parse term based on param type
+
+    if (this.termType == "hex") {
+
+      const token = parser.mustAddNextToken("expecting hex value")
+      if (token.type != TokenType.Missing) {
+        const hexString = token.getString().toUpperCase()
+        if (hexString == "$") {
+          token.setError("$ prefix not allowed on HEX statement values")
+        } else if (token.type != TokenType.DecNumber && token.type != TokenType.HexNumber) {
+          token.setError("Unexpected token type, expecting hex value")
+        } else {
+          token.type = TokenType.HexNumber
+          if (hexString.length & 1) {
+            token.setError("Odd number of nibbles")
+          }
+        }
+      }
+      if (token.hasError()) {
+        parser.addExpression(new exp.BadExpression([token]))
+        return false
+      }
+
+      const expression = new exp.Expression([token])
+      expression.name = this.termName
+      parser.addExpression(expression)
+      return true
+    }
+
+    if (this.termType == "filename") {
+
+      // TODO: quoting information (no quotes, single, double, <>, etc.)
+      // TODO: check for quoted fileName, based on syntax
+        // optional on DASM
+        // never on MERLIN
+      const fileName = parser.getNextFileNameExpression()
+      if (!fileName) {
+        parser.addMissingToken("expecting file name")
+        return false
+      }
+      fileName.name = this.termName
+      parser.addExpression(fileName)
+      return true
+    }
+
+    if (this.termType == "string") {
+
+      const token = parser.getNextToken()
+      if (!token) {
+        parser.addMissingToken("Expected opening string quote")
+        return false
+      }
+
+      const str = token.getString()
+      // TODO: always allow both types of quoting?
+      if (str != '"' && str != "'") {
+        token.setError("Expected quoted string argument")
+        parser.addToken(token)
+        return false
+      }
+
+      const allowEscapes = true
+      const allowUnterminated = false
+      const expression = parser.parseStringExpression(token, allowEscapes, allowUnterminated)
+      expression.name = this.termName
+      parser.addExpression(expression)
+      return true
+    }
+
+    if (this.termType == "feature-name") {
+      return this.addNameExpression(parser, "feature name", TokenType.Keyword)
+    }
+    if (this.termType == "type-name") {
+      return this.addNameExpression(parser, "type name", TokenType.TypeName)
+    }
+
+    if (this.termType == "macro-name") {    // *** +other type names
+      return this.addSymbolExpression(parser, "macro name", true, SymbolType.MacroName)
+    }
+    if (this.termType == "symbol") {
+      return this.addSymbolExpression(parser, "symbol name", false, SymbolType.Simple)
+    }
+    if (this.termType == "symbol-def") {
+      return this.addSymbolExpression(parser, "symbol name", true, SymbolType.Simple)
+    }
+    if (this.termType == "symbol-weak") {
+      return this.addSymbolExpression(parser, "symbol name", false, SymbolType.Simple, true)
+    }
+
+    // *** pass in delimiters ( ",)" for example ) ***
+    const expression = parser.mustAddNextExpression()
+    expression.name = this.termName
+    return !(expression instanceof exp.BadExpression)
+  }
+
+  private addNameExpression(parser: Parser, typeName: string, tokenType: TokenType): boolean {
+
+    const token = parser.mustGetNextToken("Expected " + typeName)
+    if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+      token.type = TokenType.Keyword
+      const expression = new exp.Expression([token])
+      expression.name = this.termName
+      parser.addExpression(expression)
+      return true
+    }
+    if (token.type != TokenType.Missing) {
+      token.setError("Expected " + typeName)
+    }
+    parser.addExpression(new exp.BadExpression([token]))
+    return false
+  }
+
+  private addSymbolExpression(parser: Parser, typeName: string, isDefinition: boolean, symbolType: SymbolType, isWeak = false): boolean {
+
+    const token = parser.getNextToken()
+    if (!token) {
+      parser.addMissingToken("Expected " + typeName)
+      return false
+    }
+
+    if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
+      const expression = new exp.SymbolExpression([token], symbolType,
+        isDefinition, parser.sourceFile, parser.lineNumber)
+      expression.name = this.termName
+      expression.isWeak = isWeak
+      parser.addExpression(expression)
+      return true
+    }
+
+    parser.addMissingToken("Expected " + typeName)
+    return false
+  }
+}
+
+
+class OneOfParam extends Param {
+  constructor(params: Param[]) {
+    super(ParamType.OneOf, params)
+  }
+
+  parse(parser: Parser): boolean {
+    // choose first successful parse of subParams
+    this.savePosition(parser)
+    for (let param of this.childParams!) {
+      if (param.parse(parser)) {
+        return true
+      }
+      this.restorePosition(parser)
+    }
+
+    let token = parser.getNextToken()
+    let expression: exp.Expression | undefined
+    if (token) {
+      expression = parser.addNextExpression(token)
+      if (expression) {
+        expression.setError("Unexpected expression")
+      }
+    } else {
+      token = parser.createMissingToken()
+      token.setError("Missing expression")
+      parser.addExpression(new exp.BadExpression([token]))
+    }
+    return false
+  }
+}
+
+class OptionalParam extends Param {
+  constructor(params: Param[], repeat: boolean) {
+    super(ParamType.Optional, params, repeat)
+  }
+
+  parse(parser: Parser): boolean {
+    this.savePosition(parser)
+    if (this.childParams) {
+      for (let param of this.childParams) {
+        if (!param.parse(parser)) {
+          this.restorePosition(parser)
+          return true
+        }
+      }
+      if (this.repeat) {
+       this.parse(parser)
+      }
+    }
+
+    // always return true because this is optional
+    return true
+  }
+}
+
+// params: "<length>[, {\\[<valueX>[, <valueY> ...] \\]|<fill>}]",
+
+export class ParamsParser {
+
+  // build expressions from ParamList
+
+  public parseExpressions(paramList: ParamList, parser: Parser) {
+    paramList.parse(parser)
+  }
+
+  // build Param object array from params definition string
+  // params: "[ [<name>[=<default>]][, [<name>[=<default>]] ...] ]",
+
   private str: string = ""
   private offset: number = 0
 
-  // *** for testing ***
-  constructor() {
-    // this.parse('{"6502"|"65c02"|"65816"|"default"}')
-    // this.parse("<expression>")
-    // this.parse("<expression>[, <expression> ...]")
-    // this.parse("<length>[, <fill>]")
-    // this.parse("[[<name>][=<default>][, [<name>][=<default>] ...]]")
-  }
+  public parseString(str: string, paramDefs?: Map<string, ParamDef>): ParamList {
 
-  public parse(str: string) {
+    const saveStr = this.str
+    const saveOffset = this.offset
+
+    let params: Param[] = []
     this.str = str
     this.offset = 0
     const length = str.length
     while (this.offset < length) {
-      this.params.push(this.parseParam())
+      params.push(this.parseParam(paramDefs))
     }
+    const paramList = new ParamList(params)
+
+    this.str = saveStr
+    this.offset = saveOffset
+    return paramList
   }
 
-  private parseParam(): Param {
+  private parseParam(paramDefs?: Map<string, ParamDef>): Param {
     while (true) {
       const char = this.str[this.offset++]
       if (char == " " || char == "\t") {
         continue
       }
+      if (char === undefined) {
+        throw "Param format error"
+      }
       if (char == "<") {
-        return this.parseTerm()
+        const termParam = this.parseTerm()
+        if (paramDefs) {
+          const termType = (termParam as TermParam).termType
+          const paramDef = paramDefs.get(termType)
+          if (paramDef) {
+            if (!paramDef.paramsList) {
+              paramDef.paramsList = this.parseString(paramDef.params, paramDefs)
+            }
+            return paramDef.paramsList
+          }
+        }
+        return termParam
       } else if (char == "{") {
         return this.parseBraces()
       } else if (char == "[") {
-        return this.parseOptional()
+        return this.parseOptional(paramDefs)
       } else {
         this.offset -= 1
         return this.parseConstant()
@@ -96,6 +372,9 @@ export class ParamParser {
     let term = ""
     while (true) {
       const char = this.str[this.offset++]
+      if (char === undefined) {
+        throw "Term param format error"
+      }
       if (char == ">") {
         break
       }
@@ -105,42 +384,56 @@ export class ParamParser {
   }
 
   private parseBraces(): Param {
-    let params: Param[] = []
+    let oneOfParams: Param[] = []
+    let tempParams: Param[] = []
     while (true) {
-      const char = this.str[this.offset]
-      if (char == "}") {
-        this.offset += 1
-        break
-      }
-      if (char == "|") {
-        this.offset += 1
+      const char = this.str[this.offset++]
+      if (char == " " || char == "\t") {
         continue
       }
-      params.push(this.parseParam())
+      if (char === undefined) {
+        throw "Brace param format error"
+      }
+      if (char == "}" || char == "|") {
+        if (tempParams.length == 1) {
+          oneOfParams.push(tempParams[0])
+        } else {
+          oneOfParams.push(new ParamList(tempParams))
+        }
+        tempParams = []
+        if (char == "}") {
+          break
+        }
+      } else {
+        this.offset -= 1
+        tempParams.push(this.parseParam())
+      }
     }
-    return new OneOfParam(params)
+    return new OneOfParam(oneOfParams)
   }
 
-  private parseOptional(): Param {
+  private parseOptional(paramDefs?: Map<string, ParamDef>): Param {
     let params: Param[] = []
     let repeat = false
     while (true) {
-      const char = this.str[this.offset]
+      const char = this.str[this.offset++]
       if (char == " " || char == "\t") {
-        this.offset += 1
         continue
       }
+      if (char === undefined) {
+        throw "Optional param format error"
+      }
       if (char == "]") {
-        this.offset += 1
         break
       }
       if (char == ".") {
         // for now, assume a single "." always starts "..."
-        this.offset += 3
+        this.offset += 2
         repeat = true
         continue
       }
-      params.push(this.parseParam())
+      this.offset -= 1
+      params.push(this.parseParam(paramDefs))
     }
 
     return new OptionalParam(params, repeat)
@@ -149,22 +442,46 @@ export class ParamParser {
   private parseConstant(): Param {
     let str = ""
     while (true) {
-      const char = this.str[this.offset++]
+      let char = this.str[this.offset++]
+      if (char === undefined) {
+        this.offset -= 1
+        break
+      }
       if ("<{[|]}> \t".includes(char)) {
         this.offset -= 1
         break
+      }
+      // handle escaped character
+      if (char == "\\") {
+        char = this.str[this.offset++]
       }
       str += char
     }
     return new ConstantParam(str)
   }
+
+  // build list of constant names for use by auto-completion
+  // TODO: deal with custom type definitions
+
+  public static getConstantNames(params: Param[]): string[] {
+    let names: string[] = []
+    if (params.length) {
+      let param = params[0]
+      if (param.paramType == ParamType.Optional) {
+        if (param.childParams && param.childParams.length) {
+          param = param.childParams[0]
+        }
+      }
+      if (param.paramType == ParamType.OneOf) {
+        if (param.childParams) {
+          for (param of param.childParams) {
+            if (param.paramType == ParamType.Constant) {
+              names.push((param as ConstantParam).contents)
+            }
+          }
+        }
+      }
+    }
+    return names
+  }
 }
-
-
-// params: '{"6502"|"65c02"|"65816"|"default"}',
-// params: "<expression>[, <expression> ...]",
-// params: "<length>[, <fill>]",
-// params: "[<name>][=<default>]][, [<name>][=<default>] ...]",
-
-// const parser = new ParamParser()
-// parser.parse('{"6502"|"65c02"|"65816"|"default"}')

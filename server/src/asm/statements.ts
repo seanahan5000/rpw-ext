@@ -7,6 +7,7 @@ import { SymbolType, SymbolFrom } from "./symbols"
 import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
 import { Isa6502 } from "../isa6502"
+import { KeywordDef } from "./syntaxes/syntax_types"
 
 //------------------------------------------------------------------------------
 
@@ -15,7 +16,9 @@ export abstract class Statement extends exp.Expression {
   public sourceLine: string = ""
   public labelExp?: exp.SymbolExpression
   public opExp?: exp.Expression         // FIXME: easy to confuse with opExpression
+  public args: exp.Expression[] = []
   public opNameLC = ""
+  public keywordDef?: KeywordDef
   public enabled = true   // *** where is this used? updated?
 
   // link between conditional statement groups, used to build code folding ranges
@@ -23,33 +26,83 @@ export abstract class Statement extends exp.Expression {
 
   init(sourceLine: string, children: Node[],
       labelExp?: exp.SymbolExpression,
-      opExp?: exp.Expression) {
+      opExp?: exp.Expression,
+      keywordDef?: KeywordDef) {
     this.children = children
     this.sourceLine = sourceLine
     this.labelExp = labelExp
     this.opExp = opExp
+    this.keywordDef = keywordDef
     // TODO: consider trimming off/separating prefix operator ("+", "!", ".")
     this.opNameLC = this.opExp?.getString().toLowerCase() ?? ""
   }
 
+  public findArg(name: string): exp.Expression | undefined {
+    for (let arg of this.args) {
+      if (arg.name == name) {
+        return arg
+      }
+    }
+  }
+
+  public hasTrailingOpenBrace(): boolean {
+    // TODO: make this ACME-only?
+    if (this.children.length) {
+      return this.children[this.children.length - 1].getString() == "{"
+    } else {
+      return false
+    }
+  }
+
   // parse the statement line but don't change any external state
   parse(parser: Parser) {
+
+    if (this.keywordDef?.paramsList) {
+
+      if (this.keywordDef.label !== undefined) {
+        if (this.keywordDef.label == "") {
+          if (this.labelExp) {
+            this.labelExp.setError("Label not allowed here")
+          }
+        } else if (this.keywordDef.label[0] == "<") {
+          if (!this.labelExp) {
+            parser.insertMissingLabel()
+          }
+        }
+      }
+
+      parser.paramsParser.parseExpressions(this.keywordDef.paramsList, parser)
+
+      this.args = []
+      for (let node of this.children) {
+        if (node == this.labelExp || node == this.opExp) {
+          continue
+        }
+        if (node instanceof exp.Expression) {
+          this.args.push(node)
+        }
+      }
+    }
+
     // TODO: does this default implementation still make sense?
     // TODO: just eat expressions? do nothing instead?
-    let token = parser.getNextToken()
-    while (token) {
-      const expression = parser.parseExpression(token)
-      if (!expression) {
-        break
-      }
-      this.children.push(expression)
+    // let token = parser.getNextToken()
+    // while (token) {
+    //   const expression = parser.parseExpression(token)
+    //   if (!expression) {
+    //     break
+    //   }
+    //   this.children.push(expression)
 
-      const res = parser.mustAddToken(["", ","])
-      if (res.index <= 0) {
-        break
-      }
-      token = parser.getNextToken()
-    }
+    //   const res = parser.mustAddToken(["", ","])
+    //   if (res.index <= 0) {
+    //     break
+    //   }
+    //   token = parser.getNextToken()
+    // }
+  }
+
+  postParse(parser: Parser) {
   }
 
   // do any conditional preprocessing work but only change state if enabled is true
@@ -104,6 +157,8 @@ export enum OpCpu {
   M65C02 = 1,
   M65816 = 2
 }
+
+// *** TODO: handle BRK with extra byte ($99 or #$99) ***
 
 export class OpStatement extends Statement {
 
@@ -278,11 +333,11 @@ export class OpStatement extends Statement {
             this.expression = parser.parseCA65Local(token, isDefinition)
             parser.addExpression(this.expression)
             return
-          } else if (str[0] == "-" && (str[0] == str[str.length - 1])) {
-            // TODO: This only handles "-", not "+" because it would otherwise
-            //  be parsed as a unary operator.  See Parser.parseValueExpression
-            //  for the code that should be handling this.
-            if (!parser.syntax || parser.syntax == Syntax.ACME) {
+          } else if (parser.syntaxDef.anonLocalChars && parser.syntaxDef.anonLocalChars.includes(str[0])) {
+            if (str[0] == str[str.length - 1]) {
+              // TODO: This only handles "-", not "+" because it would otherwise
+              //  be parsed as a unary operator.  See Parser.parseValueExpression
+              //  for the code that should be handling this.
               if (str.length > 9) {
                 token.setError("Anonymous local is too long")
                 parser.addExpression(new exp.BadExpression([token]))
@@ -303,6 +358,9 @@ export class OpStatement extends Statement {
           if (this.opcode.REL) {
             this.mode = OpMode.REL            // exp
             this.opByte = this.opcode.REL
+          } else if (this.opNameLC == "brk") {
+            this.mode = OpMode.IMM            // exp
+            this.opByte = this.opcode.IMM
           } else {
             this.mode = OpMode.ABS            // exp
             this.opByte = this.opcode.ABS
@@ -521,16 +579,16 @@ export abstract class ConditionalStatement extends Statement {
 
   abstract applyConditional(preprocessor: Preprocessor): void
 
-  parseTrailingOpenBrace(parser: Parser): boolean {
-    // *** syntax instead ***
-    if (this.opNameLC.startsWith("!")) {      // *** stop doing this ***
-      const res = parser.mustAddToken("{")
-      if (res.index == 0) {
-        return true
-      }
-    }
-    return false
-  }
+  // parseTrailingOpenBrace(parser: Parser): boolean {
+  //   // *** syntax instead ***
+  //   if (this.opNameLC.startsWith("!")) {      // *** stop doing this ***
+  //     const res = parser.mustAddToken("{")
+  //     if (res.index == 0) {
+  //       return true
+  //     }
+  //   }
+  //   return false
+  // }
 
   pass1(asm: Assembler): number | undefined {
     return 0
@@ -549,7 +607,7 @@ export abstract class ConditionalStatement extends Statement {
 export class IfStatement extends ConditionalStatement {
 
   private op?: Op
-  private expression?: exp.Expression
+  // private expression?: exp.Expression
   private isInline = false
 
   constructor(op?: Op) {
@@ -557,48 +615,46 @@ export class IfStatement extends ConditionalStatement {
     this.op = op
   }
 
-  parse(parser: Parser) {
-    // TODO: give hint that this expression is for conditional code
-    this.expression = parser.mustAddNextExpression()
-    if (this.parseTrailingOpenBrace(parser)) {
-      // TODO: parse inline code after opening brace to
-      //  closing brace and maybe else statement
-      // TODO: fix this hack to eat ACME inline code
-      let token = parser.getNextToken()
-      if (token) {
-        this.isInline = true
+  // parse(parser: Parser) {
+  //   // TODO: give hint that this expression is for conditional code
+  //   this.expression = parser.mustAddNextExpression()
+  //   if (this.parseTrailingOpenBrace(parser)) {
+  //     // TODO: parse inline code after opening brace to
+  //     //  closing brace and maybe else statement
+  //     // TODO: fix this hack to eat ACME inline code
+  //     let token = parser.getNextToken()
+  //     if (token) {
+  //       this.isInline = true
 
-        parser.startExpression()
-        while (true) {
-          if (token.getString() == "}") {
-            parser.addToken(token)
-            token = parser.getNextToken()
-            if (!token) {
-              break
-            }
-          }
-          // TODO: for now, just eat everything inside inline braces
-          // token.setError("Unexpected token")
-          // parser.addToken(token)
-          token = parser.getNextToken()
-          if (!token) {
-            break
-          }
-          if (token.getString() == "{") {
-            parser.addToken(token)
-          }
-        }
-        parser.addExpression(new exp.BadExpression(parser.endExpression()))
-        if (token) {
-          parser.addToken(token)
-        }
-      }
-    }
-  }
+  //       parser.startExpression()
+  //       while (true) {
+  //         if (token.getString() == "}") {
+  //           parser.addToken(token)
+  //           token = parser.getNextToken()
+  //           if (!token) {
+  //             break
+  //           }
+  //         }
+  //         // TODO: for now, just eat everything inside inline braces
+  //         // token.setError("Unexpected token")
+  //         // parser.addToken(token)
+  //         token = parser.getNextToken()
+  //         if (!token) {
+  //           break
+  //         }
+  //         if (token.getString() == "{") {
+  //           parser.addToken(token)
+  //         }
+  //       }
+  //       parser.addExpression(new exp.BadExpression(parser.endExpression()))
+  //       if (token) {
+  //         parser.addToken(token)
+  //       }
+  //     }
+  //   }
+  // }
 
   applyConditional(prep: Preprocessor): void {
-
-    // *** do something with this.op ***
 
     const conditional = prep.conditional
 
@@ -613,16 +669,17 @@ export class IfStatement extends ConditionalStatement {
     }
 
     prep.pushNesting(NestingType.Conditional)
-
     conditional.statement = this
 
-    let value = this.expression?.resolve() ?? 0
+    const expression = this.findArg("condition")
+    const value = expression?.resolve() ?? 0
     conditional.setSatisfied(value != 0)
   }
 
   postProcessSymbols(symUtils: SymbolUtils): void {
-    if (this.expression) {
-      symUtils.markConstants(this.expression)
+    const expression = this.findArg("condition")
+    if (expression) {
+      symUtils.markConstants(expression)
     }
   }
 }
@@ -638,26 +695,11 @@ export class IfStatement extends ConditionalStatement {
 
 export class IfDefStatement extends ConditionalStatement {
 
-  private isDefined: boolean
-  private symExpression?: exp.SymbolExpression
+  private isTrue: boolean
 
-  constructor(isDefined: boolean) {
+  constructor(isTrue: boolean) {
     super()
-    this.isDefined = isDefined
-  }
-
-  parse(parser: Parser) {
-    // TODO: should call this a conditional expression instead
-    //  of setting expression.suppressUnknown
-    const expression = parser.mustAddNextExpression()
-    if (expression instanceof exp.SymbolExpression) {
-      this.symExpression = expression
-      expression.suppressUnknown = true
-    } else {
-      expression.setError("Symbol expression required")
-    }
-
-    this.parseTrailingOpenBrace(parser)
+    this.isTrue = isTrue
   }
 
   applyConditional(prep: Preprocessor): void {
@@ -670,15 +712,30 @@ export class IfDefStatement extends ConditionalStatement {
     }
 
     prep.pushNesting(NestingType.Conditional)
-
     conditional.statement = this
 
-    const symDefined = this.symExpression?.symbol !== undefined
+    const isSatisfied = this.checkCondition()
     conditional.setSatisfied(
-      (symDefined && this.isDefined) || (!symDefined && !this.isDefined))
+      (isSatisfied && this.isTrue) || (!isSatisfied && !this.isTrue))
+  }
+
+  checkCondition(): boolean {
+    const symbolArg = this.findArg("symbol-weak")
+    const symbol = (symbolArg as exp.SymbolExpression)?.symbol
+    return symbol !== undefined
   }
 }
 
+export class IfConstStatement extends IfDefStatement {
+  constructor(isTrue: boolean) {
+    super(isTrue)
+  }
+
+  checkCondition(): boolean {
+    const conditionArg = this.findArg("condition")
+    return conditionArg?.resolve() !== undefined
+  }
+}
 
 // MERLIN:
 //   DASM:  ELIF <exp>
@@ -689,12 +746,12 @@ export class IfDefStatement extends ConditionalStatement {
 
 export class ElseIfStatement extends ConditionalStatement {
 
-  private expression?: exp.Expression
+  // private expression?: exp.Expression
 
-  parse(parser: Parser) {
-    // TODO: give hint that this expression is for conditional code
-    this.expression = parser.mustAddNextExpression()
-  }
+  // parse(parser: Parser) {
+  //   // TODO: give hint that this expression is for conditional code
+  //   this.expression = parser.mustAddNextExpression()
+  // }
 
   // *** what about folding here? ***
 
@@ -715,16 +772,17 @@ export class ElseIfStatement extends ConditionalStatement {
 
     prep.popNesting()
     prep.pushNesting(NestingType.Conditional)
-
     conditional.statement = this
 
-    let value = this.expression?.resolve() ?? 0
+    const expression = this.findArg("condition")
+    const value = expression?.resolve() ?? 0
     conditional.setSatisfied(!conditional.wasSatisfied() && value != 0)
   }
 
   postProcessSymbols(symUtils: SymbolUtils): void {
-    if (this.expression) {
-      symUtils.markConstants(this.expression)
+    const expression = this.findArg("condition")
+    if (expression) {
+      symUtils.markConstants(expression)
     }
   }
 }
@@ -738,25 +796,6 @@ export class ElseIfStatement extends ConditionalStatement {
 // 64TASS:  .else
 
 export class ElseStatement extends ConditionalStatement {
-
-  parse(parser: Parser) {
-    if (this.opNameLC == "}") {
-      const elseToken = parser.addNextToken()
-      if (!elseToken) {
-        parser.addMissingToken("expecting ELSE")
-        return
-      }
-      if (elseToken.getString().toLowerCase() != "else") {
-        elseToken.setError("Unexpected token, expecting ELSE")
-        return
-      }
-      elseToken.type = TokenType.Keyword
-      const res = parser.mustAddToken("{")
-      if (res.index == 0) {
-        // TODO: start new ACME group state
-      }
-    }
-  }
 
   applyConditional(prep: Preprocessor): void {
     const conditional = prep.conditional
@@ -775,13 +814,32 @@ export class ElseStatement extends ConditionalStatement {
 
     prep.popNesting()
     prep.pushNesting(NestingType.Conditional)
-
     conditional.statement = this
 
     conditional.setSatisfied(!conditional.wasSatisfied())
   }
 }
 
+export class AcmeElseStatement extends ElseStatement {
+  parse(parser: Parser) {
+    if (this.opNameLC == "}") {
+      const elseToken = parser.addNextToken()
+      if (!elseToken) {
+        parser.addMissingToken("expecting ELSE")
+        return
+      }
+      if (elseToken.getString().toLowerCase() != "else") {
+        elseToken.setError("Unexpected token, expecting ELSE")
+        return
+      }
+      elseToken.type = TokenType.Keyword
+      const res = parser.mustAddToken("{")
+      if (res.index == 0) {
+        // TODO: start new ACME group state
+      }
+    }
+  }
+}
 
 // MERLIN:  FIN
 //   DASM:  ENDIF
@@ -794,8 +852,8 @@ export class ElseStatement extends ConditionalStatement {
 
 export class EndIfStatement extends ConditionalStatement {
 
-  parse(parser: Parser) {
-  }
+  // parse(parser: Parser) {
+  // }
 
   // only called if brace statement is conditional
   applyConditional(prep: Preprocessor): void {
@@ -854,63 +912,63 @@ export class ClosingBraceStatement extends EndIfStatement {
 
 export class RepeatStatement extends Statement {
 
-  private start?: exp.Expression    // ACME-only
-  private count?: exp.Expression    // end for ACME
-  private var?: exp.SymbolExpression
+  // private start?: exp.Expression    // ACME-only
+  // private count?: exp.Expression    // end for ACME
+  // private var?: exp.SymbolExpression
 
-  parse(parser: Parser) {
+  // parse(parser: Parser) {
 
-    if (parser.syntax == Syntax.ACME) {
+  //   if (parser.syntax == Syntax.ACME) {
 
-      this.var = this.getVarName(parser)
-      if (!this.var) {
-        return
-      }
+  //     this.var = this.getVarName(parser)
+  //     if (!this.var) {
+  //       return
+  //     }
 
-      if (parser.mustAddToken([","]).index < 0) {
-        return
-      }
+  //     if (parser.mustAddToken([","]).index < 0) {
+  //       return
+  //     }
 
-      this.count = parser.mustAddNextExpression()
+  //     this.count = parser.mustAddNextExpression()
 
-      const res = parser.mustAddToken(["", ",", "{"])
-      if (res.index < 0) {
-        return
-      }
+  //     const res = parser.mustAddToken(["", ",", "{"])
+  //     if (res.index < 0) {
+  //       return
+  //     }
 
-      if (res.index == 1) {
-        this.start = this.count
-        this.count = parser.mustAddNextExpression()
+  //     if (res.index == 1) {
+  //       this.start = this.count
+  //       this.count = parser.mustAddNextExpression()
 
-        if (parser.mustAddToken("{").index < 0) {
-          return
-        }
-      }
+  //       if (parser.mustAddToken("{").index < 0) {
+  //         return
+  //       }
+  //     }
 
-    } else {
-      this.count = parser.mustAddNextExpression()
+  //   } else {
+  //     this.count = parser.mustAddNextExpression()
 
-      const res = parser.mustAddToken(["", ","])
-      if (res.index < 0) {
-        return
-      }
+  //     const res = parser.mustAddToken(["", ","])
+  //     if (res.index < 0) {
+  //       return
+  //     }
 
-      if (res.index > 0) {
-        if (parser.syntax == Syntax.MERLIN || parser.syntax == Syntax.DASM) {
-          res.token?.setError("Unexpected token")
-          return
-        }
-        this.var = this.getVarName(parser)
-        if (!this.var) {
-          return
-        }
-      }
+  //     if (res.index > 0) {
+  //       if (parser.syntax == Syntax.MERLIN || parser.syntax == Syntax.DASM) {
+  //         res.token?.setError("Unexpected token")
+  //         return
+  //       }
+  //       this.var = this.getVarName(parser)
+  //       if (!this.var) {
+  //         return
+  //       }
+  //     }
 
-      if (!parser.syntax) {
-        parser.mustAddToken(["", "{"])
-      }
-    }
-  }
+  //     if (!parser.syntax) {
+  //       parser.mustAddToken(["", "{"])
+  //     }
+  //   }
+  // }
 
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
@@ -976,12 +1034,19 @@ export class EndRepStatement extends Statement {
 //          "string"
 //          'string'
 
+const DataRanges: number[][] = [
+  [          0,          0,           0 ],
+  [       0xff,       0x7f,       -0x80 ],
+  [     0xffff,     0x7fff,     -0x8000 ],
+  [   0xffffff,   0x7fffff,   -0x800000 ],
+  [ 0xffffffff, 0x7fffffff, -0x80000000 ],
+]
+
 class DataStatement extends Statement {
 
   protected dataSize: number
   protected signType: string
   protected bigEndian: boolean
-  protected dataElements: exp.Expression[] = []
 
   constructor(dataSize: number, signType: string, bigEndian = false) {
     super()
@@ -990,8 +1055,9 @@ class DataStatement extends Statement {
     this.bigEndian = bigEndian
   }
 
-  parse(parser: Parser) {
+  // TODO: DASM and MERLIN allow ".byte #<MYLABEL", for example
 
+  postParse(parser: Parser) {
     if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
       const symbol = this.labelExp.symbol
       if (symbol) {
@@ -999,55 +1065,28 @@ class DataStatement extends Statement {
       }
     }
 
-    while (true) {
-      let token: Token | undefined
+    // TODO: may not need this -- let actual assembly catch range errors
 
-      token = parser.getNextToken()
-      if (!token) {
-        if (parser.syntax && parser.syntax != Syntax.DASM && parser.syntax != Syntax.CA65) {
-          parser.addMissingToken("expecting data expression")
-        }
-        break
-      }
+    const uMax = DataRanges[this.dataSize][0]
+    const sMax = DataRanges[this.dataSize][1]
+    const sMin = DataRanges[this.dataSize][2]
 
-      // DASM and MERLIN allow ".byte #<MYLABEL", for example
-      if (!parser.syntax || parser.syntax == Syntax.DASM || parser.syntax == Syntax.MERLIN) {
-        if (token.getString() == "#") {
-          parser.addToken(token)
-          token = undefined
-        }
-      }
-
-      // *** token could be "," here ***
-
-      const expression = parser.addNextExpression(token)
-      if (!expression) {
-        // *** what happens to token?
-        break
-      }
-
-      if (this.dataSize == 1) {
-        const value = expression.resolve()
-        if (value != undefined) {
-          if (this.signType == "s") {
-            if (value < -128 || value > 127) {
-              expression.setError(`Expression value ${value} too large`)
-            }
-          } else if (this.signType == "u") {
-            if (value < 0 || value > 255) {
-              expression.setError(`Expression value ${value} too large`)
-            }
-          } else if (this.signType == "x") {
-            if (value < -128 || value > 255) {
-              expression.setError(`Expression value ${value} too large`)
-            }
+    for (let arg of this.args) {
+      const value = arg.resolve()
+      if (value != undefined) {
+        if (this.signType == "s") {
+          if (value < sMin || value > sMax) {
+            arg.setError(`Expression value ${value} out of range ${sMin}..${sMax}`)
+          }
+        } else if (this.signType == "u") {
+          if (value < 0 || value > uMax) {
+            arg.setError(`Expression value ${value} out of range 0..${uMax}`)
+          }
+        } else if (this.signType == "x") {
+          if (value < sMin || value > uMax) {
+            arg.setError(`Expression value ${value} out of range ${sMin}..${uMax}`)
           }
         }
-      }
-
-      this.dataElements.push(expression)
-      if (parser.mustAddToken(["", ","]).index <= 0) {
-        break
       }
     }
   }
@@ -1055,7 +1094,7 @@ class DataStatement extends Statement {
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
       if (prep.module.project.syntax == Syntax.CA65) {
-        if (this.dataElements.length == 0) {
+        if (this.args.length == 0) {
           // TODO: only allow no dataElements if inside a .struct
         }
       }
@@ -1065,7 +1104,7 @@ class DataStatement extends Statement {
   postProcessSymbols(symUtils: SymbolUtils) {
     // TODO: do for all sizes?
     if (this.dataSize == 1) {
-      for (let expression of this.dataElements) {
+      for (let expression of this.args) {
         symUtils.markConstants(expression)
       }
     }
@@ -1074,12 +1113,12 @@ class DataStatement extends Statement {
   // *** TODO: handle strings and other types of expressions
 
   pass1(asm: Assembler): number | undefined {
-    return this.dataElements.length * this.dataSize
+    return this.args.length * this.dataSize
   }
 
   pass2(asm: Assembler, dataBytes: number[]) {
     let index = 0
-    for (let element of this.dataElements) {
+    for (let element of this.args) {
       const value = element.resolve()
       if (value === undefined) {
         index += this.dataSize
@@ -1139,8 +1178,8 @@ export class DataStatement_U16 extends DataStatement {
 }
 
 export class DataStatement_S16 extends DataStatement {
-  constructor() {
-    super(2, "s", false)
+  constructor(bigEndian = false) {
+    super(2, "s", bigEndian)
   }
 }
 
@@ -1156,9 +1195,33 @@ export class DataStatement_U24 extends DataStatement {
   }
 }
 
+export class DataStatement_S24 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(3, "s", bigEndian)
+  }
+}
+
+export class DataStatement_X24 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(3, "X", bigEndian)
+  }
+}
+
 export class DataStatement_U32 extends DataStatement {
   constructor(bigEndian = false) {
     super(4, "u", bigEndian)
+  }
+}
+
+export class DataStatement_S32 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(4, "s", bigEndian)
+  }
+}
+
+export class DataStatement_X32 extends DataStatement {
+  constructor(bigEndian = false) {
+    super(4, "X", bigEndian)
   }
 }
 
@@ -1269,84 +1332,96 @@ export class StorageStatement extends Statement {
 // MERLIN:  n/a
 //   DASM:  [.]ALIGN <boundary> [, <fill>]
 //   ACME:  !align <and>, <equal> [, <fill>]
+//          (default <fill> = $EA)
 //   CA65:  .align <boundary> [,<fill>]
 //   LISA:  n/a
+// 64TASS:  [<boundary>[, {?|<fill>}[, <offset>]]]
+//          (default <boundary> = 256)
 
 export class AlignStatement extends Statement {
 
-  private boundary?: exp.Expression
-  private equal?: exp.Expression
-  private fill?: exp.Expression
-
-  parse(parser: Parser) {
-
-    this.boundary = parser.mustAddNextExpression()
-    if (parser.mustAddToken(["", ","]).index <= 0) {
-      return
-    }
-
-    this.fill = parser.mustAddNextExpression()
-
-    if (!parser.syntax || parser.syntax == Syntax.ACME) {
-      if (parser.mustAddToken(["", ","]).index <= 0) {
-        return
-      }
-      this.equal = this.fill
-      this.fill = parser.mustAddNextExpression()
-    }
-  }
+  private fillValue = 0
 
   pass1(asm: Assembler): number | undefined {
-    const boundaryValue = this.boundary?.resolve()
-    if (boundaryValue === undefined) {
-      this.boundary?.setError("Must resolve on first pass")
-      return
-    }
-    if (this.fill) {
-      const fillValue = this.fill.resolve()
-      if (fillValue === undefined) {
-        this.fill.setError("Must resolve on first pass")
+
+    const fillArg = this.findArg("fill")
+    if (fillArg) {
+      const value = fillArg.resolve()
+      if (value === undefined) {
+        fillArg.setError("Must resolve on first pass")
+      } else {
+        this.fillValue = value
       }
+    } else {
+      this.fillValue = asm.syntax == Syntax.ACME ? 0xEA : 0x00
     }
-    if (asm.syntax == Syntax.ACME) {
-      const equalValue = this.equal?.resolve()
-      if (equalValue === undefined) {
-        this.equal?.setError("Must resolve on first pass")
+
+    const andArg = this.findArg("and")
+    const equalArg = this.findArg("equal")
+    if (andArg && equalArg) {
+      const andValue = andArg.resolve()
+      if (andValue === undefined) {
+        andArg.setError("Must resolve on first pass")
         return
       }
-      return (equalValue - asm.getPC()) & boundaryValue
-    } else {
-      const misalign = asm.getPC() % boundaryValue
-      return misalign ? boundaryValue - misalign : 0
+      const equalValue = equalArg.resolve()
+      if (equalValue === undefined) {
+        equalArg.setError("Must resolve on first pass")
+        return
+      }
+      return (equalValue - asm.getPC()) & andValue
     }
+
+    let boundaryValue = 256
+    const boundaryArg = this.findArg("boundary")
+    if (boundaryArg) {
+      const value = boundaryArg.resolve()
+      if (value === undefined) {
+        boundaryArg.setError("Must resolve on first pass")
+        return
+      }
+      boundaryValue = value
+    }
+
+    let offsetValue = 0
+    const offsetArg = this.findArg("offset")
+    if (offsetArg) {
+      const value = offsetArg.resolve()
+      if (value === undefined) {
+        offsetArg.setError("Must resolve on first pass")
+        return
+      }
+      offsetValue = value
+    }
+
+    const misalign = asm.getPC() % boundaryValue
+    const size = (misalign ? boundaryValue - misalign : 0) + offsetValue
+    // TODO: how are negative offsets handled in 64TASS?
+    return Math.max(size, 0)
   }
 
   pass2(asm: Assembler, dataBytes: number[]): void {
-    let fillValue = asm.syntax == Syntax.ACME ? 0xEA : 0x00
-    if (this.fill) {
-      // resolved in first pass
-      fillValue = this.fill.resolve()!
-    }
-    dataBytes.fill(fillValue)
+    dataBytes.fill(this.fillValue)
   }
 }
 
 //------------------------------------------------------------------------------
 
-// MERLIN:  HEX <hex-num> [, ...]
-//   DASM:  [.]HEX <hex-num> [ ...]
-//   ACME:  !HEX <hex-num> [ ...]
+// MERLIN:  HEX <hex> [, ...]
+//   DASM:  [.]HEX <hex> [ ...]
+//   ACME:  !HEX <hex> [ ...]
 //   CA65:  n/a
-//   LISA:  HEX <hex-num>
+//   LISA:  HEX <hex>
+// 64TASS:  n/a
 
 // odd digits never allowed
 // $ and 0x prefix never allowed
 
 export class HexStatement extends Statement {
+
   private dataBytes: number[] = []
 
-  parse(parser: Parser) {
-
+  postParse(parser: Parser) {
     if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
       const symbol = this.labelExp.symbol
       if (symbol) {
@@ -1354,60 +1429,11 @@ export class HexStatement extends Statement {
       }
     }
 
-    let token: Token | undefined
-    while (true) {
-      if (!token) {
-        token = parser.addNextToken()
-        if (!token) {
-          parser.addMissingToken("Hex value expected")
-          break
-        }
-      }
-
-      let hexString = token.getString().toUpperCase()
-      if (hexString == "$") {
-        token.setError("$ prefix not allowed on HEX statement values")
-        token = parser.addNextToken()
-        if (!token) {
-          break
-        }
-        hexString = token.getString().toUpperCase()
-      }
-
-      if (token.type != TokenType.DecNumber && token.type != TokenType.HexNumber) {
-        token.setError("Unexpected token type, expecting hex value")
-        break
-      }
-
-      token.type = TokenType.HexNumber
-      if (hexString.length & 1) {
-        token.setError("Odd number of nibbles")
-      } else {
-        scanHex(hexString, this.dataBytes)
-      }
-
-      token = parser.addNextToken()
-      if (!token) {
-        break
-      }
-
-      if (parser.syntax == Syntax.LISA) {
-        token.setError("Unexpected token")
-        break
-      }
-
-      if (token.getString() == ",") {
-        if (parser.syntax && parser.syntax != Syntax.MERLIN) {
-          token.setError("Comma delimiter not allowed in this syntax")
-          break
-        }
-        token = undefined
-        continue
-      }
-
-      if (parser.syntax == Syntax.MERLIN) {
-        token.setError("Unexpected token, expecting ','")
-        break
+    // TODO: in pass1 instead?
+    this.dataBytes = []
+    for (let arg of this.args) {
+      if (!arg.hasError) {
+        scanHex(arg.getString(), this.dataBytes)
       }
     }
   }
@@ -1447,19 +1473,23 @@ class FileStatement extends Statement {
 
   protected fileName?: exp.FileNameExpression
 
-  parse(parser: Parser) {
-    // TODO: pass in list of required quoting characters, based on syntax?
-    // *** check if quoting is optional for some assemblers ***
-    this.fileName = parser.getNextFileNameExpression()
-    if (!this.fileName) {
-      parser.addMissingToken("Missing argument, expecting file path")
-      return
-    }
-    parser.addExpression(this.fileName)
+  // parse(parser: Parser) {
+  //   // TODO: pass in list of required quoting characters, based on syntax?
+  //   // *** check if quoting is optional for some assemblers ***
+  //   this.fileName = parser.getNextFileNameExpression()
+  //   if (!this.fileName) {
+  //     parser.addMissingToken("Missing argument, expecting file path")
+  //     return
+  //   }
+  //   parser.addExpression(this.fileName)
 
-    // TODO: check for quoted fileName, based on syntax
-      // optional on DASM
-      // never on MERLIN
+  //   // TODO: check for quoted fileName, based on syntax
+  //     // optional on DASM
+  //     // never on MERLIN
+  // }
+
+  postParse(parser: Parser) {
+    this.fileName = this.findArg("filename")
   }
 
   pass1(asm: Assembler): number | undefined {
@@ -1486,11 +1516,11 @@ export class IncludeStatement extends FileStatement {
         // TODO: only strip quotes for non-Merlin?
         // TODO: require quoting for CA65? other syntaxes?
         let quoteChar = fileNameStr[0]
-        if (quoteChar == "'" || quoteChar == '"') {
+        if (quoteChar == "'" || quoteChar == '"' || quoteChar == "<") {
           fileNameStr = fileNameStr.substring(1)
           if (fileNameStr.length > 0) {
             const lastChar = fileNameStr[fileNameStr.length - 1]
-            if (lastChar == quoteChar) {
+            if (lastChar == quoteChar || (quoteChar == "<" && lastChar == ">")) {
               fileNameStr = fileNameStr.substring(0, fileNameStr.length - 1)
             }
           }
@@ -1520,21 +1550,6 @@ export class SaveStatement extends FileStatement {
 //   LISA:  n/a
 
 export class DiskStatement extends FileStatement {
-
-  parse(parser: Parser) {
-    super.parse(parser)
-
-    // *** TODO: add parser.mayAddToken so this can be parsed when !parser.syntax
-    if (parser.syntax == Syntax.ACME) {
-      // TODO: not required -- defaults to cbm and warns
-      if (parser.mustAddToken(["", ","]).index <= 0) {
-        return
-      }
-      if (parser.mustAddToken(["cbm", "plain", "apple"], TokenType.Keyword).index < 0) {
-        return
-      }
-    }
-  }
 }
 
 // MERLIN:  n/a
@@ -1548,67 +1563,13 @@ export class IncDirStatement extends FileStatement {
 }
 
 // MERLIN:  n/a
-//   DASM:  [.]INCBIN "filename" [, skip-bytes]
-//   ACME:  !BINARY "filename" [, [size] [, [skip]]]
-//   CA65:  .INCBIN "filename" [, start [, size]]
+//   DASM:  [.]INCBIN "filename" [, offset]
+//   ACME:  !BINARY "filename" [, [size] [, [offset]]]
+//   CA65:  .INCBIN "filename" [, offset [, size]]
 //   LISA:  n/a
 // 64TASS:  .binary "filename"
 
 export class IncBinStatement extends FileStatement {
-
-  private offsetArg?: exp.Expression
-  private sizeArg?: exp.Expression
-
-  parse(parser: Parser) {
-    super.parse(parser)
-
-    if (parser.mustAddToken(["", ","]).index <= 0) {
-      return
-    }
-
-    let firstArg: exp.Expression | undefined
-    let secondArg: exp.Expression | undefined
-
-    // parse first argument
-    let token: Token | undefined
-    if (!parser.syntax || parser.syntax == Syntax.ACME) {
-      token = parser.getNextToken()
-      if (token?.getString() != ",") {
-        firstArg = parser.mustAddNextExpression(token)
-        token = parser.getNextToken()
-      }
-    } else {
-      firstArg = parser.mustAddNextExpression()
-      token = parser.getNextToken()
-    }
-
-    // parse second argument
-    if (token) {
-      if (token.getString() != ",") {
-        token.setError("expected ,")
-        return
-      }
-
-      secondArg = parser.mustAddNextExpression()
-    }
-
-    // order arguments based on syntax
-    if (parser.syntax == Syntax.ACME) {
-      // ACME parameters are reversed from other assemblers
-      this.offsetArg = secondArg
-      this.sizeArg = firstArg
-    } else {
-      this.offsetArg = firstArg
-      // DASM does not support size, just offset/skip
-      if (parser.syntax == Syntax.DASM) {
-        if (secondArg) {
-          secondArg.setError("Unexpected expression")
-        }
-      } else {
-        this.sizeArg = secondArg
-      }
-    }
-  }
 
   pass1(asm: Assembler): number | undefined {
     // TODO: return actual data size
@@ -1711,45 +1672,8 @@ export class CpuStatement extends Statement {
 
   private pushState = false
 
-  parse(parser: Parser) {
-    if (this.opNameLC == "xc") {
-      const res = parser.mustAddToken(["", "off"], TokenType.Keyword)
-    } else {
-
-      if (parser.syntax == Syntax.TASS64) {
-
-        // *** TODO: need parser.mustAddStringExpression()
-
-        const token = parser.getNextToken()
-        if (!token) {
-          parser.addMissingToken("expecting quoted string")
-          return
-        }
-        if (token.getString() != '"') {
-          parser.addToken(token)
-          token.setError("Expecting quoted string")
-          return
-        }
-
-        const strExpression = parser.parseStringExpression(token)
-        // TODO: verify that string is one of valid CPUs
-        parser.addExpression(strExpression)
-        return
-      }
-
-      const res = parser.mustAddToken(["6502", "65c02", "65816"], TokenType.Keyword)
-      if (res.index < 0) {
-        return
-      }
-
-      if (!parser.syntax || parser.syntax == Syntax.ACME) {
-        const res = parser.mustAddToken(["", "{"])
-        if (res.index <= 0) {
-          return
-        }
-        this.pushState = true
-      }
-    }
+  postParse(parser: Parser) {
+    this.pushState = this.hasTrailingOpenBrace()
   }
 
   preprocess(prep: Preprocessor, enabled: boolean): void {
@@ -1768,31 +1692,28 @@ export class CpuStatement extends Statement {
 
 export class OrgStatement extends Statement {
 
-  private value?: exp.Expression
-
-  parse(parser: Parser) {
-    if (this.opNameLC == "*") {
-      const res = parser.mustAddToken("=")
-      if (res.index < 0) {
-        return
-      }
-    }
-
-    this.value = parser.mustAddNextExpression()
-  }
-
   pass1(asm: Assembler): number | undefined {
-    const org = this.value?.resolve()
-    if (org !== undefined) {
-      asm.setPC(org)
+    const valueArg = this.args[0]
+    if (valueArg) {
+      const orgValue = valueArg.resolve()
+      if (orgValue === undefined) {
+        valueArg.setError("Must resolve in first pass")
+      } else {
+        asm.setPC(orgValue)
+      }
+    } else {
+      // TODO: Merlin treats an org with address as a reorg
+      //  to sync back to the previous org
     }
+
     return 0
   }
 }
 
 
 export class EntryStatement extends Statement {
-  parse(parser: Parser) {
+
+  postParse(parser: Parser) {
     if (this.labelExp) {
       if (!this.labelExp.isVariableType()) {
         if (this.labelExp.symbol) {
@@ -1801,9 +1722,11 @@ export class EntryStatement extends Statement {
       } else {
         this.labelExp.setError("Variable label not allowed")
       }
-    } else {
-      parser.insertMissingLabel()
     }
+  }
+
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -1811,21 +1734,9 @@ export class EntryStatement extends Statement {
 // TODO: could this be combined with AssertStatement?
 export class ErrorStatement extends Statement {
 
-  private errExpression?: exp.Expression
-
-  parse(parser: Parser) {
-    // *** maybe use a different variation like parseControlExpression?
-    this.errExpression = parser.parseExpression()
-    if (this.errExpression) {
-      parser.addExpression(this.errExpression)
-    }
-  }
-
   pass1(asm: Assembler): number | undefined {
     return 0
   }
-
-  // ***
 }
 
 export class UsrStatement extends Statement {
@@ -1882,23 +1793,6 @@ export class UsrStatement extends Statement {
 // TODO: make this the basis for all the various string/text statements
 export class TextStatement extends Statement {
 
-  private textElements: exp.Expression[] = []
-
-  parse(parser: Parser) {
-    while (true) {
-      const expression = parser.mustAddNextExpression()
-      if (!expression) {
-        break
-      }
-
-      this.textElements.push(expression)
-
-      if (parser.mustAddToken(["", ","]).index <= 0) {
-        break
-      }
-    }
-  }
-
   pass1(asm: Assembler): number | undefined {
     // TODO: temporary to force "??"
     return 1
@@ -1924,89 +1818,23 @@ export class TextStatement extends Statement {
 export class MacroDefStatement extends Statement {
 
   public macroName?: exp.SymbolExpression
-  public params: exp.SymbolExpression[] = []
 
-  parse(parser: Parser) {
+  postParse(parser: Parser) {
 
-    if (this.labelExp) {
-      if (parser.syntax && !parser.syntaxDef.macroDefineWithLabel) {
-        this.labelExp.setError("Label not allowed")
-      }
-    } else if (parser.syntax && parser.syntaxDef.macroDefineWithLabel) {
-      parser.insertMissingLabel()
-    }
-
-    if (parser.syntaxDef.macroDefineWithLabel) {
-      if (this.labelExp) {
-        this.macroName = this.labelExp
-        this.macroName.setSymbolType(SymbolType.MacroName)
-      }
-    } else {
-      const token = parser.getNextToken()
-      if (token) {
-        // macro name
-        // TODO: generalize this
-
-        // TODO: CA65 allows macro names to start with a "." (undocumented?)
-
-        if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-          const isDefinition = true
-          this.macroName = new exp.SymbolExpression([token], SymbolType.MacroName,
-            isDefinition, parser.sourceFile, parser.lineNumber)
-          parser.addExpression(this.macroName)
+    if (this.keywordDef?.label) {
+      if (this.keywordDef.label[0] == "<") {
+        if (this.labelExp) {
+          this.macroName = this.labelExp
+          this.macroName.setSymbolType(SymbolType.MacroName)
         }
       }
     }
 
-    if (parser.syntaxDef.macroDefineParams) {
-      let token = parser.getNextToken()
-      if (token) {
-        if (token.getString() == "{") {
-          if (!this.macroName) {
-            token.setError("Unexpected token, expected macro name")
-          } else if (parser.syntax && parser.syntax != Syntax.ACME) {
-            token.setError("Unexpected token")
-          }
-          parser.addToken(token)
-        } else {
-          // parse comma-delimited parameter list
-          while (token) {
-            const expression = parser.addNextExpression(token)
-            if (!expression) {
-              break
-            }
-
-            if (expression instanceof exp.SymbolExpression) {
-              expression.setIsDefinition(SymbolFrom.MacroParam)
-              this.params.push(expression)
-            } else {
-              expression.setError("Simple symbol expected")
-            }
-
-            token = parser.getNextToken()
-            if (!token) {
-              break
-            }
-            const str = token.getString()
-            if (!parser.syntax || parser.syntax == Syntax.ACME) {
-              if (str == "{") {
-                parser.addToken(token)
-                break
-              }
-            }
-            if (str != ",") {
-              token.setError("Unexpected token")
-              break
-            }
-            parser.addToken(token)
-            token = parser.getNextToken()
-          }
-        }
-      } else if (parser.syntax == Syntax.ACME) {
-        parser.addMissingToken("opening brace expected")
+    if (!this.macroName) {
+      const name = this.findArg("macro-name")
+      if (name instanceof exp.SymbolExpression) {
+        this.macroName = name
       }
-
-      // *** explicit trailing brace? ***
     }
   }
 
@@ -2055,10 +1883,6 @@ export class MacroDefStatement extends Statement {
 
 export class EndMacroDefStatement extends Statement {
 
-  parse(parser: Parser) {
-    // *** enforce label or not ***
-  }
-
   preprocess(prep: Preprocessor, enabled: boolean) {
 
     if (!prep.isNested(NestingType.Macro)) {
@@ -2096,8 +1920,7 @@ export class EndMacroDefStatement extends Statement {
 export class MacroInvokeStatement extends Statement {
 
   // *** where is this coming from? in this.labelExp?
-  public macroName?: exp.SymbolExpression
-  protected params: exp.Expression[] = []
+  // public macroName?: exp.SymbolExpression
 
   parse(parser: Parser) {
 
@@ -2117,7 +1940,7 @@ export class MacroInvokeStatement extends Statement {
           continue
         }
         if (str == ":") {
-          this.params.push(parser.parseCA65Local(token, false))
+          this.args.push(parser.parseCA65Local(token, false))
           continue
         }
       }
@@ -2149,7 +1972,7 @@ export class MacroInvokeStatement extends Statement {
         break
       }
 
-      this.params.push(expression)
+      this.args.push(expression)
       pushedExpression = true
     }
   }
@@ -2163,18 +1986,6 @@ export class MacroInvokeStatement extends Statement {
 //------------------------------------------------------------------------------
 
 export class DummyStatement extends Statement {
-
-  private value?: exp.Expression
-
-  parse(parser: Parser) {
-    if (this.labelExp) {
-      if (parser.syntax == Syntax.MERLIN) {
-        this.labelExp.setError("Label not allowed")
-      }
-    }
-
-    this.value = parser.mustAddNextExpression()
-  }
 
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
@@ -2192,15 +2003,22 @@ export class DummyStatement extends Statement {
   }
 
   pass1(asm: Assembler): number | undefined {
-    const orgValue = this.value?.resolve()
-    if (orgValue !== undefined) {
-      asm.setPC(orgValue)
-      return 0
+    const valueArg = this.args[0]
+    if (valueArg) {
+      const orgValue = valueArg.resolve()
+      if (orgValue === undefined) {
+        valueArg.setError("Must resolve in first pass")
+      } else {
+        asm.setPC(orgValue)
+      }
     }
+
+    return 0
   }
 }
 
 export class DummyEndStatement extends Statement {
+
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
       if (!prep.isNested(NestingType.Struct)) {
@@ -2237,59 +2055,59 @@ export class SegmentStatement extends Statement {
     this.impliedName = impliedName
   }
 
-  parse(parser: Parser) {
-    if (this.labelExp) {
-      this.labelExp.setError("Label not allowed")
-    }
+  // parse(parser: Parser) {
+  //   if (this.labelExp) {
+  //     this.labelExp.setError("Label not allowed")
+  //   }
 
-    if (!this.impliedName) {
+  //   if (!this.impliedName) {
 
-      let nameToken: Token | undefined
+  //     let nameToken: Token | undefined
 
-      if (parser.syntax == Syntax.DASM) {
-        nameToken = parser.getNextToken()
-        if (!nameToken) {
-          return
-        }
-      } else {
-        nameToken = parser.mustGetNextToken("expecting segment name")
-      }
+  //     if (parser.syntax == Syntax.DASM) {
+  //       nameToken = parser.getNextToken()
+  //       if (!nameToken) {
+  //         return
+  //       }
+  //     } else {
+  //       nameToken = parser.mustGetNextToken("expecting segment name")
+  //     }
 
-      if (nameToken.getString() == '"') {
-        if (!parser.syntax || parser.syntax == Syntax.CA65) {
-          const strExpression = parser.parseStringExpression(nameToken, true, false)
-          parser.addExpression(strExpression)
-        } else {
-          parser.addToken(nameToken)
-          nameToken.setError("Expecting segment name")
-          return
-        }
-      } else {
-        // TODO: pick a better symbol type
-        nameToken.type = TokenType.String
-        parser.addToken(nameToken)
-        if (parser.syntax == Syntax.CA65) {
-          nameToken.setError("Expecting quoted segment name")
-          return
-        }
-      }
-      // TODO: save name expression
+  //     if (nameToken.getString() == '"') {
+  //       if (!parser.syntax || parser.syntax == Syntax.CA65) {
+  //         const strExpression = parser.parseStringExpression(nameToken, true, false)
+  //         parser.addExpression(strExpression)
+  //       } else {
+  //         parser.addToken(nameToken)
+  //         nameToken.setError("Expecting segment name")
+  //         return
+  //       }
+  //     } else {
+  //       // TODO: pick a better symbol type
+  //       nameToken.type = TokenType.String
+  //       parser.addToken(nameToken)
+  //       if (parser.syntax == Syntax.CA65) {
+  //         nameToken.setError("Expecting quoted segment name")
+  //         return
+  //       }
+  //     }
+  //     // TODO: save name expression
 
-      if (!parser.syntax || parser.syntax == Syntax.CA65) {
+  //     if (!parser.syntax || parser.syntax == Syntax.CA65) {
 
-        let res = parser.mustAddToken(["", ":"])
-        if (res.index <= 0) {
-          return
-        }
-        // NOTE: "direct" means immediate
-        res = parser.mustAddToken(["direct", "absolute", "zeropage"], TokenType.Keyword)
-        if (res.index < 0) {
-          return
-        }
-        // TODO: save type index
-      }
-    }
-  }
+  //       let res = parser.mustAddToken(["", ":"])
+  //       if (res.index <= 0) {
+  //         return
+  //       }
+  //       // NOTE: "direct" means immediate
+  //       res = parser.mustAddToken(["direct", "absolute", "zeropage"], TokenType.Keyword)
+  //       if (res.index < 0) {
+  //         return
+  //       }
+  //       // TODO: save type index
+  //     }
+  //   }
+  // }
 
   pass1(asm: Assembler): number | undefined {
     return 0
@@ -2299,40 +2117,6 @@ export class SegmentStatement extends Statement {
 //------------------------------------------------------------------------------
 
 export class ListStatement extends Statement {
-  parse(parser: Parser) {
-    const token = parser.addNextToken()
-    let options: string[] = []
-    if (this.opNameLC == "tr") {
-      options = ["on", "off"]
-    } else if (this.opNameLC == "lst" || this.opNameLC == "list") {
-      options = ["on", "off", ""]
-    } else if (this.opNameLC == "lstdo") {
-      options = ["off", ""]
-    } else if (this.opNameLC == "exp") {
-      options = ["on", "off", "only"]
-    } else if (this.opNameLC == "pag") {
-      options = [""]
-    }
-    const opStrLC = token?.getString().toLowerCase() ?? ""
-    const index = options.indexOf(opStrLC)
-    if (index < 0) {
-      let message = "expecting "
-      for (let i = 0; i < options.length; i += 1) {
-        if (i > 0) {
-          message += ", "
-        }
-        message += "'" + options[i] + "'"
-      }
-      if (token) {
-        token.setError("Unexpected token, " + message)
-      } else {
-        parser.addMissingToken(message)
-      }
-    } else if (token) {
-      token.type = TokenType.Keyword
-    }
-  }
-
   pass1(asm: Assembler): number | undefined {
     return 0
   }
@@ -2347,15 +2131,9 @@ export class ListStatement extends Statement {
 // TODO: others
 
 export class FeatureStatement extends Statement {
-  parse(parser: Parser) {
-    const token = parser.addNextToken()
-    if (token) {
-      // TODO: enforce known features
-      // TODO: correctly auto-complete with those options
-      token.type = TokenType.Keyword
-    } else {
-      parser.addMissingToken("Missing expression, feature name expected")
-    }
+
+  postParse(parser: Parser) {
+    // TODO: check all args for valid feature names
   }
 }
 
@@ -2373,18 +2151,11 @@ export class TypeBeginStatement extends Statement {
     this.canRecurse = canRecurse
   }
 
-  parse(parser: Parser): void {
-    // *** share this ***
-    const token = parser.mustGetNextToken("expecting symbol name")
-    if (token) {
-      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-        token.type = TokenType.TypeName
-        parser.addToken(token)
-        this.scopeName = token.getString()
-      } else {
-        token.setError("Unexpected token, expecting symbol")
-        parser.addToken(token)
-      }
+  postParse(parser: Parser) {
+
+    const nameArg = this.findArg("type-name")
+    if (nameArg) {
+      this.scopeName = nameArg.getString()
     }
   }
 
@@ -2495,6 +2266,7 @@ export class EndScopeStatement extends TypeEndStatement {
 //        .EXPORTZP <name>[, ...]
 
 export class ImportExportStatement extends Statement {
+
   private isExport: boolean
   private isZpage: boolean
 
@@ -2504,50 +2276,8 @@ export class ImportExportStatement extends Statement {
     this.isZpage = isZpage
   }
 
-  parse(parser: Parser): void {
-    while (true) {
-      const token = parser.mustGetNextToken("expecting symbol name")
-      if (!token) {
-        return
-      }
-      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-        token.type = TokenType.Symbol
-        if (!this.isExport) {
-          const isDefinition = true //***
-          // *** external symbol? ***
-          const symExp = new exp.SymbolExpression([token], SymbolType.Simple,
-            isDefinition, parser.sourceFile, parser.lineNumber)
-          symExp.symbol!.from = SymbolFrom.Import
-          parser.addExpression(symExp)
-        }
-      } else {
-        token.setError("Unexpected token, expecting symbol")
-        parser.addToken(token)
-        return
-      }
-
-      let res = parser.mustAddToken(["", ",", ":"])
-      if (res.index <= 0) {
-        return
-      }
-      // TODO: share with segment
-      if (res.index == 2) {
-        if (this.isZpage) {
-          res.token?.setError("Unexpected token")
-          return
-        }
-        // NOTE: "direct" means immediate
-        res = parser.mustAddToken(["direct", "absolute", "zeropage"], TokenType.Keyword)
-        if (res.index < 0) {
-          return
-        }
-        // TODO: apply size to symbol based on mode or this.zpage
-        res = parser.mustAddToken(["", ","])
-        if (res.index <= 0) {
-          return
-        }
-      }
-    }
+  pass1(asm: Assembler): number | undefined {
+    return 0
   }
 }
 
@@ -2560,41 +2290,6 @@ export class AssertStatement extends Statement {
 
   private errExpression?: exp.Expression
 
-  parse(parser: Parser) {
-    // *** maybe use a different variation like parseControlExpression?
-    this.errExpression = parser.mustAddNextExpression()
-
-    let res = parser.mustAddToken([","])
-    if (res.index < 0) {
-      return
-    }
-
-    res = parser.mustAddToken(["error", "warning"], TokenType.Keyword)
-    if (res.index < 0) {
-      return
-    }
-
-    res = parser.mustAddToken([","])
-    if (res.index < 0) {
-      return
-    }
-
-    // TODO: need parser.mustAddStringExpression()
-    const token = parser.getNextToken()
-    if (!token) {
-      parser.addMissingToken("expecting quoted string")
-      return
-    }
-    if (token.getString() != '"') {
-      parser.addToken(token)
-      token.setError("Expecting quoted string")
-      return
-    }
-
-    const strExpression = parser.parseStringExpression(token)
-    parser.addExpression(strExpression)
-  }
-
   pass1(asm: Assembler): number | undefined {
     return 0
   }
@@ -2605,15 +2300,14 @@ export class AssertStatement extends Statement {
 //==============================================================================
 
 // MERLIN:
-//   DASM:  <label> SUBROUTINE    (label is optional)
+//   DASM:  [<label>] SUBROUTINE    (label is optional)
 //   ACME:  (see !zone below)
 //   CA65:
 //   LISA:
 
 export class SubroutineStatement extends Statement {
 
-  parse(parser: Parser) {
-
+  postParse(parser: Parser) {
     if (!this.labelExp) {
       // insert implied label
       this.labelExp = new exp.SymbolExpression([], SymbolType.Simple, true,
@@ -2634,28 +2328,27 @@ export class SubroutineStatement extends Statement {
 // ACME-only
 //==============================================================================
 
-//   ACME:  <label> !zone [<title>] [ { <block> } ]
-//          <label> !zn [<title>] [ { <block> } ]
+//   ACME:  <label> !zone [<name>] [ { <block> } ]
+//          <label> !zn [<name>] [ { <block> } ]
 
 export class ZoneStatement extends Statement {
 
   private zoneTitle?: string
   private pushState = false
 
-  parse(parser: Parser) {
+  postParse(parser: Parser) {
 
-    let t = parser.getNextToken()
-    while (t) {
-      const str = t.getString()
-      if (str == "{") {
-        this.pushState = true
-        break
+    this.pushState = this.hasTrailingOpenBrace()
+
+    const zoneArg = this.findArg("name")
+    if (zoneArg instanceof exp.SymbolExpression) {
+      if (zoneArg.symbol) {
+        zoneArg.symbol.isZoneStart = true
       }
-      this.zoneTitle = str
-      t = parser.getNextToken()
+      this.zoneTitle = zoneArg.getString()
     }
 
-    if (!this.zoneTitle) {
+    if (this.zoneTitle) {
       // TODO: use zoneTitle as scope name
       // TODO: support switching back to a previously used zone title
     } else {
@@ -2696,13 +2389,6 @@ export class ZoneStatement extends Statement {
 // TODO: consider folding into OrgStatement?
 export class PseudoPcStatement extends Statement {
 
-  private value?: exp.Expression
-
-  parse(parser: Parser) {
-    this.value = parser.mustAddNextExpression()
-    const res = parser.mustAddToken("{")
-  }
-
   preprocess(prep: Preprocessor, enabled: boolean): void {
     prep.pushNesting(NestingType.PseudoPc, () => {
       if (enabled) {
@@ -2711,6 +2397,82 @@ export class PseudoPcStatement extends Statement {
     })
     if (enabled) {
       // TODO: actually change PC
+    }
+  }
+}
+
+//   ACME:  !xor expression [ { <block> } ]
+
+export class XorStatement extends Statement {
+
+  private pushState = false
+
+  postParse(parser: Parser) {
+    this.pushState = this.hasTrailingOpenBrace()
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (this.pushState) {
+      prep.pushNesting(NestingType.Xor, () => {
+        if (enabled) {
+          // TODO: manage xor value state
+        }
+      })
+    }
+
+    if (enabled) {
+      // TODO: manage xor value state
+    }
+  }
+}
+
+//   ACME:  !address expression [ { <block> } ]    ***
+//          !addr
+
+export class AddressStatement extends Statement {
+
+  private pushState = false
+
+  postParse(parser: Parser) {
+    this.pushState = this.hasTrailingOpenBrace()
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (this.pushState) {
+      prep.pushNesting(NestingType.Addr, () => {
+        if (enabled) {
+          // TODO: manage addr state
+        }
+      })
+    }
+
+    if (enabled) {
+      // TODO: manage addr state
+    }
+  }
+}
+
+//   ACME:  !convtab {pet|raw|scr|<filename>} [\\{ [<block> \\}]]
+
+export class ConvTabStatement extends Statement {
+
+  private pushState = false
+
+  postParse(parser: Parser) {
+    this.pushState = this.hasTrailingOpenBrace()
+  }
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (this.pushState) {
+      prep.pushNesting(NestingType.ConvTab, () => {
+        if (enabled) {
+          // TODO: manage converstion table state
+        }
+      })
+    }
+
+    if (enabled) {
+      // TODO: manage converstion table state
     }
   }
 }

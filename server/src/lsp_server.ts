@@ -223,7 +223,8 @@ export class LspServer {
       capabilities: {
         textDocumentSync: lsp.TextDocumentSyncKind.Incremental,
         completionProvider: {
-          triggerCharacters: ["(", ":"],
+          // *** TODO: make this syntax-specific
+          triggerCharacters: ["(", ":", ".", "+", "!"],
           resolveProvider: true
         },
         definitionProvider: true,
@@ -393,16 +394,19 @@ export class LspServer {
     this.updateId = setTimeout(() => { this.executeUpdate() }, updateTimeout)
   }
 
+  // only executes if previously scheduled
   private executeUpdate() {
     if (this.updateId !== undefined) {
+
       clearTimeout(this.updateId)
       delete this.updateId
+
+      for (let project of this.projects) {
+        project.update()
+      }
+      this.scheduleDiagnostics(this.updateFile)
+      delete this.updateFile
     }
-    for (let project of this.projects) {
-      project.update()
-    }
-    this.scheduleDiagnostics(this.updateFile)
-    delete this.updateFile
   }
 
   private scheduleDiagnostics(priorityFile?: SourceFile) {
@@ -415,34 +419,35 @@ export class LspServer {
 
   private executeDiagnostics(priorityFile?: SourceFile) {
     if (this.diagnosticId !== undefined) {
+
       clearTimeout(this.diagnosticId)
       delete this.diagnosticId
-    }
 
-    if (priorityFile) {
-      this.updateDiagnostics(priorityFile)
-    }
-
-    for (let project of this.projects) {
-      for (let sharedFile of project.sharedFiles) {
-        if (sharedFile != priorityFile) {
-          this.updateDiagnostics(sharedFile)
-        }
+      if (priorityFile) {
+        this.updateDiagnostics(priorityFile)
       }
-      for (let module of project.modules) {
-        for (let sourceFile of module.sourceFiles) {
-          if (project.sharedFiles.indexOf(sourceFile) != -1) {
-            continue
-          }
-          if (sourceFile != priorityFile) {
-            this.updateDiagnostics(sourceFile)
+
+      for (let project of this.projects) {
+        for (let sharedFile of project.sharedFiles) {
+          if (sharedFile != priorityFile) {
+            this.updateDiagnostics(sharedFile)
           }
         }
+        for (let module of project.modules) {
+          for (let sourceFile of module.sourceFiles) {
+            if (project.sharedFiles.indexOf(sourceFile) != -1) {
+              continue
+            }
+            if (sourceFile != priorityFile) {
+              this.updateDiagnostics(sourceFile)
+            }
+          }
+        }
       }
-    }
 
-    // *** send message that semantic tokens need refresh ***
-    // this.connection.sendNotification("workspace/semanticTokens/refresh")
+      // *** send message that semantic tokens need refresh ***
+      // this.connection.sendNotification("workspace/semanticTokens/refresh")
+    }
   }
 
   // build a tempory project given a file path
@@ -823,6 +828,15 @@ export class LspServer {
               hoverStr += "Affects: " + affected
             }
           }
+        } else if (statement.keywordDef) {
+          const desc = statement.keywordDef.desc ?? ""
+          if (desc != "") {
+            hoverStr += desc + "\n"
+          }
+          if (statement.keywordDef.label && statement.keywordDef.label[0] == "<") {
+            hoverStr += "<label> "
+          }
+          hoverStr += statement.opExp?.getString() + " " + statement.keywordDef.params ?? ""
         }
       }
     }

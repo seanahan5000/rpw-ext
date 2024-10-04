@@ -156,6 +156,9 @@ export enum NestingType {
   Zone        = 8,    // ACME
   PseudoPc    = 9,    // ACME
   Cpu         = 10,   // ACME
+  Xor         = 11,   // ACME
+  Addr        = 12,   // ACME
+  ConvTab     = 13,   // ACME
   Count
 }
 
@@ -500,10 +503,10 @@ export class Preprocessor {
                 if (firstPass && this.inMacroDef()) {
                   // TODO: be smarter about scoping locals
                   if (!symExp.isLocalType()) {
-                    symExp.suppressUnknown = true
+                    symExp.isWeak = true
                   }
                 }
-                if (!symExp.suppressUnknown) {
+                if (!symExp.isWeak) {
                   // TODO: make temporary project check a setting
                   if (symExp.isLocalType() || !this.module.project.isTemporary) {
                     if (symExp.symbolType == SymbolType.MacroName) {

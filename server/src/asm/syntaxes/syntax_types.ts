@@ -1,5 +1,6 @@
 
 import { Statement } from "../statements"
+import { ParamList } from "./params"
 
 // *** keywords should be a translation step -- no statement creation
 // *** attempt resolve with multiple precedence defs as see if values match
@@ -99,11 +100,19 @@ export type OpDef = {
 export type KeywordDef = {
   create?: () => Statement
   alias?: string,
+  label?: string,
   params?: string,
-  desc?: string
+  desc?: string,
+  paramsList?: any    // ListParam
+}
+
+export type ParamDef = {
+  params: string
+  paramsList?: any    // ListParam
 }
 
 export class SyntaxDef {
+  public paramDefMap: Map<string, ParamDef> = new Map<string, ParamDef>()
   public keywordMap: Map<string, KeywordDef> = new Map<string, KeywordDef>()
   public unaryOpMap: Map<string, OpDef> = new Map<string, OpDef>()
   public binaryOpMap: Map<string, OpDef> = new Map<string, OpDef>()
@@ -116,23 +125,25 @@ export class SyntaxDef {
 
   public cheapLocalPrefixes: string = ""
   public zoneLocalPrefixes: string = ""
+  public anonLocalChars: string = ""
+
+  // character before keyword
+  public keywordPrefixes: string = ""
 
   // directives/keywords are allowed without indentation
   public keywordsInColumn1: boolean = true
-
-  // macro defined with <label> MACRO [<params>] instead of MACRO <name> [<params>]
-  public macroDefineWithLabel: boolean = false
-
-  // macro define has parameters
-  public macroDefineParams: boolean = true
 
   // character before the macro name being invoked
   public macroInvokePrefixes: string = ""
 
   // character between macro invoke parameters
-  public macroInvokeDelimiters: string = ","
+  public macroInvokeDelimiters: string = ""
 
-  // *** TODO: integrate documentation?
+  public allowLabelTrailingColon: boolean = true
+
+  public allowIndentedAssignment: boolean = true
+
+  // *** default org ***
 }
 
 //------------------------------------------------------------------------------

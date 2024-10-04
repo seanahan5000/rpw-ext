@@ -9,6 +9,7 @@ import { Symbol, SymbolType, SymbolFrom, isLocalType } from "./symbols"
 export class Expression extends Node {
 
   public children: Node[] = []
+  public name?: string
 
   constructor(children?: Node[]) {
     super()
@@ -143,6 +144,14 @@ export class NumberExpression extends Expression {
 
 //------------------------------------------------------------------------------
 
+// '[' <expression> [, <expression> ...] ']'
+// *** build array of expressions ***
+export class ArrayExpression extends Expression {
+  // ***
+}
+
+//------------------------------------------------------------------------------
+
 export class ParenExpression extends Expression {
 
   private arg: Expression | undefined
@@ -226,8 +235,8 @@ export class SymbolExpression extends Expression {
   public fullName?: string
   public symbol?: Symbol
 
-  // true if symbol was used in an !ifdef, etc. conditional check
-  public suppressUnknown = false
+  // no error when not found (used in !ifdef, for example)
+  public isWeak: boolean = false
 
   constructor(
       children: Node[],

@@ -1,5 +1,5 @@
 
-import { SyntaxDef, KeywordDef, OpDef, Op } from "./syntax_types"
+import { SyntaxDef, KeywordDef, ParamDef, OpDef, Op } from "./syntax_types"
 import * as stm from "../statements"
 
 //------------------------------------------------------------------------------
@@ -17,105 +17,478 @@ export class Ca65Syntax extends SyntaxDef {
   public symbolTokenContents = ""
   public cheapLocalPrefixes = "@"
   public zoneLocalPrefixes = ""
+  public anonLocalChars = ""
+  public keywordPrefixes = "."
   public keywordsInColumn1 = true
-  public macroDefineWithLabel = false  // mac <name> [<params>]
-  public macroDefineParams = true
   public macroInvokePrefixes = ""
   public macroInvokeDelimiters = ","
+  public allowLabelTrailingColon = true
+  public allowIndentedAssignment = true
+
+  // *** TODO: pseudo functions separately? ***
 
   constructor() {
     super()
 
+    this.paramDefMap = new Map<string, ParamDef>([
+      [ "import-type", { params: "{far|direct|absolute|zeropage}" } ],
+      [ "import-def",  { params: "<symbol-def>[:<import-type>]" } ],
+      [ "export-def",  { params: "<symbol>[:<import-type>]" } ]
+
+      // *** define <feature-name> ***
+    ])
+
     this.keywordMap = new Map<string, KeywordDef>([
-      [ ".assert",    { create: () => { return new stm.AssertStatement() }}],
+
+      // target
+      [ ".setcpu",    { // TODO
+                        params: "{6502|65c02|65816}",
+                        desc:   "Switch the CPU instruction set" } ],
+      [ ".pushcpu",   { // TODO
+                        params: "",
+                        desc:   "Push the currently active cpu onto a stack" } ],
+      [ ".popcpu",    { // TODO
+                        params: "",
+                        desc:   "Pop the last pushed cpu from the stack and activate it" } ],
 
       // equates
-      [ "=",          { create: () => { return new stm.EquStatement() }}],
-      [ ":=",         { create: () => { return new stm.EquStatement() }}],
-      [ ".set",       { create: () => { return new stm.VarAssignStatement() }}],
+      [ "=",          { create: () => { return new stm.EquStatement() },
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Assign value to symbol" } ],
+      [ ":=",         { create: () => { return new stm.EquStatement() },
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Assign value to symbol as a label" } ],
+      [ ".set",       { create: () => { return new stm.VarAssignStatement() },
+                        label:  "<symbol>",
+                        params: "<expression>",
+                        desc:   "Assign a value to a variable" } ],
 
       // pc
-      [ ".org",       { create: () => { return new stm.OrgStatement() }}],
+      [ ".org",       { create: () => { return new stm.OrgStatement() },
+                        params: "<expression>",
+                        desc:   "Start a section of absolute code" } ],
+      [ ".reloc",     { // TODO
+                        params: "",
+                        desc:   "Switch back to relocatable mode" } ],
 
       // disk
-      [ ".include",   { create: () => { return new stm.IncludeStatement() }}],
-      [ ".incbin",    { create: () => { return new stm.IncBinStatement() }}],
+      [ ".include",   { create: () => { return new stm.IncludeStatement() },
+                        params: "<filename>",
+                        desc:   "Include another file" } ],
+      [ ".incbin",    { create: () => { return new stm.IncBinStatement() },
+                        params: "<filename>[, <offset> [, <size>]]",
+                        desc:   "Include a file as binary data" } ],
 
       // macros
-      [ ".macro",     { create: () => { return new stm.MacroDefStatement() }}],
+      [ ".macro",     { create: () => { return new stm.MacroDefStatement() },
+                        params: "<macro-name> [<param> [, <param> ...]]",
+                        desc:   "Start a classic macro definition" } ],
       [ ".mac",       { alias: ".macro" }],
-      [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() }}],
+      [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() },
+                        params: "",
+                        desc:   "Marks the end of a macro definition" } ],
       [ ".endmac",    { alias: ".endmacro" }],
+      [ ".exitmacro", { // TODO
+                        params: "",
+                        desc:   "Abort a macro expansion immediately" } ],
+      [ ".exitmac",   { alias: ".exitmacro" }],
+      [ ".macpack",   { // TODO
+                        params: "{atari|cbm|cpu|generic|longbranch}",
+                        desc:   "Insert a predefined macro package" } ],
+      [ ".delmacro",  { // TODO
+                        params: "<name>",
+                        desc:   "Delete a classic macro" } ],
+      [ ".delmac",    { alias: ".delmacro" }],
+
+      [ ".define",    { // TODO
+                        params: "<name>[( [<param>[, <param> ...]] )]",
+                        desc:   "Start a define style macro definition" } ],
+      [ ".undefine",  { // TODO
+                        params: "<name>",
+                        desc:   "Delete a define style macro definition" } ],
+      [ ".undef",     { alias:  ".undefine" } ],
 
       // data storage
-      [ ".byte",      { create: () => { return new stm.DataStatement_U8() }}],
-      [ ".dbyt",      { create: () => { return new stm.DataStatement_U16(true) }}],
-      [ ".word",      { create: () => { return new stm.DataStatement_U16() }}],
-      [ ".addr",      { create: () => { return new stm.DataStatement_U16() }}],
-      [ ".faraddr",   { create: () => { return new stm.DataStatement_U24() }}],
-      [ ".dword",     { create: () => { return new stm.DataStatement_U32() }}],
-      [ ".res",       { create: () => { return new stm.StorageStatement(1) }}],
-      [ ".tag",       { create: () => { return new stm.StorageStatement(-1) }}],
-      [ ".align",     { create: () => { return new stm.AlignStatement() }}],
+      // *** TODO: check all signed/unsigned limits ***
+      [ ".byte",      { create: () => { return new stm.DataStatement_U8() },
+                        params: "<string-value>[, <string-value> ...]",
+                        desc:   "Define byte sized data" } ],
+      [ ".byt",       { alias: ".byte" }],
+      [ ".dbyt",      { create: () => { return new stm.DataStatement_U16(true) },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define word sized data with the hi and lo bytes swapped" } ],
+      [ ".word",      { create: () => { return new stm.DataStatement_U16() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "yyy" } ],
+      [ ".addr",      { create: () => { return new stm.DataStatement_U16() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define word sized data" } ],
+      [ ".faraddr",   { create: () => { return new stm.DataStatement_U24() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define far (24 bit) address data" } ],
+      [ ".dword",     { create: () => { return new stm.DataStatement_U32() },
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define dword sized data" } ],
+      [ ".lobytes",   { // TODO
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define byte sized data by extracting only the low byte " } ],
+      [ ".hibytes",   { // TODO
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define byte sized data by extracting only the low byte " } ],
+      [ ".bankbytes", { // TODO
+                        params: "<expression>[, <expression> ...]",
+                        desc:   "Define byte sized data by extracting only the bank byte " } ],
+
+      [ ".res",       { create: () => { return new stm.StorageStatement(1) },
+                        params: "<const-bytes>[, <const-fill>]",
+                        desc:   "Reserve storage" } ],
+      [ ".tag",       { create: () => { return new stm.StorageStatement(-1) },
+                        params: "<name>",
+                        desc:   "Allocate space for a struct or union" } ],
+
+      [ ".align",     { create: () => { return new stm.AlignStatement() },
+                        params: "<boundary>",
+                        desc:   "Align data to a given boundary" } ],
 
       // conditionals
-      [ ".if",        { create: () => { return new stm.IfStatement() }}],
-      [ ".ifdef",     { create: () => { return new stm.IfDefStatement(true) }}],
-      [ ".ifndef",    { create: () => { return new stm.IfDefStatement(false) }}],
-      [ ".else",      { create: () => { return new stm.ElseStatement() }}],
-      [ ".elseif",    { create: () => { return new stm.ElseIfStatement() }}],
-      [ ".endif",     { create: () => { return new stm.EndIfStatement() }}],
-      [ ".end",       {}],
+      [ ".if",        { create: () => { return new stm.IfStatement() },
+                        params: "<condition>",
+                        desc:   "Assemble block if expression is true" } ],
+      [ ".ifdef",     { create: () => { return new stm.IfDefStatement(true) },
+                        params: "<symbol-weak>",
+                        desc:   "Assemble block if symbol is defined" } ],
+      [ ".ifndef",    { create: () => { return new stm.IfDefStatement(false) },
+                        params: "<symbol-weak>",
+                        desc:   "Assemble block if symbol is not defined" } ],
+      [ ".ifblank",   { // TOOD
+                        params: "<expression>",
+                        desc:   "Assemble block if there are remaining tokens in expression" } ],
+      [ ".ifnblank",  { // TOOD
+                        params: "<expression>",
+                        desc:   "Assemble block if there are not remaining tokens in expression" } ],
+      [ ".ifconst",   { create: () => { return new stm.IfConstStatement(true) },
+                        params: "<condition>",
+                        desc:   "Assemble block if expression is constant" } ],
+      [ ".ifref",     { // TOOD
+                        params: "<symbol>",
+                        desc:   "Assemble block if symbol is referenced" } ],
+      [ ".ifnref",    { // TOOD
+                        params: "<symbol>",
+                        desc:   "Assemble block if symbol is not referenced" } ],
+      [ ".else",      { create: () => { return new stm.ElseStatement() },
+                        params: "",
+                        desc:   "Reverse the current condition" } ],
+      [ ".elseif",    { create: () => { return new stm.ElseIfStatement() },
+                        params: "<condition>",
+                        desc:   "Reverse current condition and test a new one" } ],
+      [ ".endif",     { create: () => { return new stm.EndIfStatement() },
+                        params: "",
+                        desc:   "Close .if or .else branch" } ],
+      [ ".end",       { // TOOD
+                        params: "",
+                        desc:   "Forced end of assembly" } ],
 
       // looping
-      [ ".repeat",    { create: () => { return new stm.RepeatStatement() }}],
-      [ ".endrep",    { create: () => { return new stm.EndRepStatement() }}],
-      [ ".endrepeat", { create: () => { return new stm.EndRepStatement() }}],
+      [ ".repeat",    { create: () => { return new stm.RepeatStatement() },
+                        params: "<const-expression>[, <symbol-def>]",
+                        desc:   "Repeat commands a constant number of times." } ],
+      [ ".endrepeat", { create: () => { return new stm.EndRepStatement() },
+                        params: "",
+                        desc:   "End a .repeat block" } ],
+      [ ".endrep",    { alias:  ".endrepeat" } ],
 
       // import/export
-      [ ".import",    { create: () => { return new stm.ImportExportStatement(false, false) }}],
-      [ ".importzp",  { create: () => { return new stm.ImportExportStatement(false, true) }}],
-      [ ".export",    { create: () => { return new stm.ImportExportStatement(true, false) }}],
-      [ ".exportzp",  { create: () => { return new stm.ImportExportStatement(true, true) }}],
+      [ ".import",    { create: () => { return new stm.ImportExportStatement(false, false) },
+                        params: "<import-def>[, <import-def> ...]",
+                        desc:   "Import a symbol from another module" } ],
+      [ ".importzp",  { create: () => { return new stm.ImportExportStatement(false, true) },
+                        params: "<symbol-def>[, <symbol-def> ...]",
+                        desc:   "Import a symbol from another module as zpage" } ],
+      [ ".forceimport",{ // TODO
+                        params: "<import-def>[, <import-def> ...]",
+                        desc:   "Import an absolute symbol from another module" } ],
+      [ ".export",    { create: () => { return new stm.ImportExportStatement(true, false) },
+                        // TODO: more possibilities
+                        params: "<export-def>[ {=|:=} <expression>][, <export-def>[ {=|:=} <expression> ...]]",
+                        desc:   "Make symbols accessible from other modules" } ],
+      [ ".exportzp",  { create: () => { return new stm.ImportExportStatement(true, true) },
+                        params: "<symbol>[ {=|:=} <expression>][, <symbol> [{=|:=} <expression>] ...]",
+                        desc:   "Make symbols accessible from other modules" } ],
+      [ ".global",    { // TODO
+                        params: "<symbol>[, <symbol> ...]",
+                        desc:   "Declare symbols as global" } ],
+      [ ".globalzp",  { // TODO
+                        params: "<symbol>[, <symbol> ...]",
+                        desc:   "Declare symbols as global zpage" } ],
+      [ ".autoimport",{ // TODO
+                        params: "[+]",
+                        desc:   "Enable undefined symbols automatically marked as import instead of errors" } ],
+      [ ".condes",    { // TODO
+                        params: "<symbol>[,{ {constructor|destructor|interruptor} | <type> } [, <value>] ]",
+                        desc:   "Export a symbol and mark it in a special way" } ],
+      [ ".constructor",{ // TODO
+                        params: "<symbol>[, <priority>]",
+                        desc:   "Export a symbol and mark it as a module constructor" } ],
+      [ ".destructor",{ // TODO
+                        params: "<symbol>[, <priority>]",
+                        desc:   "Export a symbol and mark it as a module destructor" } ],
+      [ ".interruptor",{ // TODO
+                        params: "<symbol>[, <priority>]",
+                        desc:   "Export a symbol and mark it as an interruptor" } ],
 
       // segments
-      [ ".segment",   { create: () => { return new stm.SegmentStatement() }}],
-      [ ".code",      { create: () => { return new stm.SegmentStatement("CODE") }}],
-      [ ".data",      { create: () => { return new stm.SegmentStatement("DATA") }}],
-      [ ".bss",       { create: () => { return new stm.SegmentStatement("BSS") }}],
-      [ ".rodata",    { create: () => { return new stm.SegmentStatement("RODATA") }}],
+      [ ".segment",   { create: () => { return new stm.SegmentStatement() },
+                        params: "<string>[: {zeropage|absolute}]",
+                        desc:   "Switch to another segment" } ],
+      [ ".code",      { create: () => { return new stm.SegmentStatement("CODE") },
+                        params: "",
+                        desc:   "Switch to the CODE segment" } ],
+      [ ".data",      { create: () => { return new stm.SegmentStatement("DATA") },
+                        params: "",
+                        desc:   "Switch to the DATA segment" } ],
+      [ ".bss",       { create: () => { return new stm.SegmentStatement("BSS") },
+                        params: "",
+                        desc:   "Switch to the BSS segment" } ],
+      [ ".zeropage",  { create: () => { return new stm.SegmentStatement("ZEROPAGE") },
+                        params: "",
+                        desc:   "Switch to the ZEROPAGE segment" } ],
+      [ ".rodata",    { create: () => { return new stm.SegmentStatement("RODATA") },
+                        params: "",
+                        desc:   "Switch to the RODATA segment" } ],
+      [ ".pushseg",   { // TODO
+                        params: "",
+                        desc:   "Push the currently active segment onto a stack" } ],
+      [ ".popseg",    { // TODO
+                        params: "",
+                        desc:   "Pop the last pushed segment from the stack and set it" } ],
 
       // C-types
-      [ ".enum",      { create: () => { return new stm.EnumStatement() }}],
-      [ ".endenum",   { create: () => { return new stm.EndEnumStatement() }}],
-      [ ".struct",    { create: () => { return new stm.StructStatement() }}],
-      [ ".endstruct", { create: () => { return new stm.EndStructStatement() }}],
-      [ ".union",     { create: () => { return new stm.UnionStatement() }}],
-      [ ".endunion",  { create: () => { return new stm.EndUnionStatement() }}],
+      [ ".enum",      { create: () => { return new stm.EnumStatement() },
+                        params: "<type-name>",
+                        desc:   "Start an enumeration" } ],
+      [ ".endenum",   { create: () => { return new stm.EndEnumStatement() },
+                        params: "",
+                        desc:   "End a .enum declaration" } ],
+      [ ".struct",    { create: () => { return new stm.StructStatement() },
+                        params: "<type-name>",
+                        desc:   "Start a struct definition" } ],
+      [ ".endstruct", { create: () => { return new stm.EndStructStatement() },
+                        params: "",
+                        desc:   "End a struct definition" } ],
+      [ ".union",     { create: () => { return new stm.UnionStatement() },
+                        params: "<type-name>",
+                        desc:   "Start a union definition" } ],
+      [ ".endunion",  { create: () => { return new stm.EndUnionStatement() },
+                        params: "",
+                        desc:   "End a union definition" } ],
 
       // scope
-      [ ".scope",     { create: () => { return new stm.ScopeStatement() }}],
-      [ ".endscope",  { create: () => { return new stm.EndScopeStatement() }}],
-      [ ".proc",      { create: () => { return new stm.ProcStatement() }}],
-      [ ".endproc",   { create: () => { return new stm.EndProcStatement() }}],
+      [ ".scope",     { create: () => { return new stm.ScopeStatement() },
+                        params: "<type-name>",
+                        desc:   "Start a nested lexical level with the given name" } ],
+      [ ".endscope",  { create: () => { return new stm.EndScopeStatement() },
+                        params: "",
+                        desc:   "End of the local lexical level" } ],
+      [ ".proc",      { create: () => { return new stm.ProcStatement() },
+                        params: "<type-name>",
+                        desc:   "Start a nested lexical level with the given name and add symbol" } ],
+      [ ".endproc",   { create: () => { return new stm.EndProcStatement() },
+                        params: "",
+                        desc:   "End of the local lexical level" } ],
 
-      [ ".define",    {}],
-      [ ".local",     {}],
-      [ ".zeropage",  {}],
-      [ ".hibytes",   {}],
-      [ ".lobytes",   {}],
-      [ ".fatal",     {}],
-      [ ".error",     {}],
-      [ ".warning",   {}],
-      [ ".out",       {}],
-      [ ".defined",   {}],    // ()
-      [ ".sizeof",    {}],    // ()
-      [ ".blank",     {}],    // ()
-      [ ".sprintf",   {}],    // ()
-      [ ".macpack",   {}],
-      [ ".cpu",       {}],
-      [ ".feature",   { create: () => { return new stm.FeatureStatement() }}],
-      [ ".linecont",  {}]     // + (enable line continuation)
+      // text
+      [ ".asciiz",    { // TODO
+                        params: "<string>[, <string> ...]",
+                        desc:   "Define a string with a trailing zero." } ],
+      [ ".literal",   { // TODO
+                        params: "<string-value>[, <string-value> ...]",
+                        desc:   "Define byte sized data, string disregard mapping definition" } ],
+
+      [ ".charmap",   { // TODO
+                        params: "<index>, <mapping>",
+                        desc:   "Apply a custom mapping for characters for the commands .ASCIIZ and .BYTE" } ],
+      [ ".pushcharmap",{ // TODO
+                        params: "",
+                        desc:   "Push the currently active character mapping onto a stack" } ],
+      [ ".popcharmap",{ // TODO
+                        params: "",
+                        desc:   "Pop the last pushed character mapping from the stack and activate it" } ],
+
+      // messages
+      [ ".assert",    { create: () => { return new stm.AssertStatement() },
+                        params: "<condition>, {warning|error|ldwarning|lderror} [,<string>]",
+                        desc:   "Add an assert" } ],
+      [ ".error",     { // TODO
+                        params: "<string>",
+                        desc:   "Force an assembly error" } ],
+      [ ".fatal",     { // TODO
+                        params: "<string>",
+                        desc:   "Force an assembly error and terminate assembly" } ],
+      [ ".warning",   { // TODO
+                        params: "<string>",
+                        desc:   "Force an assembly warning" } ],
+      [ ".out",       { // TODO
+                        params: "<string>",
+                        desc:   "Output a string to the console without producing an error" } ],
+
+      [ ".fileopt",   { // TODO
+                        params: "{author|comment|compiler}, <string>",
+                        desc:   "Insert an option string into the object file" } ],
+      [ ".fopt",      { alias: ".fileopt" }],
+
+      // formatting
+      [ ".list",      { // TODO
+                        params: "{on|off|+|-}",
+                        desc:   "Enable output to the listing" } ],
+      [ ".listbytes", { // TODO
+                        params: "{unlimited|<expression>}",
+                        desc:   "Set how many bytes are shown in the listing for one source line" } ],
+      [ ".pagelength",{ // TODO
+                        params: "{unlimited|<expression>}",
+                        desc:   "Set the page length for the listing" } ],
+      [ ".pagelen",   { alias: ".pagelength" } ],
+
+      [ ".local",     { // TODO
+                        params: "<symbol>[, <symbol> ...]",
+                        desc:   "Declare a list of identifiers as local to the macro expansion" } ],
+
+      // misc
+      [ ".referto",   { // TODO
+                        params: "<symbol>",
+                        desc:   "Mark a symbol as referenced" } ],
+      [ ".refto",     { alias:  ".referto" } ],
+
+      [ ".feature",   { create: () => { return new stm.FeatureStatement() },
+                        params: "<feature-name>[{+|-|on|off}][, <feature-name>[{+|-|on|off}] ...]",
+                        desc:   "Enable one or more compatibility features of the assembler" } ],
+      [ ".linecont",  { // TODO
+                        params: "+",
+                        desc:   "Enable line continuation" } ],
+
+      [ ".localchar", { // TODO
+                        // TODO: enforce single quoted single character
+                        params: "<string>",
+                        desc:   'Defines the character that start "cheap" local labels' } ],
+      [ ".debuginfo", { // TODO
+                        params: "{-|+}",
+                        desc:   "Switch on or off debug info generation" } ],
+      [ ".smart",     { // TODO
+                        params: "[{-|+}]",
+                        desc:   "Switch on or off smart mode" } ],
+      [ ".case",      { // TODO
+                        params: "[{-|+}]",
+                        desc:   "Switch on or off case sensitivity on identifiers" } ],
+
+      // psuedo variables
+      [ ".asize",     { // TODO
+                        params: "",
+                        desc:   "Return the current size of the Accumulator in bits" } ],
+      [ ".cpu",       { // TODO
+                        params: "",
+                        desc:   "Return constant integer value that tells which CPU is currently enabled" } ],
+      [ ".isize",     { // TODO
+                        params: "",
+                        desc:   "Return the current size of the Index register in bits" } ],
+      [ ".paramcount",{ // TODO
+                        params: "",
+                        desc:   "Return the actual number of parameters that were given in the macro invocation" } ],
+      [ ".time",      { // TODO
+                        params: "",
+                        desc:   "Return constant integer value that represents the current time in POSIX standard" } ],
+      [ ".version",   { // TODO
+                        params: "",
+                        desc:   "Return the assembler version" } ],
+
+      // pseudo functions
+      [ ".addrsize",  { // TODO
+                        params: "(<symbol>)",
+                        desc:   "Internal address size associated with a symbol" } ],
+      [ ".bank",      { // TODO
+                        params: "(<symbol>)",
+                        desc:   "Bank attribute assigned to the run memory area of the segment" } ],
+      [ ".bankbyte",  { // TODO
+                        params: "(<expression>)",
+                        desc:   "Bank byte of argument" } ],
+      [ ".blank",     { // TODO
+                        params: "(<expression>)",
+                        desc:  "True if the argument is blank" } ],
+      [ ".concat",    { // TODO
+                        params: "(<string>[, <string> ...])",
+                        desc:   "Concatenate a list of string constants" } ],
+      [ ".const",     { // TODO
+                        params: "(<expression>)",
+                        desc:   "True if the argument is a constant expression" } ],
+      [ ".defined",   { // TODO
+                        params: "(<symbol>)",
+                        desc:  "True if symbol has already been defined somewhere up to the current position" } ],
+      [ ".def",       { alias:  ".defined" } ],
+      [ ".definedmacro",{ // TODO
+                        params: "(<name>)",
+                        desc:   "True if the identifier already has been defined as the name of a macro" } ],
+      [ ".hibyte",    { // TODO
+                        params: "(<expression>)",
+                        desc:   "High byte of the argument" } ],
+      [ ".hiword",    { // TODO
+                        params: "(<expression>)",
+                        desc:   "High word of the argument" } ],
+      [ ".ident",     { // TODO
+                        params: "(<string>)",
+                        desc:   "Convert argument into an identifier" } ],
+      [ ".ismnemonic",{ // TODO
+                        params: "(<expression>)",
+                        desc:   "True if the identifier is defined as an instruction mnemonic" } ],
+      [ ".ismnem",    { alias:  ".ismnemonic" } ],
+      [ ".left",      { // TODO
+                        params: "(<expression>, <list>)",
+                        desc:   "Extracts the left part of a given token list" } ],
+      [ ".lobyte",    { // TODO
+                        params: "(<expression>)",
+                        desc:   "Low byte of the argument" } ],
+      [ ".loword",    { // TODO
+                        params: "(<expression>)",
+                        desc:   "Low word of the argument" } ],
+      [ ".match",     { // TODO
+                        params: "(<list>, <list>)",
+                        desc:   "Match two token lists against each other" } ],
+      [ ".max",       { // TODO
+                        params: "(<expression>, <expression>)",
+                        desc:   "The larger of two values" } ],
+      [ ".mid",       { // TODO
+                        params: "(<expression>, <expression>, <list>)",
+                        desc:   "Extract part of token list" } ],
+      [ ".min",       { // TODO
+                        params: "(<expression>, <expression>)",
+                        desc:   "The smaller of two values" } ],
+      [ ".referenced",{ // TODO
+                        params: "(<symbol>)",
+                        desc:   "xxx" } ],
+      [ ".ref",       { alias:  ".referenced" } ],
+      [ ".right",     { // TODO
+                        params: "(<expression>, <list>)",
+                        desc:   "Extracts the right part of a given token list" } ],
+      [ ".sizeof",    { // TODO
+                        params: "(<symbol>)",
+                        desc:  "Size of the symbol" } ],
+      [ ".sprintf",   { // TODO
+                        params: "(<string-exp>[, <string-exp> ...])",
+                        desc:  "Formatted string" } ],
+      [ ".strat",     { // TODO
+                        params: "(<string>, <index>)",
+                        desc:   "Value of the character at the given position as an integer value" } ],
+      [ ".string",    { // TODO
+                        params: "(<expression>)",
+                        desc:   "Convert argument into a string constant" } ],
+      [ ".strlen",    { // TODO
+                        params: "(<string-arg>)",
+                        desc:   "Length of the string" } ],
+      [ ".tcount",    { // TODO
+                        params: "(<list>)",
+                        desc:   "Number of tokens given as argument" } ],
+      [ ".xmatch",    { // TODO
+                        params: "(<list>, <list>)",
+                        desc:   "Match two token lists against each other" } ],
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

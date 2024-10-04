@@ -78,9 +78,10 @@
 import { SourceFile } from "./project"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
 import { OpcodeSets } from "./opcodes"
-import { Op, OpDef, SyntaxDef, Syntax, SyntaxMap } from "./syntaxes/syntax_types"
+import { Op, OpDef, SyntaxDef, Syntax, SyntaxMap, KeywordDef } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { SymbolType, SymbolFrom } from "./symbols"
+import { ParamsParser } from "./syntaxes/params"
 import * as exp from "./expressions"
 import * as stm from "./statements"
 
@@ -102,6 +103,7 @@ export class Parser extends Tokenizer {
   public allowBrackets = true
 
   private syntaxStats: number[] = []
+  public paramsParser = new ParamsParser()
 
   // TODO: add requireTrailingColon, allowTrailingColon
 
@@ -260,8 +262,6 @@ export class Parser extends Tokenizer {
     // check for a comment first so Merlin's '*' comment special case gets handled
     this.pushNextComment()
 
-    // *** get token here ***
-
     // check for keyword in the first column
     // TODO: this happens frequently -- could it be more efficient?
     if (this.syntaxDef.keywordsInColumn1) {
@@ -271,6 +271,22 @@ export class Parser extends Tokenizer {
         statement = this.parseKeyword(token)
         if (!statement) {
           this.position = savedPosition
+        }
+      }
+    }
+
+    if (!statement) {
+      // If syntax has macro invoke prefixes, check for that before
+      //  a label in order disambiguate an anonymous local "+" from
+      //  the start of "+my_macro" invoke in column 1, for example.
+      if (this.syntaxDef.macroInvokePrefixes) {
+        const savedPosition = this.position
+        const token = this.getNextToken()
+        if (token) {
+          statement = this.parseMacroInvoke(token)
+          if (!statement) {
+            this.position = savedPosition
+          }
         }
       }
     }
@@ -310,7 +326,9 @@ export class Parser extends Tokenizer {
         statement = this.initStatement(new stm.GenericStatement())
       }
     }
+
     statement.parse(this)
+    statement.postParse(this)
 
     // handle extra tokens
     // *** don't generate more errors if this already has an error ***
@@ -381,13 +399,14 @@ export class Parser extends Tokenizer {
       }
     }
 
+    // TODO: need a better way to handle this
     if (keywordLC == "}") {
       // ACME syntax ends conditionals, zones, and other blocks with '}'
       if (!this.syntax || this.syntax == Syntax.ACME) {
         const elseToken = this.peekNextToken()
         if (elseToken) {
           if (elseToken.getString().toLowerCase() == "else") {
-            statement = new stm.ElseStatement()
+            statement = new stm.AcmeElseStatement()
             this.syntaxStats[Syntax.ACME] += 1
             // TODO: may need to look for another opening brace here?
           }
@@ -398,8 +417,9 @@ export class Parser extends Tokenizer {
       }
     }
 
+    let keywordDef: any | undefined
+    let paramsDef: any | undefined
     if (!statement) {
-      let keyword: any
       for (let i = 1; i < SyntaxDefs.length; i += 1) {
         if (!this.syntax || i == this.syntax) {
           let k = SyntaxDefs[i].keywordMap.get(keywordLC)
@@ -418,10 +438,11 @@ export class Parser extends Tokenizer {
             // count every keyword match in order to later guess the syntax
             this.syntaxStats[i] += 1
 
-            if (keyword && !k.create) {
+            if (keywordDef && !k.create) {
               continue
             }
-            keyword = k
+            keywordDef = k
+            paramsDef = SyntaxDefs[i].paramDefMap
             if (this.syntax) {
               break
             }
@@ -429,19 +450,24 @@ export class Parser extends Tokenizer {
           }
         }
       }
-      if (keyword) {
+      if (keywordDef) {
         token.type = TokenType.Keyword
-        if (keyword.create) {
-          statement = keyword.create()
+        if (keywordDef.create) {
+          statement = keywordDef.create()
         } else {
           // TODO: remove this and make all syntax table entries create the correct type
           statement = new stm.GenericStatement()
+        }
+        if (keywordDef.params !== undefined) {
+          if (!keywordDef.paramsList) {
+            keywordDef.paramsList = this.paramsParser.parseString(keywordDef.params, paramsDef)
+          }
         }
       }
     }
 
     if (statement) {
-      return this.initStatement(statement, token)
+      return this.initStatement(statement, token, keywordDef)
     }
   }
 
@@ -476,35 +502,33 @@ export class Parser extends Tokenizer {
   }
 
   private parseMacroInvoke(token: Token): stm.Statement | undefined {
-    const prefixes = this.syntaxDef.macroInvokePrefixes
-    if (prefixes != "") {
-      const str = token.getString()
-      if (!prefixes.includes(str[0])) {
+
+    if (this.syntaxDef.macroInvokePrefixes) {
+      if (!this.syntaxDef.macroInvokePrefixes.includes(token.getString())) {
         return
       }
-      this.startExpression()
-      const tokens = token.split(1)
-      token = tokens[0]
+      const nextToken = this.getVeryNextToken()
+      if (!nextToken || (nextToken.type != TokenType.Symbol && nextToken.type != TokenType.HexNumber)) {
+        return
+      }
       token.type = TokenType.Macro
       this.addToken(token)
-      token = tokens[1]
-    } else {
-      this.startExpression()
+      token = nextToken
     }
+
     token.type = TokenType.Macro
-    this.addToken(token)
-    const symExp = this.newSymbolExpression(this.endExpression(), SymbolType.MacroName, false)
+    const symExp = this.newSymbolExpression([token], SymbolType.MacroName, false)
     return this.initStatement(new stm.MacroInvokeStatement(), symExp)
   }
 
-  private initStatement(statement: stm.Statement, opTokenExp?: Token | exp.Expression) {
+  private initStatement(statement: stm.Statement, opTokenExp?: Token | exp.Expression, keywordDef?: KeywordDef) {
     if (opTokenExp) {
       if (opTokenExp instanceof Token) {
         opTokenExp = new exp.Expression([opTokenExp])
       }
       this.addExpression(opTokenExp)
     }
-    statement.init(this.sourceLine, this.endExpression(), this.labelExp, opTokenExp)
+    statement.init(this.sourceLine, this.endExpression(), this.labelExp, opTokenExp, keywordDef)
     return statement
   }
 
@@ -557,9 +581,11 @@ export class Parser extends Tokenizer {
 
         const t2str = t2.getString().toLowerCase()
         if (t2str == "=") {
-          if (!this.syntax || this.syntax == Syntax.ACME || this.syntax == Syntax.CA65) {
+          if (this.syntaxDef.allowIndentedAssignment) {
+            // TODO: move away from this mechanism
             this.syntaxStats[Syntax.ACME] += 1
             this.syntaxStats[Syntax.CA65] += 1
+            this.syntaxStats[Syntax.TASS64] += 1
             token = t1
             this.position = savedPosition2
           } else {
@@ -567,8 +593,10 @@ export class Parser extends Tokenizer {
             return
           }
         } else if (t2str == ":=" || t2str == ".set") {
-          if (!this.syntax || this.syntax == Syntax.CA65) {
+          if (this.syntaxDef.allowIndentedAssignment) {
+            // TODO: move away from this mechanism
             this.syntaxStats[Syntax.CA65] += 1
+            this.syntaxStats[Syntax.TASS64] += 1
             token = t1
             this.position = savedPosition2
           } else {
@@ -683,15 +711,15 @@ export class Parser extends Tokenizer {
         }
       }
 
-      if ((str[0] == "-" || str[0] == "+") && (str[0] == str[str.length - 1])) {
-        if (!this.syntax || this.syntax == Syntax.ACME) {
+      if (this.syntaxDef.anonLocalChars && this.syntaxDef.anonLocalChars.includes(str[0])) {
+        if (str[0] == str[str.length - 1]) {
+          // TODO: move away from this mechanism
           this.syntaxStats[Syntax.ACME] += 1
+          this.syntaxStats[Syntax.TASS64] += 1
           if (str.length > 9) {
             token.setError("Anonymous local is too long")
             return new exp.BadExpression([token])
           }
-          // *** maybe macro invocation in first column? ***
-          // *** must be whitespace/eol afterwards to be label?
           token.type = TokenType.Label
           return this.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
         }
@@ -819,11 +847,7 @@ export class Parser extends Tokenizer {
     if (nextChar == ":") {
       const token = this.addNextToken()
       if (token) {
-        // TODO: change token.type to what?
-        if (this.syntax &&
-          this.syntax != Syntax.DASM &&
-          this.syntax != Syntax.ACME &&
-          this.syntax != Syntax.CA65) {
+        if (!this.syntaxDef.allowLabelTrailingColon) {
           token.setError("Not allowed for this syntax")
         }
       }
@@ -962,6 +986,7 @@ export class Parser extends Tokenizer {
     let str = token.getString()
 
     if (token.type == TokenType.Symbol) {
+      // TODO: this needs to be generalized
       if (str[0] == ".") {
         // For CA65, symbol tokens starting with "." are almost never symbols.
         //  They're either .define invocations or built-in functions,
@@ -987,6 +1012,11 @@ export class Parser extends Tokenizer {
           return new exp.PcExpression(token)
         }
       }
+      // if (str == "[") {
+      //   if (this.syntax && this.syntax == Syntax.TASS64) {
+      //     return this.parseArrayExpression(token)
+      //   }
+      // }
       if (str == '"' || str == "'") {
         // *** how to choose between string literals and strings? ***
         // *** pick these values dynamically ***
@@ -1017,11 +1047,11 @@ export class Parser extends Tokenizer {
         }
       }
 
-      // ACME anonymous locals
+      // ACME/64TASS anonymous locals
       // TODO: It's currently not possible to arrive here with str == "-" because
       //  that will have already been treated as a unary operator.
-      if ((str[0] == "-" || str[0] == "+") && (str[0] == str[str.length - 1])) {
-        if (!this.syntax || this.syntax == Syntax.ACME) {
+      if (this.syntaxDef.anonLocalChars && this.syntaxDef.anonLocalChars.includes(str[0])) {
+        if (str[0] == str[str.length - 1]) {
           return this.parseSymbol(false, token)
         }
       }
@@ -1057,6 +1087,21 @@ export class Parser extends Tokenizer {
   parseExpression(inToken?: Token): exp.Expression | undefined {
     const expBuilder = new ExpressionBuilder(this)
     return expBuilder.parse(inToken)
+  }
+
+  parseArrayExpression(token: Token): exp.ArrayExpression {
+    this.startExpression(token)
+    while (true) {
+      const expression = this.addNextExpression()
+      if (!expression) {
+        break
+      }
+      const res = this.mustAddToken(["]", ","])
+      if (res.index <= 0) {
+        break
+      }
+    }
+    return new exp.ArrayExpression(this.endExpression())
   }
 
   // *** LISA uses '!' prefix for decimal numbers ***
@@ -1182,17 +1227,25 @@ export class Parser extends Tokenizer {
 
     this.skipWhitespace()
     const startPosition = this.position
+
+    // TODO: decide which quote chars are supported, by syntax
+    const beginChar = this.sourceLine[this.position++]
+    let endChar = ""
+    if (beginChar == '"' || beginChar == "'") {
+      endChar = beginChar
+    } else if (beginChar == "<") {
+      endChar = ">"
+    } else {
+      this.position -= 1
+    }
+
     if (this.position < this.sourceLine.length) {
 
-      const quoteChar = this.sourceLine[this.position]
-      // TODO: also "<" and ">"
-      if (quoteChar == '"' || quoteChar == "'") {
+      if (endChar != "") {
         // TODO: enforce/allow quotes for only some syntaxes?
-        this.position += 1
         while (this.position < this.sourceLine.length) {
-          const nextChar = this.sourceLine[this.position]
-          this.position += 1
-          if (nextChar == quoteChar) {
+          const nextChar = this.sourceLine[this.position++]
+          if (nextChar == endChar) {
             break
           }
         }

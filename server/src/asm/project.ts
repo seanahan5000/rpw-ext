@@ -212,8 +212,13 @@ export class Project {
           if (syntaxStats[i] > bestCount) {
             bestCount = syntaxStats[i]
             bestMatch = i
-          } else if (syntaxStats[i] == bestCount) { // ignore ties
-            bestMatch = Syntax.UNKNOWN
+          } else if (syntaxStats[i] == bestCount) {
+            if (bestMatch == Syntax.MERLIN && i == Syntax.LISA) {
+              // ties between MERLIN and LISA go to MERLIN
+            } else {
+              // ignore ties
+              bestMatch = Syntax.UNKNOWN
+            }
           }
         }
         if (bestMatch != Syntax.UNKNOWN) {
