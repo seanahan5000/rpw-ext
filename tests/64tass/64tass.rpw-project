@@ -1,0 +1,10 @@
+{
+  "settings": {
+    "syntax": "64tass",
+    "upperCase": false
+  },
+  "modules": [
+    { "src": "pass.asm" },
+    { "src": "fail.asm" }
+  ]
+}

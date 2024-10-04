@@ -1,0 +1,10 @@
+{
+  "settings": {
+    "syntax": "ca65",
+    "upperCase": false
+  },
+  "modules": [
+    { "src": "pass.asm" },
+    { "src": "fail.asm" }
+  ]
+}
