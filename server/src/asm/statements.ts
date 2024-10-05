@@ -870,60 +870,6 @@ export class RepeatStatement extends Statement {
   // private count?: exp.Expression    // end for ACME
   // private var?: exp.SymbolExpression
 
-  // parse(parser: Parser) {
-
-  //   if (parser.syntax == Syntax.ACME) {
-
-  //     this.var = this.getVarName(parser)
-  //     if (!this.var) {
-  //       return
-  //     }
-
-  //     if (parser.mustAddToken([","]).index < 0) {
-  //       return
-  //     }
-
-  //     this.count = parser.mustAddNextExpression()
-
-  //     const res = parser.mustAddToken(["", ",", "{"])
-  //     if (res.index < 0) {
-  //       return
-  //     }
-
-  //     if (res.index == 1) {
-  //       this.start = this.count
-  //       this.count = parser.mustAddNextExpression()
-
-  //       if (parser.mustAddToken("{").index < 0) {
-  //         return
-  //       }
-  //     }
-
-  //   } else {
-  //     this.count = parser.mustAddNextExpression()
-
-  //     const res = parser.mustAddToken(["", ","])
-  //     if (res.index < 0) {
-  //       return
-  //     }
-
-  //     if (res.index > 0) {
-  //       if (parser.syntax == Syntax.MERLIN || parser.syntax == Syntax.DASM) {
-  //         res.token?.setError("Unexpected token")
-  //         return
-  //       }
-  //       this.var = this.getVarName(parser)
-  //       if (!this.var) {
-  //         return
-  //       }
-  //     }
-
-  //     if (!parser.syntax) {
-  //       parser.mustAddToken(["", "{"])
-  //     }
-  //   }
-  // }
-
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
       prep.pushNesting(NestingType.Repeat, () => {
@@ -933,6 +879,7 @@ export class RepeatStatement extends Statement {
   }
 
   // TODO: generalize this -- similar code used by MacroDefStatement, TypeBeginStatement
+  // TODO: move into params.ts
   private getVarName(parser: Parser): exp.SymbolExpression | undefined {
     const token = parser.getNextToken()
     if (token) {
@@ -1998,6 +1945,7 @@ export class DummyEndStatement extends Statement {
 
 // DASM:  SEG[.U] [<name>]
 // CA65:  .segment "<name>" [: (direct|zeropage|absolute)]
+//                          "direct" means immediate
 
 // TODO: reconcile seg.u and dummy statements (currently DASM-only)
 export class SegmentStatement extends Statement {
@@ -2008,60 +1956,6 @@ export class SegmentStatement extends Statement {
     super()
     this.impliedName = impliedName
   }
-
-  // parse(parser: Parser) {
-  //   if (this.labelExp) {
-  //     this.labelExp.setError("Label not allowed")
-  //   }
-
-  //   if (!this.impliedName) {
-
-  //     let nameToken: Token | undefined
-
-  //     if (parser.syntax == Syntax.DASM) {
-  //       nameToken = parser.getNextToken()
-  //       if (!nameToken) {
-  //         return
-  //       }
-  //     } else {
-  //       nameToken = parser.mustGetNextToken("expecting segment name")
-  //     }
-
-  //     if (nameToken.getString() == '"') {
-  //       if (!parser.syntax || parser.syntax == Syntax.CA65) {
-  //         const strExpression = parser.parseStringExpression(nameToken, true, false)
-  //         parser.addExpression(strExpression)
-  //       } else {
-  //         parser.addToken(nameToken)
-  //         nameToken.setError("Expecting segment name")
-  //         return
-  //       }
-  //     } else {
-  //       // TODO: pick a better symbol type
-  //       nameToken.type = TokenType.String
-  //       parser.addToken(nameToken)
-  //       if (parser.syntax == Syntax.CA65) {
-  //         nameToken.setError("Expecting quoted segment name")
-  //         return
-  //       }
-  //     }
-  //     // TODO: save name expression
-
-  //     if (!parser.syntax || parser.syntax == Syntax.CA65) {
-
-  //       let res = parser.mustAddToken(["", ":"])
-  //       if (res.index <= 0) {
-  //         return
-  //       }
-  //       // NOTE: "direct" means immediate
-  //       res = parser.mustAddToken(["direct", "absolute", "zeropage"], TokenType.Keyword)
-  //       if (res.index < 0) {
-  //         return
-  //       }
-  //       // TODO: save type index
-  //     }
-  //   }
-  // }
 
   pass1(asm: Assembler): number | undefined {
     return 0

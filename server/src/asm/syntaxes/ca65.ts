@@ -239,7 +239,7 @@ export class Ca65Syntax extends SyntaxDef {
 
       // segments
       [ ".segment",   { create: () => { return new stm.SegmentStatement() },
-                        params: "<string>[: {zeropage|absolute}]",
+                        params: "<string>[: {zeropage|absolute|direct}]",
                         desc:   "Switch to another segment" } ],
       [ ".code",      { create: () => { return new stm.SegmentStatement("CODE") },
                         params: "",
