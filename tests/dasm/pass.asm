@@ -14,6 +14,7 @@ PUHEIGHT = 1
                 incbin "filename",$100
                 incdir "directory"
                 include fail.asm
+                include test\ file.asm  ;*** escaped space
 
 symbol1         equ $1000
 symbol2         =   $2000

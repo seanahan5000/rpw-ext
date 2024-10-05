@@ -149,7 +149,7 @@ export class AcmeSyntax extends SyntaxDef {
       [ "!ct",        { alias: "!convtab" }],
 
       // conditionals
-      [ "!if",        { create: () => { return new stm.IfStatement() },
+      [ "!if",        { create: () => { return new stm.AcmeIfStatement() },
                         params: "<condition> \\{ [<block> \\} [else \\{ <block> \\}]]",
                         desc:   "If the given condition is true, parse the first block of statements" } ],
       [ "!ifdef",     { create: () => { return new stm.IfDefStatement(true) },

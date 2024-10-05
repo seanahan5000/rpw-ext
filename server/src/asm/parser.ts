@@ -327,9 +327,6 @@ export class Parser extends Tokenizer {
       }
     }
 
-    statement.parse(this)
-    statement.postParse(this)
-
     // handle extra tokens
     // *** don't generate more errors if this already has an error ***
     let token = this.getNextToken()
@@ -417,58 +414,104 @@ export class Parser extends Tokenizer {
       }
     }
 
-    let keywordDef: any | undefined
-    let paramsDef: any | undefined
-    if (!statement) {
-      for (let i = 1; i < SyntaxDefs.length; i += 1) {
-        if (!this.syntax || i == this.syntax) {
-          let k = SyntaxDefs[i].keywordMap.get(keywordLC)
-          if (!k && altwordLC) {
-            k = SyntaxDefs[i].keywordMap.get(altwordLC)
-          }
-          if (k) {
-
-            if (k.alias) {
-              k = SyntaxDefs[i].keywordMap.get(k.alias)
-              if (!k) {
-                continue
-              }
-            }
-
-            // count every keyword match in order to later guess the syntax
-            this.syntaxStats[i] += 1
-
-            if (keywordDef && !k.create) {
-              continue
-            }
-            keywordDef = k
-            paramsDef = SyntaxDefs[i].paramDefMap
-            if (this.syntax) {
-              break
-            }
-            // when syntax unknown, keep matching so match counts are balanced
-          }
-        }
-      }
-      if (keywordDef) {
-        token.type = TokenType.Keyword
-        if (keywordDef.create) {
-          statement = keywordDef.create()
-        } else {
-          // TODO: remove this and make all syntax table entries create the correct type
-          statement = new stm.GenericStatement()
-        }
-        if (keywordDef.params !== undefined) {
-          if (!keywordDef.paramsList) {
-            keywordDef.paramsList = this.paramsParser.parseString(keywordDef.params, paramsDef)
-          }
-        }
-      }
-    }
-
     if (statement) {
-      return this.initStatement(statement, token, keywordDef)
+      return this.initStatement(statement, token)
     }
+
+    if (this.syntax) {
+      return this.buildStatement(token, keywordLC, altwordLC)
+    }
+
+    // Parse statement with each of the syntaxes that support
+    //  the given keyword.  Track which were successful and
+    //  return the best result.
+
+    const startTokenType = token.type
+    const startPosition = this.position
+    const statements = []
+    let successCount = 0
+    let firstSuccess = -1
+    let failureCount = 0
+
+    statements.push(undefined)
+    for (let i = 1; i < SyntaxDefs.length; i += 1) {
+
+      // temporarily force syntax and syntaxDef
+      this.syntax = i
+
+      const statement = this.buildStatement(token, keywordLC, altwordLC)
+      if (statement) {
+
+        statements.push({ statement, position: this.position })
+
+        if (statement.hasAnyError()) {
+          failureCount += 1
+        } else {
+          successCount += 1
+          this.syntaxStats[i] += 1
+          if (firstSuccess == -1) {
+            firstSuccess = i
+          }
+        }
+      } else {
+        statements.push(undefined)
+      }
+
+      token.type = startTokenType
+      this.position = startPosition
+    }
+    this.syntax = Syntax.UNKNOWN
+
+    if (successCount == 0 && failureCount > 0) {
+      for (let i = 1; i < statements.length; i += 1) {
+        if (statements[i] !== undefined) {
+          this.syntaxStats[i] += 1
+          if (firstSuccess < 0) {
+            firstSuccess = i
+          }
+        }
+      }
+    }
+
+    if (firstSuccess >= 0) {
+      const state = statements[firstSuccess]
+      this.position = state?.position ?? startPosition
+      return state?.statement
+    }
+  }
+
+  private buildStatement(token: Token, keywordLC: string, altwordLC?: string): stm.Statement | undefined {
+
+    let keywordDef = SyntaxDefs[this.syntax].keywordMap.get(keywordLC)
+    if (!keywordDef && altwordLC) {
+      keywordDef = SyntaxDefs[this.syntax].keywordMap.get(altwordLC)
+    }
+    if (!keywordDef) {
+      return
+    }
+    if (keywordDef.alias) {
+      keywordDef = SyntaxDefs[this.syntax].keywordMap.get(keywordDef.alias)
+      if (!keywordDef) {
+        return
+      }
+    }
+
+    let statement: stm.Statement
+    if (keywordDef.create) {
+      statement = keywordDef.create()
+    } else {
+      // TODO: remove this and make all syntax table entries create the correct type
+      statement = new stm.GenericStatement()
+    }
+    if (keywordDef.params !== undefined) {
+      if (!keywordDef.paramsList) {
+        const paramsDef = SyntaxDefs[this.syntax].paramDefMap
+        keywordDef.paramsList = this.paramsParser.parseString(keywordDef.params, paramsDef)
+      }
+    }
+
+    token.type = TokenType.Keyword
+    return this.initStatement(statement, token, keywordDef)
   }
 
   private parseOpcode(token: Token): stm.Statement | undefined {
@@ -521,7 +564,7 @@ export class Parser extends Tokenizer {
     return this.initStatement(new stm.MacroInvokeStatement(), symExp)
   }
 
-  private initStatement(statement: stm.Statement, opTokenExp?: Token | exp.Expression, keywordDef?: KeywordDef) {
+  private initStatement(statement: stm.Statement, opTokenExp?: Token | exp.Expression, keywordDef?: KeywordDef): stm.Statement {
     if (opTokenExp) {
       if (opTokenExp instanceof Token) {
         opTokenExp = new exp.Expression([opTokenExp])
@@ -529,6 +572,8 @@ export class Parser extends Tokenizer {
       this.addExpression(opTokenExp)
     }
     statement.init(this.sourceLine, this.endExpression(), this.labelExp, opTokenExp, keywordDef)
+    statement.parse(this)
+    statement.postParse(this)
     return statement
   }
 

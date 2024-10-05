@@ -56,6 +56,8 @@ wait            =   1
                 .byt  "world", $0D, $00
                 .case-
                 .case+
+                .case off
+                .case on
                 .charmap $41, $61
                 .code
                 .condes ModuleInit, constructor
@@ -72,6 +74,8 @@ wait            =   1
                 .dbyt $1234, $4512
                 .debuginfo+
                 .debuginfo-
+                .debuginfo on
+                .debuginfo off
 
                 ; .define my_def1 11
                 ; .define my_def2 22
@@ -177,6 +181,25 @@ barZ            := $20
                 .feature force_range, underline_in_numbers -, labels_without_colons +
                 .feature force_range +, underline_in_numbers off, labels_without_colons on
 
+                .feature at_in_identifiers
+                .feature bracket_as_indirect
+                .feature c_comments
+                .feature dollar_in_identifiers
+                .feature dollar_is_pc
+                .feature force_range
+                .feature labels_without_colons
+                .feature leading_dot_in_identifiers
+                .feature line_continuations
+                .feature long_jsr_jmp_rts
+                .feature loose_char_term
+                .feature loose_string_term
+                .feature missing_char_term
+                .feature org_per_seg
+                .feature pc_assignment
+                .feature string_escapes
+                .feature ubiquitous_idents
+                .feature underline_in_numbers
+
                 .fileopt comment, "Comment text"
                 .fileopt compiler, "CA65"
                 .fopt author, "Your name here"
@@ -235,8 +258,10 @@ barG            := $20
 four            .set 4
 four            .set 3
                 .smart
-                .smart  -
-                .smart  +
+                .smart -
+                .smart +
+                .smart on
+                .smart off
                 .tag my_struct
                 .word $0D00, $AF13, _Clear
                 .zeropage

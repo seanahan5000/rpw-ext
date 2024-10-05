@@ -199,6 +199,24 @@ class TermParam extends Param {
       return this.addSymbolExpression(parser, "symbol name", false, SymbolType.Simple, true)
     }
 
+    if (this.termType == "block") {
+      parser.startExpression()
+      while (true) {
+        const token = parser.getNextToken()
+        if (!token) {
+          break
+        }
+        if (token.getString() == "}") {
+          parser.ungetToken(token)
+          break
+        }
+      }
+      const expression = new exp.BadExpression(parser.endExpression())
+      expression.name = this.termName
+      parser.addExpression(expression)
+      return true
+    }
+
     // *** pass in delimiters ( ",)" for example ) ***
     const expression = parser.mustAddNextExpression()
     expression.name = this.termName
@@ -300,8 +318,6 @@ class OptionalParam extends Param {
   }
 }
 
-// params: "<length>[, {\\[<valueX>[, <valueY> ...] \\]|<fill>}]",
-
 export class ParamsParser {
 
   // build expressions from ParamList
@@ -311,7 +327,6 @@ export class ParamsParser {
   }
 
   // build Param object array from params definition string
-  // params: "[ [<name>[=<default>]][, [<name>[=<default>]] ...] ]",
 
   private str: string = ""
   private offset: number = 0

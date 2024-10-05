@@ -579,17 +579,6 @@ export abstract class ConditionalStatement extends Statement {
 
   abstract applyConditional(preprocessor: Preprocessor): void
 
-  // parseTrailingOpenBrace(parser: Parser): boolean {
-  //   // *** syntax instead ***
-  //   if (this.opNameLC.startsWith("!")) {      // *** stop doing this ***
-  //     const res = parser.mustAddToken("{")
-  //     if (res.index == 0) {
-  //       return true
-  //     }
-  //   }
-  //   return false
-  // }
-
   pass1(asm: Assembler): number | undefined {
     return 0
   }
@@ -607,61 +596,15 @@ export abstract class ConditionalStatement extends Statement {
 export class IfStatement extends ConditionalStatement {
 
   private op?: Op
-  // private expression?: exp.Expression
-  private isInline = false
 
   constructor(op?: Op) {
     super()
     this.op = op
   }
 
-  // parse(parser: Parser) {
-  //   // TODO: give hint that this expression is for conditional code
-  //   this.expression = parser.mustAddNextExpression()
-  //   if (this.parseTrailingOpenBrace(parser)) {
-  //     // TODO: parse inline code after opening brace to
-  //     //  closing brace and maybe else statement
-  //     // TODO: fix this hack to eat ACME inline code
-  //     let token = parser.getNextToken()
-  //     if (token) {
-  //       this.isInline = true
-
-  //       parser.startExpression()
-  //       while (true) {
-  //         if (token.getString() == "}") {
-  //           parser.addToken(token)
-  //           token = parser.getNextToken()
-  //           if (!token) {
-  //             break
-  //           }
-  //         }
-  //         // TODO: for now, just eat everything inside inline braces
-  //         // token.setError("Unexpected token")
-  //         // parser.addToken(token)
-  //         token = parser.getNextToken()
-  //         if (!token) {
-  //           break
-  //         }
-  //         if (token.getString() == "{") {
-  //           parser.addToken(token)
-  //         }
-  //       }
-  //       parser.addExpression(new exp.BadExpression(parser.endExpression()))
-  //       if (token) {
-  //         parser.addToken(token)
-  //       }
-  //     }
-  //   }
-  // }
-
   applyConditional(prep: Preprocessor): void {
 
     const conditional = prep.conditional
-
-    // TODO: fix this hack for ACME inline code
-    if (this.isInline) {
-      return
-    }
 
     if (!conditional.push()) {
       this.setError("Exceeded nested conditionals maximum")
@@ -680,6 +623,17 @@ export class IfStatement extends ConditionalStatement {
     const expression = this.findArg("condition")
     if (expression) {
       symUtils.markConstants(expression)
+    }
+  }
+}
+
+export class AcmeIfStatement extends IfStatement {
+
+  applyConditional(prep: Preprocessor): void {
+    // TODO: fix this hack for ACME inline code
+    const block = this.findArg("block")
+    if (!block) {
+      super.applyConditional(prep)
     }
   }
 }

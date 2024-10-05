@@ -33,9 +33,8 @@ export class Ca65Syntax extends SyntaxDef {
     this.paramDefMap = new Map<string, ParamDef>([
       [ "import-type", { params: "{far|direct|absolute|zeropage}" } ],
       [ "import-def",  { params: "<symbol-def>[:<import-type>]" } ],
-      [ "export-def",  { params: "<symbol>[:<import-type>]" } ]
-
-      // *** define <feature-name> ***
+      [ "export-def",  { params: "<symbol>[:<import-type>]" } ],
+      [ "feature-name",{ params: "{at_in_identifiers|bracket_as_indirect|c_comments|dollar_in_identifiers|dollar_is_pc|force_range|labels_without_colons|leading_dot_in_identifiers|line_continuations|long_jsr_jmp_rts|loose_char_term|loose_string_term|missing_char_term|org_per_seg|pc_assignment|string_escapes|ubiquitous_idents|underline_in_numbers}" } ]
     ])
 
     this.keywordMap = new Map<string, KeywordDef>([
@@ -361,7 +360,7 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".refto",     { alias:  ".referto" } ],
 
       [ ".feature",   { create: () => { return new stm.FeatureStatement() },
-                        params: "<feature-name>[{+|-|on|off}][, <feature-name>[{+|-|on|off}] ...]",
+                        params: "<feature-name>[{-|+|off|on}][, <feature-name>[{+|-|on|off}] ...]",
                         desc:   "Enable one or more compatibility features of the assembler" } ],
       [ ".linecont",  { // TODO
                         params: "+",
@@ -372,13 +371,13 @@ export class Ca65Syntax extends SyntaxDef {
                         params: "<string>",
                         desc:   'Defines the character that start "cheap" local labels' } ],
       [ ".debuginfo", { // TODO
-                        params: "{-|+}",
+                        params: "{-|+|off|on}",
                         desc:   "Switch on or off debug info generation" } ],
       [ ".smart",     { // TODO
-                        params: "[{-|+}]",
+                        params: "[{-|+|off|on}]",
                         desc:   "Switch on or off smart mode" } ],
       [ ".case",      { // TODO
-                        params: "[{-|+}]",
+                        params: "[{-|+|off|on}]",
                         desc:   "Switch on or off case sensitivity on identifiers" } ],
 
       // psuedo variables
