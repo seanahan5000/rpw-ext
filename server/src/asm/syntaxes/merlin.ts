@@ -24,8 +24,7 @@ export class MerlinSyntax extends SyntaxDef {
   public macroInvokeDelimiters = ";"
   public allowLabelTrailingColon = false
   public allowIndentedAssignment = false
-
-  // *** default org = $8000
+  public defaultOrg = 0x8000        // TODO: check this value
 
   constructor() {
     super()
@@ -53,7 +52,6 @@ export class MerlinSyntax extends SyntaxDef {
       [ "dum",    { create: () => { return new stm.DummyStatement() },
                     params: "<expression>",
                     desc:   "Start of dummy section" } ],
-      [ "dummy",  { alias:  "dum" }],
       [ "dend",   { create: () => { return new stm.DummyEndStatement() },
                     params: "",
                     desc:   "End of dummy section" } ],
@@ -238,9 +236,15 @@ export class MerlinSyntax extends SyntaxDef {
 
       // text
       // TODO: eventually treat these as macros
-      [ "txt",    { create: () => { return new stm.TextStatement() }}],
-      [ "txc",    { create: () => { return new stm.TextStatement() }}],
-      [ "txi",    { create: () => { return new stm.TextStatement() }}],
+      [ "txt",    { create: () => { return new stm.TextStatement() },
+                    params: "<string>",
+                    desc:   "Define naja-format text, terminated with $8D" } ],
+      [ "txc",    { create: () => { return new stm.TextStatement() },
+                    params: "<string>",
+                    desc:   "Define continued naja-format text, without termination" } ],
+      [ "txi",    { create: () => { return new stm.TextStatement() },
+                    params: "<string>",
+                    desc:   "Define naja-format text, terminated with inverted high bit" } ],
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([

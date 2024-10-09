@@ -1488,7 +1488,7 @@ class ExpressionBuilder {
               break
             }
 
-            if (opEntry.precedence > nextOp.precedence ||
+            if (opEntry.precedence >= nextOp.precedence ||
               (nextOp.rightAssoc && opEntry.precedence == nextOp.precedence)) {
                 if (!this.processOperator(opEntry)) {
                   return this.badExpression()

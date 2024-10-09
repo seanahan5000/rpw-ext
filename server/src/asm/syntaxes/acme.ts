@@ -25,6 +25,7 @@ export class AcmeSyntax extends SyntaxDef {
   public macroInvokeDelimiters = ","
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
+  public defaultOrg = 0x0800        // TODO: choose correct value
 
   constructor() {
     super()

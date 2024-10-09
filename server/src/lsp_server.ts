@@ -836,7 +836,7 @@ export class LspServer {
           if (statement.keywordDef.label && statement.keywordDef.label[0] == "<") {
             hoverStr += "<label> "
           }
-          hoverStr += statement.opExp?.getString() + " " + statement.keywordDef.params ?? ""
+          hoverStr += statement.opExp?.getString() + " " + (statement.keywordDef.params ?? "")
         }
       }
     }

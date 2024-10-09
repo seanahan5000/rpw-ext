@@ -28,6 +28,7 @@ export class LisaSyntax extends SyntaxDef {
   public macroInvokeDelimiters = ""
   public allowLabelTrailingColon = false
   public allowIndentedAssignment = false
+  public defaultOrg = 0x0800        // TODO: choose correct value
 
   constructor() {
     super()

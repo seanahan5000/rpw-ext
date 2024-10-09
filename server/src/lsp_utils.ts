@@ -495,7 +495,7 @@ export class Completions {
 
     if (this.addKeyConstants) {
       if (statement.keywordDef?.paramsList) {
-        const constNames = ParamsParser.getConstantNames(statement.keywordDef.paramsList)
+        const constNames = ParamsParser.getConstantNames(statement.keywordDef.paramsList, syntaxDef.paramDefMap)
         for (let name of constNames) {
           const item = lsp.CompletionItem.create(name)
           item.sortText = `${this.addKeyConstants}_${name}`

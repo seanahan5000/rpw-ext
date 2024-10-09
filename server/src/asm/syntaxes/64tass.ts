@@ -22,6 +22,7 @@ export class Tass64Syntax extends SyntaxDef {
   public macroInvokeDelimiters = ","
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
+  public defaultOrg = 0x0800        // TODO: choose correct value
 
   constructor() {
     super()
@@ -334,6 +335,7 @@ export class Tass64Syntax extends SyntaxDef {
                       desc:   "End of .switch conditional compilation block" } ],
 
       [ ".proc",    { // TODO
+                      label:  "<symbol>",
                       params: "",
                       desc:   "Start of a procedure block" } ],
       [ ".endproc", { // TODO

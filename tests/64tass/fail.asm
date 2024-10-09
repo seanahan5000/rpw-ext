@@ -46,3 +46,8 @@
                 .dint $80000000         ; out of range
 
 ; TODO: more fail cases here
+
+                .proc                   ; label required
+
+                .dsection zp_section
+                .dsection zp_section    ; duplicate section

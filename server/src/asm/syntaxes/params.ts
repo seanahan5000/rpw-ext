@@ -179,6 +179,8 @@ class TermParam extends Param {
       return true
     }
 
+    // *** <address-expression> type that does range check ***
+
     if (this.termType == "feature-name") {
       return this.addNameExpression(parser, "feature name", TokenType.Keyword)
     }
@@ -476,27 +478,35 @@ export class ParamsParser {
   }
 
   // build list of constant names for use by auto-completion
-  // TODO: deal with custom type definitions
 
-  public static getConstantNames(params: Param[]): string[] {
+  public static getConstantNames(param: Param, paramDefs?: Map<string, ParamDef>): string[] {
     let names: string[] = []
-    if (params.length) {
-      let param = params[0]
-      if (param.paramType == ParamType.Optional) {
-        if (param.childParams && param.childParams.length) {
-          param = param.childParams[0]
+    if (param.paramType == ParamType.Constant) {
+      const contents = (param as ConstantParam).contents
+      this.addConstantNames(names, [contents])
+    } else if (param.paramType == ParamType.Term) {
+      if (paramDefs) {
+        const termType = (param as TermParam).termType
+        const paramDef = paramDefs.get(termType)
+        if (paramDef?.paramsList) {
+          this.addConstantNames(names, ParamsParser.getConstantNames(paramDef.paramsList))
         }
       }
-      if (param.paramType == ParamType.OneOf) {
-        if (param.childParams) {
-          for (param of param.childParams) {
-            if (param.paramType == ParamType.Constant) {
-              names.push((param as ConstantParam).contents)
-            }
-          }
+    } else {
+      if (param.childParams) {
+        for (let childParam of param.childParams) {
+          this.addConstantNames(names, ParamsParser.getConstantNames(childParam))
         }
       }
     }
     return names
+  }
+
+  private static addConstantNames(names: string[], moreNames: string[]) {
+    for (let name of moreNames) {
+      if (name.length > 1 && !names.includes(name)) {
+        names.push(name)
+      }
+    }
   }
 }

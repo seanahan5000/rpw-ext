@@ -537,7 +537,7 @@ export class OpStatement extends Statement {
     if (this.opByte !== undefined) {
       dataBytes[0] = this.opByte
       if (this.expression) {
-        let value = this.expression.resolve()
+        let value = this.expression.resolve(asm.getPC())
         if (value !== undefined) {
           const bc = Isa6502.ops[this.opByte].bc
           if (bc == 2) {
@@ -564,7 +564,7 @@ export class OpStatement extends Statement {
             dataBytes[2] = (value >> 8) & 0xff
           }
         } else {
-          value = this.expression.resolve() // ***
+          value = this.expression.resolve(asm.getPC()) // ***
         }
       }
     }
@@ -699,13 +699,6 @@ export class IfConstStatement extends IfDefStatement {
 // 64TASS:  .elsif <exp>
 
 export class ElseIfStatement extends ConditionalStatement {
-
-  // private expression?: exp.Expression
-
-  // parse(parser: Parser) {
-  //   // TODO: give hint that this expression is for conditional code
-  //   this.expression = parser.mustAddNextExpression()
-  // }
 
   // *** what about folding here? ***
 
@@ -1020,7 +1013,7 @@ class DataStatement extends Statement {
   pass2(asm: Assembler, dataBytes: number[]) {
     let index = 0
     for (let element of this.args) {
-      const value = element.resolve()
+      const value = element.resolve(asm.getPC())
       if (value === undefined) {
         index += this.dataSize
         continue
@@ -1207,7 +1200,7 @@ export class StorageStatement extends Statement {
   // TODO: ".tag" handled differently?
 
   pass1(asm: Assembler): number | undefined {
-    let sizeValue = this.sizeArg?.resolve()
+    let sizeValue = this.sizeArg?.resolve(asm.getPC())
     if (sizeValue === undefined) {
       if (this.sizeArg?.getString() == "\\") {
         sizeValue = -asm.getPC() & 0xff
@@ -1221,7 +1214,7 @@ export class StorageStatement extends Statement {
   pass2(asm: Assembler, dataBytes: number[]): void {
     let fillValue = 0
     if (this.patternArg) {
-      const patternValue = this.patternArg?.resolve()
+      const patternValue = this.patternArg?.resolve(asm.getPC())
       if (patternValue === undefined) {
         return
       }
@@ -1247,7 +1240,7 @@ export class AlignStatement extends Statement {
 
     const fillArg = this.findArg("fill")
     if (fillArg) {
-      const value = fillArg.resolve()
+      const value = fillArg.resolve(asm.getPC())
       if (value === undefined) {
         fillArg.setError("Must resolve on first pass")
       } else {
@@ -1260,12 +1253,12 @@ export class AlignStatement extends Statement {
     const andArg = this.findArg("and")
     const equalArg = this.findArg("equal")
     if (andArg && equalArg) {
-      const andValue = andArg.resolve()
+      const andValue = andArg.resolve(asm.getPC())
       if (andValue === undefined) {
         andArg.setError("Must resolve on first pass")
         return
       }
-      const equalValue = equalArg.resolve()
+      const equalValue = equalArg.resolve(asm.getPC())
       if (equalValue === undefined) {
         equalArg.setError("Must resolve on first pass")
         return
@@ -1276,7 +1269,7 @@ export class AlignStatement extends Statement {
     let boundaryValue = 256
     const boundaryArg = this.findArg("boundary")
     if (boundaryArg) {
-      const value = boundaryArg.resolve()
+      const value = boundaryArg.resolve(asm.getPC())
       if (value === undefined) {
         boundaryArg.setError("Must resolve on first pass")
         return
@@ -1287,7 +1280,7 @@ export class AlignStatement extends Statement {
     let offsetValue = 0
     const offsetArg = this.findArg("offset")
     if (offsetArg) {
-      const value = offsetArg.resolve()
+      const value = offsetArg.resolve(asm.getPC())
       if (value === undefined) {
         offsetArg.setError("Must resolve on first pass")
         return
@@ -1340,7 +1333,7 @@ export class HexStatement extends Statement {
   }
 
   // *** needed?
-  getSize(): number | undefined {
+  getSize(pc?: number): number | undefined {
     return this.dataBytes.length
   }
 
@@ -1373,21 +1366,6 @@ function scanHex(hexString: string, buffer: number[]) {
 class FileStatement extends Statement {
 
   protected fileName?: exp.FileNameExpression
-
-  // parse(parser: Parser) {
-  //   // TODO: pass in list of required quoting characters, based on syntax?
-  //   // *** check if quoting is optional for some assemblers ***
-  //   this.fileName = parser.getNextFileNameExpression()
-  //   if (!this.fileName) {
-  //     parser.addMissingToken("Missing argument, expecting file path")
-  //     return
-  //   }
-  //   parser.addExpression(this.fileName)
-
-  //   // TODO: check for quoted fileName, based on syntax
-  //     // optional on DASM
-  //     // never on MERLIN
-  // }
 
   postParse(parser: Parser) {
     this.fileName = this.findArg("filename")
@@ -1596,9 +1574,11 @@ export class OrgStatement extends Statement {
   pass1(asm: Assembler): number | undefined {
     const valueArg = this.args[0]
     if (valueArg) {
-      const orgValue = valueArg.resolve()
+      const orgValue = valueArg.resolve(asm.getPC())
       if (orgValue === undefined) {
         valueArg.setError("Must resolve in first pass")
+      } else if (orgValue < 0 || orgValue > 0xFFFF) {
+        valueArg.setError("Invalid org value " + orgValue)
       } else {
         asm.setPC(orgValue)
       }
@@ -1906,7 +1886,7 @@ export class DummyStatement extends Statement {
   pass1(asm: Assembler): number | undefined {
     const valueArg = this.args[0]
     if (valueArg) {
-      const orgValue = valueArg.resolve()
+      const orgValue = valueArg.resolve(asm.getPC())
       if (orgValue === undefined) {
         valueArg.setError("Must resolve in first pass")
       } else {
@@ -2274,7 +2254,7 @@ export class XorStatement extends Statement {
   }
 }
 
-//   ACME:  !address expression [ { <block> } ]    ***
+//   ACME:  !address expression [ { <block> } ]
 //          !addr
 
 export class AddressStatement extends Statement {

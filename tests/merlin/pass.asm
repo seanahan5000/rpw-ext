@@ -1,3 +1,4 @@
+BUILD           =   1
 
 symbol1         equ $1000
 symbol2         =   $2000
@@ -9,19 +10,23 @@ my_ent          ent
                 org $1000
                 org
                 rel
+    do BUILD-1
                 obj $4000
+    fin
 
 label
-                put fail.asm
-                put fail.asm,d2
-                put /./fail.asm
-                use fail.asm
-                use fail.asm,s6,d1
+                put pass.inc
+                ; put pass.inc,d2
+                put ./pass.inc
+                use pass.inc
+                ; use pass.inc,s6,d1
                 sav filename.obj
                 typ $00
                 dsk filename.obj
 
                 dum $00
+                dend
+                dum *
                 dend
 
                 var 1;$3;label
@@ -105,6 +110,33 @@ my_mac2         mac
                 my_mac1
 
                 brk
-                brk $00
+                brk $00                 ; optional argument
+
+; *** colorizing problems after text escapes
+                asc "\\"
+                asc "\""
+                asc '"'
+                asc "'"
+                asc "\'"
+                asc "\r"
+                asc "\n"
+                asc "\t"
+                asc "\x1F"
+
+    do BUILD-1
+                txc "TEXT\n"
+                txt "TEXT"
+                txi "TEXT"
+    fin
+
+                ; left-to-right precedence
+LOAD_BASE       =   $8000
+precedence      =   $800-$800+LOAD_BASE ;*** why no hover?
+                do precedence-LOAD_BASE ;*** why no auto-complete suggestion?
+                error
+                fin
+
+; *** precedence problem, different from other syntaxes
+                LDA #>LOAD_BASE+$0100
 
                 end

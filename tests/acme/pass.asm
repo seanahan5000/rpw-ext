@@ -1,4 +1,3 @@
-
 !macro LDADDR .addr {
          lda   #<.addr
          ldy   #>.addr
@@ -7,10 +6,9 @@
 ; passport/choplifter.a
         ;  lda   (*+$ff) and $ff00,x
 
-; junk from legends
-	; !if DEBUG >= 2 { jsr .debug2 }
 
 
+* = $1000
 -               ; anonymous locals
                 beq -
                 bne +
@@ -76,10 +74,25 @@ BUFSIZE         =   99
                 !tx "Test"
                 !ct scr {
                     !tx "Test"
+!ifndef BUILD {
                     !ct "my_own_table_file"
+}
                     !tx "abcdefg"
                 }
                 !tx "Test"
+
+                ; !text "X\\X\"X\'X\rX\nX\tX\x1F"
+                !text "\\"
+                ; !text "\""              ; *** problem
+                !text '"'
+                !text "'"
+                !text "\'"
+                !text "\r"
+                !text "\n"
+                !text "\t"
+                !text "\x1F"
+
+
 Char_NewLine    =   $8d
 offset          =   99
                 !text "Loading...", Char_NewLine, "Filename:", 0
@@ -93,14 +106,18 @@ offset          =   99
                 !scrxor $80, "Loading..."
                 !scrxor $a0, "Offset char is ", (offset-1+'a') XOR $a0
                 !to "eprom.p", plain
+!ifndef BUILD {
                 !to "demo.o", cbm
                 !to "demo.o",apple
-                !source <./fail.asm>
-                !src "fail.asm"
+                !source <./pass.inc>
+}
+                !src "pass.inc"
+!ifndef BUILD {
                 !binary <Own/menudata.b>
                 !bin "asc2pet.b", 256, 2
                 !bin "table", 2, 9
                 !bin "list",, 9
+}
                 !zone File_IO
                 !zn LinkedList_Init
                 !zone LinkedList {
@@ -130,14 +147,16 @@ offset          =   99
                 !if * > $a000 {
                     !warn "Program reached ROM: ", * - $a000, " bytes overlap."
                 }
-start           !source "fail.asm"
+start           !source "pass.inc"
 end             !if end - start > 256 {
                     !error "Color strings are ", end - start - 256, " bytes too long."
                 }
-                ; !source "fail.asm"
-                ; !source "fail.asm"
+                ; !source "pass.inc"
+                ; !source "pass.inc"
                 ; !if part1_version != part2_version {
+!ifndef BUILD {
                     !serious "part1.a and part2.a don't match!"
+}
                 ; }
 
                 * = $8010, overlay, invisible
@@ -168,6 +187,10 @@ end             !if end - start > 256 {
                 !addr {
                     sid_v1_control	= $d404
                 }
+
+                ; inline !if clause
+                DEBUG = 1
+                !if DEBUG >= 2 { jsr .debug2 }
 
                 !eof
                 !endoffile

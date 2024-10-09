@@ -106,11 +106,11 @@ export class Expression extends Node {
 
   // TODO: make these abstract?
   // TODO: or also resolve to number array?
-  resolve(): number | undefined {
+  resolve(pc?: number): number | undefined {
     return
   }
 
-  getSize(): number | undefined {
+  getSize(pc?: number): number | undefined {
     return
   }
 }
@@ -133,11 +133,11 @@ export class NumberExpression extends Expression {
     this.force16 = force16
   }
 
-  resolve(): number | undefined {
+  resolve(pc?: number): number | undefined {
     return this.value
   }
 
-  getSize(): number | undefined {
+  getSize(pc?: number): number | undefined {
     return this.force16 || this.value > 255 || this.value < -128 ? 2 : 1
   }
 }
@@ -165,12 +165,12 @@ export class ParenExpression extends Expression {
     }
   }
 
-  resolve(): number | undefined {
-    return this.arg?.resolve()
+  resolve(pc?: number): number | undefined {
+    return this.arg?.resolve(pc)
   }
 
-  getSize(): number | undefined {
-    return this.arg?.getSize()
+  getSize(pc?: number): number | undefined {
+    return this.arg?.getSize(pc)
   }
 }
 
@@ -188,7 +188,7 @@ export class StringExpression extends Expression {
   }
 
   // only resolve if string is a single character (string literal)
-  resolve(): number | undefined {
+  resolve(pc?: number): number | undefined {
     if (!this.children || this.children.length != 3) {
       return
     }
@@ -214,8 +214,8 @@ export class StringExpression extends Expression {
     }
   }
 
-  getSize(): number | undefined {
-    if (this.resolve() !== undefined) {
+  getSize(pc?: number): number | undefined {
+    if (this.resolve(pc) !== undefined) {
       return 1
     }
   }
@@ -277,12 +277,12 @@ export class SymbolExpression extends Expression {
     return isLocalType(this.symbolType)
   }
 
-  resolve(): number | undefined {
-    return this.symbol?.resolve()
+  resolve(pc?: number): number | undefined {
+    return this.symbol?.resolve(pc)
   }
 
-  getSize(): number | undefined {
-    return this.symbol?.getSize()
+  getSize(pc?: number): number | undefined {
+    return this.symbol?.getSize(pc)
   }
 }
 
@@ -298,8 +298,8 @@ export class UnaryExpression extends Expression {
     this.arg = arg
   }
 
-  resolve(): number | undefined {
-    let value = this.arg.resolve()
+  resolve(pc?: number): number | undefined {
+    let value = this.arg.resolve(pc)
     if (value !== undefined) {
       switch (this.opType) {
         case Op.Neg:
@@ -329,7 +329,7 @@ export class UnaryExpression extends Expression {
     return value
   }
 
-  getSize(): number | undefined {
+  getSize(pc?: number): number | undefined {
     switch (this.opType) {
       case Op.Neg:
       case Op.Pos:
@@ -342,7 +342,7 @@ export class UnaryExpression extends Expression {
         return 1
     }
     // TODO: use resolved value to determine size (does -value change size?)
-    return this.arg.getSize()
+    return this.arg.getSize(pc)
   }
 }
 
@@ -360,10 +360,10 @@ export class BinaryExpression extends Expression {
     this.arg2 = arg2
   }
 
-  resolve(): number | undefined {
+  resolve(pc?: number): number | undefined {
     let value: number | undefined
-    let value1 = this.arg1.resolve()
-    let value2 = this.arg2.resolve()
+    let value1 = this.arg1.resolve(pc)
+    let value2 = this.arg2.resolve(pc)
     if (value1 !== undefined && value2 !== undefined) {
       switch (this.opType) {
         case Op.Pow:
@@ -438,14 +438,14 @@ export class BinaryExpression extends Expression {
     return value
   }
 
-  getSize(): number | undefined {
+  getSize(pc?: number): number | undefined {
     // TODO: use resolved value to determine size? (value1 * value2, for example)
     // *** comparisons and logical ops always drop to 1 byte ***
     let size: number | undefined
-    let size1 = this.arg1.getSize()
+    let size1 = this.arg1.getSize(pc)
     if (size1 !== undefined) {
       size = size1
-      let size2 = this.arg2.getSize()
+      let size2 = this.arg2.getSize(pc)
       if (size2 !== undefined) {
         if (size2 > size1) {
           size = size2
@@ -460,24 +460,17 @@ export class BinaryExpression extends Expression {
 
 export class PcExpression extends Expression {
 
-  private value: number | undefined
-
-  // TODO: pass in PC address source?
   constructor(token?: Token) {
     super(token ? [token] : undefined)
   }
 
-  public setValue(pc: number) {
-    this.value = pc
+  resolve(pc?: number): number | undefined {
+    return pc
   }
 
-  resolve(): number | undefined {
-    return this.value
-  }
-
-  getSize(): number | undefined {
-    if (this.value !== undefined) {
-      return this.value < 256 ? 1 : 2
+  getSize(pc?: number): number | undefined {
+    if (pc !== undefined) {
+      return pc < 256 ? 1 : 2
     }
     // *** else return 2???
   }
@@ -499,30 +492,27 @@ export class AlignExpression extends Expression {
 
   private value: number | undefined
   private alignment: Expression
-  private pc: PcExpression
+  // private pc: PcExpression
 
   // TODO: expression might be different based on syntax
   constructor(alignment: Expression) {
     super([alignment])
     this.alignment = alignment
-    this.pc = new PcExpression()
   }
 
-  resolve(): number | undefined {
-    if (this.value === undefined) {
-      let pc = this.pc.resolve()
-      if (pc !== undefined) {
-        let align = this.alignment.resolve()
-        if (align !== undefined) {
-          this.value = pc % align
-        }
+  resolve(pc?: number): number | undefined {
+    let value: number | undefined
+    if (pc !== undefined) {
+      const align = this.alignment.resolve(pc)
+      if (align !== undefined) {
+        value = pc % align
       }
     }
-    return this.value
+    return value
   }
 
-  getSize(): number | undefined {
-    return this.resolve()
+  getSize(pc?: number): number | undefined {
+    return this.resolve(pc)
   }
 }
 

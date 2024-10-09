@@ -2,34 +2,41 @@
 .macro JUNK_BYTE value
 		.byte value
 .endmacro
-	JUNK_BYTE {$08,$00,$03,$a5,$00,$00,$04,$a9}
+; 	JUNK_BYTE {$08,$00,$03,$a5,$00,$00,$04,$a9}
 
-    .ifblank inverse
-    .else
-    .endif
+;     .ifblank inverse
+;     .else
+;     .endif
 
-; *** use this to identify ca65
-    bcc :+
-:
-
-; multiple imports should be okay
-; "symbol-weakdef"
-; "symbol-weakref"
-.import TKN_FLIGHT_CR:direct
-.import TKN_FLIGHT_CR:direct
-
-; *** use this with no label to id ca65 vs. 64tass
-; *** or make automatic -- to retry ***
-.segment "RODATA"
+; ; multiple imports should be okay
+; ; "symbol-weakdef"
+; ; "symbol-weakref"
+; .import TKN_FLIGHT_CR:direct
+; .import TKN_FLIGHT_CR:direct
 
 
-label
-ModuleInit
-ModInit
-ModuleDone
-ModDone
-IrqHandler
-Handler
+LOAD_BASE       =   $8000
+precedence      =   $800-$800+LOAD_BASE ;*** why no hover?
+                .if precedence-LOAD_BASE ;*** why no auto-complete suggestion?
+                error
+                .endif
+
+; *** precedence problem, different from other syntaxes
+                ; LDA #>LOAD_BASE+$0100
+
+
+
+label:
+ModuleInit:
+ModuleInit2:
+ModuleInit3:
+ModInit:
+ModInit3:
+ModuleDone:
+ModDone:
+IrqHandler:
+Handler:
+                .feature labels_without_colons on
 DrawCircle
 DrawRectangle
 DrawHexagon
@@ -37,6 +44,9 @@ DrawHexagon
 _Clear          .addr   $0D00, $AF13, _Clear
                 .align  256
 Msg:            .asciiz "Hello world"
+
+                .feature string_escapes+
+                .asciiz "X\\X\"X\'X\rX\nX\tX\x1F"
 
 addr            :=  $1000
 const           =   99
@@ -61,10 +71,10 @@ wait            =   1
                 .charmap $41, $61
                 .code
                 .condes ModuleInit, constructor
-                .condes ModuleInit, constructor, 16
+                .condes ModuleInit2, constructor, 16
                 .condes ModInit, 0, 16
-                .constructor ModuleInit
-                .constructor ModInit, 16
+                .constructor ModuleInit3
+                .constructor ModInit3, 16
                 .destructor ModuleDone
                 .destructor ModDone, 16
                 .interruptor IrqHandler
@@ -138,33 +148,32 @@ arg2            =   1
                 .union my_union
                 .endunion
 
+.ifndef BUILD
                 .error "eror message"
                 .warning "warning message"
                 .fatal "fatal message"
                 .out "output message"
+.endif
 
 my_export1
 my_export2
-my_export3
+my_export3      =   99
 my_export4
-my_export5
+my_export5      =   $00
                 .export my_export1
-                .export my_export2:far
                 .export my_export3:direct
                 .export my_export4:absolute
                 .export my_export5:zeropage
-                .import my_import1
-                .import my_import2:far
-                .import my_import3:direct
-                .import my_import4:absolute
-                .import my_import5:zeropage
+                .import my_import6
+                .import my_import7:direct
+                .import my_import8:absolute
+                .import my_import9:zeropage
 
 foo1            := $1000
 bar1            := $2000
 fooZ            := $10
 barZ            := $20
                 .export foo1, bar1
-                .export bar1: far
                 ; .export foobar: far = foo * bar
                 ; .export baz := foobar, zap: far = baz - bar
                 .exportzp fooZ, barZ
@@ -176,6 +185,7 @@ barZ            := $20
 
                 .faraddr DrawCircle, DrawRectangle, DrawHexagon
 
+                ; NOTE: only allowed in ca65 V2.19 or greater
                 .feature c_comments
                 .feature c_comments +
                 .feature force_range, underline_in_numbers -, labels_without_colons +
@@ -189,8 +199,6 @@ barZ            := $20
                 .feature force_range
                 .feature labels_without_colons
                 .feature leading_dot_in_identifiers
-                .feature line_continuations
-                .feature long_jsr_jmp_rts
                 .feature loose_char_term
                 .feature loose_string_term
                 .feature missing_char_term
@@ -199,6 +207,8 @@ barZ            := $20
                 .feature string_escapes
                 .feature ubiquitous_idents
                 .feature underline_in_numbers
+                .feature line_continuations
+                .linecont+
 
                 .fileopt comment, "Comment text"
                 .fileopt compiler, "CA65"
@@ -213,10 +223,12 @@ barG            := $20
                 .hibytes $fedc, $edcb, $dcba, $cba9
                 .bankbytes $100000
 
+.ifndef BUILD
                 .incbin "sprites.dat"
                 .incbin "music.dat", $100
                 .incbin "graphics.dat", 200, 100
-                .include "fail.asm"
+.endif
+                .include "pass.inc"
                 .list on
                 .listbytes unlimited
                 .listbytes 12
@@ -225,11 +237,13 @@ barG            := $20
                 .lobytes $1234, $2345, $3456, $4567
                 .hibytes $fedc, $edcb, $dcba, $cba9
                 .localchar '?'
+.ifndef BUILD
                 .macpack atari
                 .macpack cbm
                 .macpack cpu
                 .macpack generic
                 .macpack longbranch
+.endif
                 .org $7ff
                 .pagelength 66
                 .pagelength unlimited
@@ -242,7 +256,7 @@ barG            := $20
                 .referto label
                 .refto label
                 .reloc
-                .repeat .99, I
+                .repeat 99, I
                 .byte I
                 .endrep
                 .res 12, $AA
@@ -251,10 +265,9 @@ barG            := $20
                 .segment "ROM2"
                 .segment "ZP2": zeropage
                 .segment "ZP2"
-                .segment "ZP2": absolute
-                .setcpu 6502
-                .setcpu 65c02
-                .setcpu 65816
+                .segment "ZP3": absolute
+                .setcpu "6502"
+                .setcpu "65c02"
 four            .set 4
 four            .set 3
                 .smart
@@ -265,5 +278,13 @@ four            .set 3
                 .tag my_struct
                 .word $0D00, $AF13, _Clear
                 .zeropage
+
+                ; 65816-only features
+
+                .setcpu "65816"
+                .feature long_jsr_jmp_rts
+                .export my_export2:far
+                .import my_import2:far
+                .export bar1: far
 
                 .end

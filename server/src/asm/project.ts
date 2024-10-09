@@ -60,6 +60,7 @@ export class Project {
   private inferredSyntax = Syntax.UNKNOWN
 
   public syntax = Syntax.UNKNOWN
+  public syntaxDef = SyntaxDefs[Syntax.UNKNOWN]
   public upperCase: boolean = true
   public tabSize = 4
   public tabStops = [0, 16, 20, 40]
@@ -185,6 +186,7 @@ export class Project {
     } else {
       this.syntax = this.inferredSyntax
     }
+    this.syntaxDef = SyntaxDefs[this.syntax]
 
     this.upperCase = settings?.upperCase ?? defaults?.upperCase ?? true
     this.tabSize = settings?.tabSize ?? defaults?.tabSize ?? 4

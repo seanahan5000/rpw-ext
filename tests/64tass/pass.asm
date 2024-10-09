@@ -1,3 +1,6 @@
+        .weak
+BUILD = 0
+        .endweak
 
 ; DECRUNCH_FORWARDS := 1
 ; DECRUNCH_FORWARDS :?= 0
@@ -24,10 +27,10 @@
         ; CMP (#>planetSurfaceData) + $10
 
 
-                .cpu "6502"
                 .cpu "65c02"
                 .cpu "65816"
                 .cpu "default"
+                .cpu "6502"
 
 * = $1000
                 *=$2000
@@ -94,6 +97,18 @@ pageblk2
 
                 .text "abc",$0a0d
                 .text 'xyz',%00111111
+
+                ; .text "X\\X\"X\'X\rX\nX\tX\x1F"
+                .text "\\"
+                ; .text "\""              ; *** problem
+                .text '"'
+                .text "'"
+                .text "\'"
+                .text "\r"
+                .text "\n"
+                .text "\t"
+                .text "\x1F"
+
                 .shift "abc",32,"xyz"
                 .shiftl "abc",32,"xyz"
                 .null "abc",32,"xyz"
@@ -105,11 +120,13 @@ pageblk2
 vt100           .encode
                 .cdef " ~",32
                 .edef "{esc}",27
+.if BUILD==0
                 ; .edef "{moff}", [27, "[", "m"]
                 ; .edef "{bold}", [27, "[", "1", "m"]
-                .tdef "A",65
+                ; .tdef "A",65
                 .tdef "ACX",65
                 ; .tdef "ACX",[65, 33, 11]
+.endif
                 .endencode
                 .encode vt100
                 .endencode
@@ -131,7 +148,6 @@ my_union        .union
 ; yy              .word \1
                 .endu
 i_union         .dunion my_union,1
-                .dsection zp
 
 my_macro1       .macro
                 .endm
@@ -163,6 +179,7 @@ my_function     .function value,target
                 sta target
                 .endfunction
 
+label
                 my_function #1,label
 
 wait            = 2
@@ -214,26 +231,27 @@ lp .for ue := $400, ue < $800, ue += $100
                 .endwhile
 
                 .bwhile wait
+                .break
                 .next
 
 i               .var 100
-loop            .lbl
+; loop           .lbl
                 nop
 i               .var i - 1
                 .ifne i
-                .goto loop
+;               .goto loop
                 .endif
 
-                .include "fail.asm"
+                .include "pass.inc"
+.if BUILD==0
                 .binclude "file.a"
                 .binary "file.bin"
                 .binary "file.bin", 2
                 .binary "file.bin", 2, 1000
+.endif
 
 name            .proc
                 .endproc
-                .proc
-                .endp
                 .block
                 .endblock
                 .block
@@ -248,18 +266,26 @@ name            .proc
                 .with name              ;something
                 .endwith
 
+                * = $00
+                .dsection zp_section
+                * = $1000
+                .dsection my_section1
+                * = $2000
+                .dsection my_section2
+
                 .section my_section1
                 .endsection my_section1
                 .section my_section2
                 .send
-                .dsection zp
 
                 .option allow_branch_across_page = 0
 
+.if BUILD==0
                 .error "Unfinished here..."
                 .cerror * > $1200, "Program too long by ", * - $1200, " bytes"
                 .warn "FIXME: handle negative values too!"
                 .cwarn * > $1200, "This may not work!"
+.endif
 
                 .eor $ff
                 .seed $7f

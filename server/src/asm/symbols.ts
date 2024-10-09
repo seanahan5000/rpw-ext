@@ -80,12 +80,12 @@ export class Symbol {
     this.from = from
   }
 
-  resolve(): number | undefined {
-    return this.value?.resolve()
+  resolve(pc?: number): number | undefined {
+    return this.value?.resolve(pc)
   }
 
-  getSize(): number | undefined {
-    return this.value?.getSize()
+  getSize(pc?: number): number | undefined {
+    return this.value?.getSize(pc)
   }
 
   // get symbol name without scope, local prefix, or trailing ":"

@@ -28,6 +28,7 @@ export class DasmSyntax extends SyntaxDef {
   public macroInvokeDelimiters = ","
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = false
+  public defaultOrg = 0x0800        // TODO: choose correct value
 
   constructor() {
     super()

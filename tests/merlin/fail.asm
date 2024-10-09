@@ -2,6 +2,8 @@
                 =   $2000               ; label required
                 ext                     ; label required
                 ent                     ; label required
+                org -1000               ; org range error
+                org $10000              ; org range error
                 rel $0000               ; extra expression
                 put                     ; filename required
                 put filename,s6,d1,xx

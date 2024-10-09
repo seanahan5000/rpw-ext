@@ -1,9 +1,5 @@
 
 import { Statement } from "../statements"
-import { ParamList } from "./params"
-
-// *** keywords should be a translation step -- no statement creation
-// *** attempt resolve with multiple precedence defs as see if values match
 
 //------------------------------------------------------------------------------
 
@@ -143,7 +139,7 @@ export class SyntaxDef {
 
   public allowIndentedAssignment: boolean = true
 
-  // *** default org ***
+  public defaultOrg: number = 0
 }
 
 //------------------------------------------------------------------------------

@@ -24,6 +24,7 @@ export class Ca65Syntax extends SyntaxDef {
   public macroInvokeDelimiters = ","
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
+  public defaultOrg = 0x0800        // TODO: choose correct value
 
   // *** TODO: pseudo functions separately? ***
 
@@ -41,7 +42,7 @@ export class Ca65Syntax extends SyntaxDef {
 
       // target
       [ ".setcpu",    { // TODO
-                        params: "{6502|65c02|65816}",
+                        params: '{"6502"|"65c02"|"65816"}',
                         desc:   "Switch the CPU instruction set" } ],
       [ ".pushcpu",   { // TODO
                         params: "",

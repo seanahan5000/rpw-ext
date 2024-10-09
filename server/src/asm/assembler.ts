@@ -2,7 +2,7 @@
 import { PcExpression, SymbolExpression } from "./expressions"
 import { Module, LineRecord } from "./project"
 import { GenericStatement } from "./statements"
-import { Syntax } from "./syntaxes/syntax_types"
+import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
 
 // - update while typing
 
@@ -44,10 +44,14 @@ export class Assembler {
     return this.module.project.syntax
   }
 
+  public get syntaxDef(): SyntaxDef {
+    return this.module.project.syntaxDef
+  }
+
   public assemble(lineRecords: LineRecord[]) {
 
-    // TODO: change this to undefined once structure offsets work
-    this.currentPC = 0
+    // TODO: change this to undefined once structure offsets work?
+    this.currentPC = this.module.project.syntaxDef.defaultOrg
 
     // pass 1
 
@@ -63,16 +67,6 @@ export class Assembler {
       }
 
       // *** skip macro body lines ***
-
-      // *** don't do if assignment statement? ***
-      if (statement.labelExp instanceof SymbolExpression) {
-        const valueExp = statement.labelExp.symbol?.getValue()
-        if (valueExp instanceof PcExpression) {
-          if (this.currentPC) {
-            valueExp.setValue(this.currentPC)
-          }
-        }
-      }
 
       this.currentLine = line
       if (this.currentPC >= 0) {
@@ -96,6 +90,7 @@ export class Assembler {
     // pass 2
 
     for (let line of lineRecords) {
+
       const statement = line.statement
       if (!statement || !statement.enabled || statement.hasAnyError()) {
         continue
