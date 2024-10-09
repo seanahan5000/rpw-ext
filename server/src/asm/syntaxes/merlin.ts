@@ -52,6 +52,8 @@ export class MerlinSyntax extends SyntaxDef {
       [ "dum",    { create: () => { return new stm.DummyStatement() },
                     params: "<expression>",
                     desc:   "Start of dummy section" } ],
+      // NOTE: dummy not supported by merlin32 but is support by old merlin
+      [ "dummy",  { alias:  "dum" }],
       [ "dend",   { create: () => { return new stm.DummyEndStatement() },
                     params: "",
                     desc:   "End of dummy section" } ],
@@ -251,9 +253,11 @@ export class MerlinSyntax extends SyntaxDef {
       [ "-",   { pre: 10, op: Op.Neg      }],
 
       // TODO: should these be included?
-      [ "<",   { pre: 10, op: Op.LowByte  }],
-      [ ">",   { pre: 10, op: Op.HighByte }],
-      [ "^",   { pre: 10, op: Op.BankByte }]
+      // NOTE: These are lower precedence than other operators
+      //  so that they are applied last in "LDA #<ADDR+$100", for example.
+      [ "<",   { pre:  9, op: Op.LowByte  }],
+      [ ">",   { pre:  9, op: Op.HighByte }],
+      [ "^",   { pre:  9, op: Op.BankByte }]
     ])
 
     this.binaryOpMap = new Map<string, OpDef>([

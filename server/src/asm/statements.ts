@@ -1868,6 +1868,12 @@ export class MacroInvokeStatement extends Statement {
 
 export class DummyStatement extends Statement {
 
+  postParse(parser: Parser) {
+    if (this.opNameLC == "dummy") {
+      this.opExp?.setWarning("Use DUM instead")
+    }
+  }
+
   preprocess(prep: Preprocessor, enabled: boolean): void {
     if (enabled) {
       // NOTE: With Merlin, the start of a dummy section implicitly
