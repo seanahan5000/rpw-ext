@@ -16,6 +16,7 @@ export class Tass64Syntax extends SyntaxDef {
   public cheapLocalPrefixes = "_"
   public zoneLocalPrefixes = ""
   public anonLocalChars = "+-"
+  public namedParamPrefixes = "\\"
   public keywordPrefixes = "."
   public keywordsInColumn1 = true
   public macroInvokePrefixes = "#"
@@ -87,7 +88,7 @@ export class Tass64Syntax extends SyntaxDef {
       // macros
       [ ".macro",   { create: () => { return new stm.MacroDefStatement() },
                       label:  "<symbol>",
-                      params: "[ [<name>[=<default>]][, [<name>[=<default>]] ...] ]",
+                      params: "[ [<param-name>[=<default>]][, [<param-name>[=<default>]] ...] ]",
                       desc:   "Start of macro block" } ],
       [ ".endmacro",{ create: () => { return new stm.EndMacroDefStatement() },
                       params: "[<result>][, <result> ...]",
@@ -155,7 +156,7 @@ export class Tass64Syntax extends SyntaxDef {
                       params: "<expression>[, <expression> ...]",
                       desc:   "Assemble strings into 8 bit bytes" } ],
       [ ".fill",    { create: () => { return new stm.StorageStatement(1) },
-                      params: "<length>[, <fill>]",
+                      params: "<count>[, <fill>]",
                       desc:   "Reserve space or fill with repeated bytes" } ],
       [ ".shift",   { // TODO
                       params: "<expression>[, <expression> ...]",
@@ -217,24 +218,24 @@ export class Tass64Syntax extends SyntaxDef {
 
       // structured data
       [ ".struct",    { create: () => { return new stm.StructStatement() },
-                        params: "[[<name>][=<default>][, [<name>][=<default>] ...]]",
+                        params: "[[<param-name>][=<default>][, [<param-name>][=<default>] ...]]",
                         desc:   "Begin a structure block" } ],
       [ ".endstruct", { create: () => { return new stm.EndStructStatement() },
                         params: "",
                         desc:   "End a structure block" } ],
       [ ".ends",      { alias: ".endstruct" } ],
       [ ".dstruct",   { // TODO
-                        params: "<symbol>[, <value> ...]",
+                        params: "<struct-name>[, <value> ...]",
                         desc:   "Create instance of structure with initialization values" } ],
       [ ".union",     { create: () => { return new stm.UnionStatement() },
-                        params: "[[<name>][=<default>][, [<name>][=<default>] ...]]",
+                        params: "[[<param-name>][=<default>][, [<param-name>][=<default>] ...]]",
                         desc:   "Begin a union block" } ],
       [ ".endunion",  { create: () => { return new stm.EndUnionStatement() },
                         params: "",
                         desc:   "End a union block" } ],
       [ ".endu",      { alias: ".endunion" } ],
       [ ".dunion",    { // TODO
-                        params: "<symbol>[, <value> ...]",
+                        params: "<union-name>[, <value> ...]",
                         desc:   "Create instance of union with initialization values" } ],
 
       // conditionals

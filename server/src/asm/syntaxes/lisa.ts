@@ -22,6 +22,7 @@ export class LisaSyntax extends SyntaxDef {
   public cheapLocalPrefixes = ""
   public zoneLocalPrefixes = ""
   public anonLocalChars = ""
+  public namedParamPrefixes = ""
   public keywordPrefixes = ""
   public keywordsInColumn1 = false
   public macroInvokePrefixes = ""
@@ -78,7 +79,7 @@ export class LisaSyntax extends SyntaxDef {
 
       // data storage
       [ "dfs",  { create: () => { return new stm.StorageStatement(1) },
-                  params: "<expression>[, <expression> ...]",
+                  params: "<count>[, <fill>]",
                   desc:   "Define storage" } ],
       [ ".da",  { create: () => { return new stm.DataStatement_U8() },
                   params: "<expression>[, <expression> ...]",

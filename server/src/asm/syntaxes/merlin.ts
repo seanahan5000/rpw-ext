@@ -18,6 +18,7 @@ export class MerlinSyntax extends SyntaxDef {
   public cheapLocalPrefixes = ":"
   public zoneLocalPrefixes = ""
   public anonLocalChars = ""
+  public namedParamPrefixes = ""
   public keywordPrefixes = ""
   public keywordsInColumn1 = false
   public macroInvokePrefixes = ""
@@ -120,7 +121,7 @@ export class MerlinSyntax extends SyntaxDef {
                     params: "<hex>[, <hex> ...]",
                     desc:   "Define hex data" } ],
       [ "ds",     { create: () => { return new stm.StorageStatement(1) },
-                    params: "<count>[, <fill>]",
+                    params: "{\\\\|<count>}[, <fill>]",
                     desc:   "Define storage" } ],
 
       // text

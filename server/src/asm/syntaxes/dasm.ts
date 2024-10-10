@@ -22,6 +22,7 @@ export class DasmSyntax extends SyntaxDef {
   public cheapLocalPrefixes = ""
   public zoneLocalPrefixes = "."
   public anonLocalChars = ""
+  public namedParamPrefixes = ""
   public keywordPrefixes = ".#"
   public keywordsInColumn1 = true
   public macroInvokePrefixes = ""
@@ -109,16 +110,16 @@ export class DasmSyntax extends SyntaxDef {
 
       // data storage
       [ "ds",         { create: () => { return new stm.StorageStatement(1) },
-                        params: "<expression>[, <fill>]",
+                        params: "<count>[, <fill>]",
                         desc:   "Declare space and fill with value or 0" } ],
       [ "ds.b",       { create: () => { return new stm.StorageStatement(1) },
-                        params: "<expression>[, <fill>]",
+                        params: "<count>[, <fill>]",
                         desc:   "Declare space and fill with value or 0" } ],
       [ "ds.w",       { create: () => { return new stm.StorageStatement(2) },
-                        params: "<expression>[, <fill>]",
+                        params: "<count>[, <fill>]",
                         desc:   "Declare space and fill with value or 0" } ],
       [ "ds.l",       { create: () => { return new stm.StorageStatement(4) },
-                        params: "<expression>[, <fill>]",
+                        params: "<count>[, <fill>]",
                         desc:   "Declare space and fill with value or 0" } ],
 
       [ "dc",         { create: () => { return new stm.DataStatement_X8() },

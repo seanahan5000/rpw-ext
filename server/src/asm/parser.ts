@@ -361,6 +361,7 @@ export class Parser extends Tokenizer {
     this.pushNextComment()
 
     // *** if not macro, if not dummy, if not disabled ***
+      // *** not assignment?
     {
       if (statement.labelExp && statement.labelExp instanceof exp.SymbolExpression) {
         const symValue = statement.labelExp.symbol?.getValue()
@@ -690,6 +691,7 @@ export class Parser extends Tokenizer {
       }
     }
 
+    // *** clean this up -- splitting here and then reparsing locals ***
     if (token.type == TokenType.Symbol) {
 
       let split = false
@@ -703,7 +705,8 @@ export class Parser extends Tokenizer {
       //     // *** TODO: add logic to decide when to do this ***
           split = true
       //   // }
-      } else if (this.syntaxDef.cheapLocalPrefixes.includes(str[0])) {
+      } else if (this.syntaxDef.cheapLocalPrefixes.includes(str[0]) ||
+          this.syntaxDef.namedParamPrefixes.includes(str[0])) {
         // NOTE: currently used to handle leading "_" prefix
         split = true
       }
@@ -770,14 +773,17 @@ export class Parser extends Tokenizer {
         }
       }
 
+      // *** clean these up -- just redoing what was undone by split ***
       if (this.syntaxDef.cheapLocalPrefixes.includes(str)) {
         // TODO: if !this.syntax, count by syntax match?
         return this.parseLocal(token, SymbolType.CheapLocal, isDefinition)
       }
-
       if (this.syntaxDef.zoneLocalPrefixes.includes(str)) {
         // TODO: if !this.syntax, count by syntax match?
         return this.parseLocal(token, SymbolType.ZoneLocal, isDefinition)
+      }
+      if (this.syntaxDef.namedParamPrefixes.includes(str)) {
+        return this.parseLocal(token, SymbolType.NamedParam, isDefinition)
       }
     }
 

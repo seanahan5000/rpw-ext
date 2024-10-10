@@ -191,6 +191,9 @@ class TermParam extends Param {
     if (this.termType == "macro-name") {    // *** +other type names
       return this.addSymbolExpression(parser, "macro name", true, SymbolType.MacroName)
     }
+    if (this.termType == "param-name") {
+      return this.addSymbolExpression(parser, "named param", true, SymbolType.NamedParam)
+    }
     if (this.termType == "symbol") {
       return this.addSymbolExpression(parser, "symbol name", false, SymbolType.Simple)
     }

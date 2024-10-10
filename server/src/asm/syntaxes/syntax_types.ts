@@ -122,6 +122,7 @@ export class SyntaxDef {
   public cheapLocalPrefixes: string = ""
   public zoneLocalPrefixes: string = ""
   public anonLocalChars: string = ""
+  public namedParamPrefixes: string = ""
 
   // character before keyword
   public keywordPrefixes: string = ""

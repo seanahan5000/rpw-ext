@@ -1,8 +1,8 @@
 
 import * as exp from "./expressions"
 import { Parser } from "./parser"
-import { Assembler } from "./assembler"
-import { Preprocessor, SymbolUtils, NestingType } from "./preprocessor"
+import { Assembler, NestingType } from "./assembler"
+import { Preprocessor, SymbolUtils } from "./preprocessor"
 import { SymbolType, SymbolFrom } from "./symbols"
 import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
@@ -20,6 +20,7 @@ export abstract class Statement extends exp.Expression {
   public opNameLC = ""
   public keywordDef?: KeywordDef
   public enabled = true   // *** where is this used? updated?
+  public PC?: number
 
   // link between conditional statement groups, used to build code folding ranges
   public foldEnd?: Statement
@@ -116,6 +117,7 @@ export abstract class Statement extends exp.Expression {
 
   // only called if enabled
   // return size in bytes
+  // *** same as getSize ***
   pass1(asm: Assembler): number | undefined {
     // *** layout of instructions, pc tracking
       // *** think about how this will work with nesting
@@ -157,8 +159,6 @@ export enum OpCpu {
   M65C02 = 1,
   M65816 = 2
 }
-
-// *** TODO: handle BRK with extra byte ($99 or #$99) ***
 
 export class OpStatement extends Statement {
 
@@ -537,12 +537,12 @@ export class OpStatement extends Statement {
     if (this.opByte !== undefined) {
       dataBytes[0] = this.opByte
       if (this.expression) {
-        let value = this.expression.resolve(asm.getPC())
+        let value = this.expression.resolve()
         if (value !== undefined) {
           const bc = Isa6502.ops[this.opByte].bc
           if (bc == 2) {
             if (this.mode == OpMode.REL) {
-              value = value - asm.getPC() - 2
+              value = value - this.PC! - 2
               if (value < -128 || value > 127) {
                 this.expression.setError(`Branch delta ${value} out of range}`)
                 return
@@ -564,7 +564,7 @@ export class OpStatement extends Statement {
             dataBytes[2] = (value >> 8) & 0xff
           }
         } else {
-          value = this.expression.resolve(asm.getPC()) // ***
+          value = this.expression.resolve() // ***
         }
       }
     }
@@ -859,7 +859,7 @@ export class ClosingBraceStatement extends EndIfStatement {
 
 export class RepeatStatement extends Statement {
 
-  // private start?: exp.Expression    // ACME-only
+  // private start?: exp.Expression    // ACME-only (default = 1)
   // private count?: exp.Expression    // end for ACME
   // private var?: exp.SymbolExpression
 
@@ -949,8 +949,6 @@ class DataStatement extends Statement {
     this.bigEndian = bigEndian
   }
 
-  // TODO: DASM and MERLIN allow ".byte #<MYLABEL", for example
-
   postParse(parser: Parser) {
     if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
       const symbol = this.labelExp.symbol
@@ -1004,16 +1002,14 @@ class DataStatement extends Statement {
     }
   }
 
-  // *** TODO: handle strings and other types of expressions
-
   pass1(asm: Assembler): number | undefined {
-    return this.args.length * this.dataSize
+    return Math.max(this.args.length, 1) * this.dataSize
   }
 
   pass2(asm: Assembler, dataBytes: number[]) {
     let index = 0
     for (let element of this.args) {
-      const value = element.resolve(asm.getPC())
+      const value = element.resolve()
       if (value === undefined) {
         index += this.dataSize
         continue
@@ -1044,7 +1040,7 @@ class DataStatement extends Statement {
   }
 }
 
-// TODO: review all syntaxes uses of these types
+// TODO: review all syntaxes use of these types
 //  (which enforce sign bounds and which don't?)
 
 export class DataStatement_U8 extends DataStatement {
@@ -1121,22 +1117,19 @@ export class DataStatement_X32 extends DataStatement {
 
 //------------------------------------------------------------------------------
 
-// MERLIN:  ds <count-exp> [, <fill-value>]
-//          ds \ [, <fill-value>]
-//   DASM:  ds [{.b|.w|.l|.s}] <count-exp> [, <fill-value> ]
+// MERLIN:  ds <count> [, <fill>]
+//          ds \ [, <fill>]
+//   DASM:  ds [{.b|.w|.l|.s}] <count> [, <fill> ]
 //   ACME:  !fill <count-exp> [, <fill-value>]
-//   CA65:  .res <count-exp> [, <fill-value>]
-//          .tag <struct-name>
-//   LISA:  ???
-// 64TASS:  .fill <count-exp> [, <fill-value]
+//   CA65:  .res <count> [, <fill>]
+//   LISA:  dfs <count> [, <fill>]
+// 64TASS:  .fill <count> [, <fill>]
 
 export class StorageStatement extends Statement {
 
   protected dataSize: number
   protected bigEndian: boolean
-
-  private sizeArg?: exp.Expression
-  private patternArg?: exp.Expression
+  private countValue?: number
 
   constructor(dataSize: number, bigEndian = false) {
     super()
@@ -1144,81 +1137,50 @@ export class StorageStatement extends Statement {
     this.bigEndian = bigEndian
   }
 
-  parse(parser: Parser) {
-
+  postParse(parser: Parser): void {
     if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
       const symbol = this.labelExp.symbol
       if (symbol) {
         symbol.isData = true
       }
     }
-
-    let token: Token | undefined
-
-    token = parser.mustGetNextToken("expecting storage size expression")
-    // *** empty??? ***
-    if (token.isEmpty()) {
-      parser.addToken(token)
-      return
-    }
-
-    if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-      if (this.opNameLC == ".tag") {
-        token.type = TokenType.TypeName
-        parser.addToken(token)
-        return
-      }
-    }
-
-    if (token.getString() == "\\") {
-      if (!parser.syntax || parser.syntax == Syntax.MERLIN) {
-        // *** ??? ***
-        // *** get rid of? ***
-        this.sizeArg = new exp.AlignExpression(new exp.NumberExpression([token], 256, false))
-        parser.addExpression(this.sizeArg)
-      } else {
-        parser.addToken(token)
-        token.setError("Invalid storage size")
-        return
-      }
-    } else {
-      this.sizeArg = parser.mustAddNextExpression(token)
-      if (!this.sizeArg) {
-        return
-      }
-
-      //*** error if resolved value is out of range
-    }
-
-    if (parser.mustAddToken(["", ","]).index <= 0) {
-      return
-    }
-
-    this.patternArg = parser.mustAddNextExpression()
   }
 
-  // TODO: ".tag" handled differently?
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
 
-  pass1(asm: Assembler): number | undefined {
-    let sizeValue = this.sizeArg?.resolve(asm.getPC())
-    if (sizeValue === undefined) {
-      if (this.sizeArg?.getString() == "\\") {
-        sizeValue = -asm.getPC() & 0xff
+      const countArg = this.findArg("count")
+      if (countArg) {
+        this.countValue = countArg.resolve()
+        if (this.countValue === undefined) {
+          countArg.setError("Must resolve on first pass")
+        }
       } else {
-        return
+        // assume if count isn't found, must be Merlin "\\"
+        this.countValue = -prep.getCurrentPC() & 0xFF
       }
     }
-    return sizeValue * this.dataSize
+  }
+
+  // *** same as getSize() ***
+  pass1(asm: Assembler): number | undefined {
+    if (this.countValue !== undefined) {
+      return this.countValue * this.dataSize
+    }
   }
 
   pass2(asm: Assembler, dataBytes: number[]): void {
     let fillValue = 0
-    if (this.patternArg) {
-      const patternValue = this.patternArg?.resolve(asm.getPC())
-      if (patternValue === undefined) {
+    const fillArg = this.findArg("fill")
+    if (fillArg) {
+      const value = fillArg.resolve()
+      if (value === undefined) {
+        fillArg.setError("Unresolved expression")
         return
       }
+      fillValue = value
     }
+    // TODO: handle >= 16 bit patterns differently
     dataBytes.fill(fillValue)
   }
 }
@@ -1234,68 +1196,72 @@ export class StorageStatement extends Statement {
 
 export class AlignStatement extends Statement {
 
-  private fillValue = 0
+  private padValue?: number
+
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      const andArg = this.findArg("and")
+      const equalArg = this.findArg("equal")
+      if (andArg && equalArg) {
+        const andValue = andArg.resolve()
+        if (andValue === undefined) {
+          andArg.setError("Must resolve on first pass")
+          return
+        }
+        const equalValue = equalArg.resolve()
+        if (equalValue === undefined) {
+          equalArg.setError("Must resolve on first pass")
+          return
+        }
+        this.padValue = (equalValue - prep.getCurrentPC()) & andValue
+        return
+      }
+
+      let boundaryValue = 256
+      const boundaryArg = this.findArg("boundary")
+      if (boundaryArg) {
+        const value = boundaryArg.resolve()
+        if (value === undefined) {
+          boundaryArg.setError("Must resolve on first pass")
+          return
+        }
+        boundaryValue = value
+      }
+
+      let offsetValue = 0
+      const offsetArg = this.findArg("offset")
+      if (offsetArg) {
+        const value = offsetArg.resolve()
+        if (value === undefined) {
+          offsetArg.setError("Must resolve on first pass")
+          return
+        }
+        offsetValue = value
+      }
+
+      const misalign = prep.getCurrentPC() % boundaryValue
+      const size = (misalign ? boundaryValue - misalign : 0) + offsetValue
+      // TODO: how are negative offsets handled in 64TASS?
+      this.padValue = Math.max(size, 0)
+    }
+  }
 
   pass1(asm: Assembler): number | undefined {
-
-    const fillArg = this.findArg("fill")
-    if (fillArg) {
-      const value = fillArg.resolve(asm.getPC())
-      if (value === undefined) {
-        fillArg.setError("Must resolve on first pass")
-      } else {
-        this.fillValue = value
-      }
-    } else {
-      this.fillValue = asm.syntax == Syntax.ACME ? 0xEA : 0x00
-    }
-
-    const andArg = this.findArg("and")
-    const equalArg = this.findArg("equal")
-    if (andArg && equalArg) {
-      const andValue = andArg.resolve(asm.getPC())
-      if (andValue === undefined) {
-        andArg.setError("Must resolve on first pass")
-        return
-      }
-      const equalValue = equalArg.resolve(asm.getPC())
-      if (equalValue === undefined) {
-        equalArg.setError("Must resolve on first pass")
-        return
-      }
-      return (equalValue - asm.getPC()) & andValue
-    }
-
-    let boundaryValue = 256
-    const boundaryArg = this.findArg("boundary")
-    if (boundaryArg) {
-      const value = boundaryArg.resolve(asm.getPC())
-      if (value === undefined) {
-        boundaryArg.setError("Must resolve on first pass")
-        return
-      }
-      boundaryValue = value
-    }
-
-    let offsetValue = 0
-    const offsetArg = this.findArg("offset")
-    if (offsetArg) {
-      const value = offsetArg.resolve(asm.getPC())
-      if (value === undefined) {
-        offsetArg.setError("Must resolve on first pass")
-        return
-      }
-      offsetValue = value
-    }
-
-    const misalign = asm.getPC() % boundaryValue
-    const size = (misalign ? boundaryValue - misalign : 0) + offsetValue
-    // TODO: how are negative offsets handled in 64TASS?
-    return Math.max(size, 0)
+    return this.padValue
   }
 
   pass2(asm: Assembler, dataBytes: number[]): void {
-    dataBytes.fill(this.fillValue)
+    let fillValue = asm.syntax == Syntax.ACME ? 0xEA : 0x00
+    const fillArg = this.findArg("fill")
+    if (fillArg) {
+      const value = fillArg.resolve()
+      if (value === undefined) {
+        fillArg.setError("Unresolved expression")
+      } else {
+        fillValue = value
+      }
+    }
+    dataBytes.fill(fillValue)
   }
 }
 
@@ -1333,7 +1299,7 @@ export class HexStatement extends Statement {
   }
 
   // *** needed?
-  getSize(pc?: number): number | undefined {
+  getSize(): number | undefined {
     return this.dataBytes.length
   }
 
@@ -1571,22 +1537,26 @@ export class CpuStatement extends Statement {
 
 export class OrgStatement extends Statement {
 
-  pass1(asm: Assembler): number | undefined {
-    const valueArg = this.args[0]
-    if (valueArg) {
-      const orgValue = valueArg.resolve(asm.getPC())
-      if (orgValue === undefined) {
-        valueArg.setError("Must resolve in first pass")
-      } else if (orgValue < 0 || orgValue > 0xFFFF) {
-        valueArg.setError("Invalid org value " + orgValue)
+  preprocess(prep: Preprocessor, enabled: boolean): void {
+    if (enabled) {
+      const valueArg = this.args[0]
+      if (valueArg) {
+        const orgValue = valueArg.resolve()
+        if (orgValue === undefined) {
+          valueArg.setError("Must resolve in first pass")
+        } else if (orgValue < 0 || orgValue > 0xFFFF) {
+          valueArg.setError("Invalid org value " + orgValue)
+        } else {
+          prep.setNextPC(orgValue)
+        }
       } else {
-        asm.setPC(orgValue)
+        // TODO: Merlin treats an org with address as a reorg
+        //  to sync back to the previous org
       }
-    } else {
-      // TODO: Merlin treats an org with address as a reorg
-      //  to sync back to the previous org
     }
+  }
 
+  pass1(asm: Assembler): number | undefined {
     return 0
   }
 }
@@ -1715,6 +1685,7 @@ export class MacroDefStatement extends Statement {
       const name = this.findArg("macro-name")
       if (name instanceof exp.SymbolExpression) {
         this.macroName = name
+        this.macroName.setSymbolType(SymbolType.MacroName)
       }
     }
   }
@@ -1733,17 +1704,16 @@ export class MacroDefStatement extends Statement {
 
     prep.pushNesting(NestingType.Macro, () => {
       if (enabled) {
-        // TODO: ACME-only?
-        prep.scopeState.popZone()
+        prep.scopeState.popZone()   // TODO: ACME-only?
+        prep.scopeState.endMacro()
         prep.endMacroDef()
       }
     })
 
     if (enabled) {
-      // TODO: pass in parameter list too?
-      // TODO: ACME-only?
-      prep.scopeState.pushZone()
-      prep.startMacroDef(this.macroName)
+      prep.scopeState.pushZone()    // TODO: ACME-only?
+      prep.scopeState.startMacro(this.macroName.getString())
+      prep.startMacroDef()
     }
   }
 
@@ -1775,13 +1745,7 @@ export class EndMacroDefStatement extends Statement {
       this.setError("End of macro with enclosed nested type")
       return
     }
-    prep.popNesting()
-
-    if (enabled) {
-      // TODO: ACME-only?
-      prep.scopeState.popZone()
-      prep.endMacroDef()
-    }
+    prep.popNesting(true)
   }
 
   pass1(asm: Assembler): number | undefined {
@@ -1869,9 +1833,10 @@ export class MacroInvokeStatement extends Statement {
 export class DummyStatement extends Statement {
 
   postParse(parser: Parser) {
-    if (this.opNameLC == "dummy") {
-      this.opExp?.setWarning("Use DUM instead")
-    }
+    // TODO: put back in once Naja code is cleaned up
+    // if (this.opNameLC == "dummy") {
+    //   this.opExp?.setWarning("Use DUM instead")
+    // }
   }
 
   preprocess(prep: Preprocessor, enabled: boolean): void {
@@ -1885,21 +1850,28 @@ export class DummyStatement extends Statement {
           prep.scopeState.popScope()
         }
       }
-      prep.pushNesting(NestingType.Struct)
+
+      const currentPC = prep.getCurrentPC()
+      prep.pushNesting(NestingType.Struct, () => {
+        if (enabled) {
+          prep.setNextPC(currentPC)
+        }
+      })
+
+      const valueArg = this.args[0]
+      if (valueArg) {
+        const orgValue = valueArg.resolve()
+        if (orgValue === undefined) {
+          // *** TODO: only if doing full assemble ***
+          valueArg.setError("Must resolve in first pass")
+        } else {
+          prep.setNextPC(orgValue)
+        }
+      }
     }
   }
 
   pass1(asm: Assembler): number | undefined {
-    const valueArg = this.args[0]
-    if (valueArg) {
-      const orgValue = valueArg.resolve(asm.getPC())
-      if (orgValue === undefined) {
-        valueArg.setError("Must resolve in first pass")
-      } else {
-        asm.setPC(orgValue)
-      }
-    }
-
     return 0
   }
 }
@@ -1917,13 +1889,12 @@ export class DummyEndStatement extends Statement {
         this.setError("Dangling scoped type")
         return
       }
-      prep.popNesting()
+      prep.popNesting(true)   // pass true so pop proc gets called
       prep.scopeState.popScope()
     }
   }
 
   pass1(asm: Assembler): number | undefined {
-    // TODO: restore PC?
     return 0
   }
 }
@@ -2005,6 +1976,33 @@ export class TypeBeginStatement extends Statement {
       prep.scopeState.pushScope(this.scopeName)
     }
   }
+
+  // preprocess(prep: Preprocessor, enabled: boolean) {
+
+  //   if (!this.macroName) {
+  //     // parser should have already caught this
+  //     return
+  //   }
+
+  //   if (prep.isNested(NestingType.Macro)) {
+  //     this.setError("Nested macro definitions not allowed")
+  //     return
+  //   }
+
+  //   prep.pushNesting(NestingType.Macro, () => {
+  //     if (enabled) {
+  //       prep.scopeState.popZone()   // TODO: ACME-only?
+  //       prep.scopeState.endMacro()
+  //       prep.endMacroDef()
+  //     }
+  //   })
+
+  //   if (enabled) {
+  //     prep.scopeState.pushZone()    // TODO: ACME-only?
+  //     prep.scopeState.startMacro(this.macroName.getString())
+  //     prep.startMacroDef()
+  //   }
+  // }
 }
 
 export class TypeEndStatement extends Statement {
@@ -2026,10 +2024,24 @@ export class TypeEndStatement extends Statement {
         this.setError("Dangling scoped type")
         return
       }
-      prep.popNesting()
+      prep.popNesting()             // *** popNesting(true)?
       prep.scopeState.popScope()
     }
   }
+
+  // preprocess(prep: Preprocessor, enabled: boolean) {
+
+  //   if (!prep.isNested(NestingType.Macro)) {
+  //     this.setError("End of macro without start")
+  //     return
+  //   }
+  //   if (prep.topNestingType() != NestingType.Macro) {
+  //     // TODO: figure out what exactly is unclosed and add to message
+  //     this.setError("End of macro with enclosed nested type")
+  //     return
+  //   }
+  //   prep.popNesting(true)
+  // }
 }
 
 export class EnumStatement extends TypeBeginStatement {

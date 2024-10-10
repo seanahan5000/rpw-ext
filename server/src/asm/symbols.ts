@@ -7,15 +7,16 @@ import { Expression, SymbolExpression} from "./expressions"
 export enum SymbolType {
   Variable    = 0,
   MacroName   = 1,
+  NamedParam  = 2,  // named params to macros, structs, enums
 
-  Simple      = 2,
-  Scoped      = 3,  // explicit scope, fully specified
+  Simple      = 3,
+  Scoped      = 4,  // explicit scope, fully specified
 
-  CheapLocal  = 4,  // scoped to previous non-local
-  ZoneLocal   = 5,  // scoped to SUBROUTINE or !zone
-  AnonLocal   = 6,  // ++ or --
-  LisaLocal   = 7,  // ^# def, <# or ># ref
-  CA65Local   = 8,  // : def, :+ or :- ref
+  CheapLocal  = 5,  // scoped to previous non-local
+  ZoneLocal   = 6,  // scoped to SUBROUTINE or !zone
+  AnonLocal   = 7,  // ++ or --
+  LisaLocal   = 8,  // ^# def, <# or ># ref
+  CA65Local   = 9,  // : def, :+ or :- ref
 }
 
 export function isLocalType(symbolType: SymbolType): boolean {
@@ -27,7 +28,7 @@ export enum SymbolFrom {
   Org        = 1,   // implicit from current org
   Equate     = 2,   // assigned with "="
   Import     = 3,   // .import statement
-  MacroParam = 4    // macro input parameter
+  // *** MacroParam = 4    // macro input parameter
 }
 
 //------------------------------------------------------------------------------
@@ -80,12 +81,12 @@ export class Symbol {
     this.from = from
   }
 
-  resolve(pc?: number): number | undefined {
-    return this.value?.resolve(pc)
+  resolve(): number | undefined {
+    return this.value?.resolve()
   }
 
-  getSize(pc?: number): number | undefined {
-    return this.value?.getSize(pc)
+  getSize(): number | undefined {
+    return this.value?.getSize()
   }
 
   // get symbol name without scope, local prefix, or trailing ":"
@@ -113,6 +114,8 @@ export class ScopeState {
 
   private cheapScope = "__d"
 
+  private macroName?: string
+
   private anonCounts = new Array(20).fill(0)
   private anonIndex = 0     // CA65-only
 
@@ -128,8 +131,18 @@ export class ScopeState {
 
       case SymbolType.MacroName: {
         // skip invoke prefix token if present
+        // TODO: will macro names need scoping information?
         const nameToken = symExp.children[symExp.children.length - 1]
         return nameToken?.getString() ?? ""
+      }
+
+      case SymbolType.NamedParam: {
+        const nameToken = symExp.children[0]
+        if (!nameToken || !(nameToken instanceof Token)) {
+          break
+        }
+        // TODO: will macro params need scoping information?
+        return this.macroName + "::" + nameToken.getString()
       }
 
       case SymbolType.Simple: {
@@ -305,6 +318,18 @@ export class ScopeState {
 
   public popZone() {
     this.zoneName = this.zoneStack.pop()
+  }
+
+  // TODO: should these just be folded into scope?
+  // TODO: will macro names need scoping information?
+
+  // *** nesting instead (structure and union also use this) ***
+  public startMacro(macroName: string) {
+    this.macroName = macroName
+  }
+
+  public endMacro() {
+    this.macroName = undefined
   }
 }
 

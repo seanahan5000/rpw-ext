@@ -6,7 +6,7 @@ import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
 import { Parser } from "./parser"
 import { Preprocessor } from "./preprocessor"
-import { Assembler } from "./assembler"
+import { MacroDef } from "./assembler"
 import { Symbol } from "./symbols"
 
 function fixBackslashes(inString: string): string {
@@ -326,6 +326,7 @@ export class Module {
   private srcName: string     // always just the file name (*** without suffix?)
   public symbolMap = new Map<string, Symbol>
   public variableMap = new Map<string, Symbol>
+  public macroMap = new Map<string, MacroDef>
 
   //*** separate list of exported symbols (also in this.symbols)
   //*** when creating xxx = $ffff symbols, search all other module exports and link
@@ -351,9 +352,10 @@ export class Module {
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
     this.variableMap = new Map<string, Symbol>
+    this.macroMap = new Map<string, MacroDef>
 
-    const prep = new Preprocessor(this)
-    const lineRecords = prep.preprocess(this.srcName, syntaxStats)
+    const asm = new Preprocessor(this)
+    const lineRecords = asm.preprocess(this.srcName, syntaxStats)
     if (!lineRecords) {
       // *** error handling ***
       return
@@ -361,7 +363,6 @@ export class Module {
 
     this.lineRecords = lineRecords
 
-    const asm = new Assembler(this)
     asm.assemble(this.lineRecords)
 
     // link up all symbols

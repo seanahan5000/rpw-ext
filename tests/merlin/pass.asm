@@ -1,3 +1,4 @@
+
 BUILD           =   1
 
 symbol1         equ $1000
@@ -16,10 +17,12 @@ my_ent          ent
 
 label
                 put pass.inc
-                ; put pass.inc,d2
                 put ./pass.inc
                 use pass.inc
-                ; use pass.inc,s6,d1
+    do BUILD-1
+                put pass.inc,d2
+                use pass.inc,s6,d1
+    fin
                 sav filename.obj
                 typ $00
                 dsk filename.obj
@@ -65,7 +68,7 @@ label
 
                 da $fdf0
                 dw label
-                dw #<label
+                db #<label
                 ddb label,$300
                 dfb $00
                 dfb #$00
@@ -111,6 +114,7 @@ my_mac2         mac
 
                 brk
                 brk $00                 ; optional argument
+                brk #$00                ; optional argument
 
 ; *** colorizing problems after text escapes
                 asc "\\"
@@ -131,12 +135,12 @@ my_mac2         mac
 
                 ; left-to-right precedence
 LOAD_BASE       =   $8000
-precedence      =   $800-$800+LOAD_BASE ;*** why no hover?
-                do precedence-LOAD_BASE ;*** why no auto-complete suggestion?
+precedence      =   $800-$800+LOAD_BASE ;*** why no hover over LOAD_BASE, precedence?
+                do precedence-LOAD_BASE
                 error
                 fin
 
-; *** precedence problem, different from other syntaxes
+                ; ">" precedence lower than rest of expression
                 LDA #>LOAD_BASE+$0100
 
                 end

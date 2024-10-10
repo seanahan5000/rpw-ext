@@ -1,4 +1,5 @@
 
+
 .macro JUNK_BYTE value
 		.byte value
 .endmacro
@@ -13,6 +14,15 @@
 ; ; "symbol-weakref"
 ; .import TKN_FLIGHT_CR:direct
 ; .import TKN_FLIGHT_CR:direct
+
+.struct HullVertex
+        vx              .byte
+        vy              .byte
+        vz              .byte
+        signs_vis       .byte
+        faces1and2      .byte
+        faces3and4      .byte
+.endstruct
 
 
 LOAD_BASE       =   $8000

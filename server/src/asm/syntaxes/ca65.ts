@@ -18,6 +18,7 @@ export class Ca65Syntax extends SyntaxDef {
   public cheapLocalPrefixes = "@"
   public zoneLocalPrefixes = ""
   public anonLocalChars = ""
+  public namedParamPrefixes = ""
   public keywordPrefixes = "."
   public keywordsInColumn1 = true
   public macroInvokePrefixes = ""
@@ -83,7 +84,7 @@ export class Ca65Syntax extends SyntaxDef {
 
       // macros
       [ ".macro",     { create: () => { return new stm.MacroDefStatement() },
-                        params: "<macro-name> [<param> [, <param> ...]]",
+                        params: "<macro-name> [<macro-param> [, <macro-param> ...]]",
                         desc:   "Start a classic macro definition" } ],
       [ ".mac",       { alias: ".macro" }],
       [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() },
@@ -113,23 +114,23 @@ export class Ca65Syntax extends SyntaxDef {
       // data storage
       // *** TODO: check all signed/unsigned limits ***
       [ ".byte",      { create: () => { return new stm.DataStatement_U8() },
-                        params: "<string-value>[, <string-value> ...]",
+                        params: "[<string-value>[, <string-value> ...]]",
                         desc:   "Define byte sized data" } ],
       [ ".byt",       { alias: ".byte" }],
       [ ".dbyt",      { create: () => { return new stm.DataStatement_U16(true) },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[<expression>[, <expression> ...]]",
                         desc:   "Define word sized data with the hi and lo bytes swapped" } ],
       [ ".word",      { create: () => { return new stm.DataStatement_U16() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[<expression>[, <expression> ...]]",
                         desc:   "yyy" } ],
       [ ".addr",      { create: () => { return new stm.DataStatement_U16() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[<expression>[, <expression> ...]]",
                         desc:   "Define word sized data" } ],
       [ ".faraddr",   { create: () => { return new stm.DataStatement_U24() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[<expression>[, <expression> ...]]",
                         desc:   "Define far (24 bit) address data" } ],
       [ ".dword",     { create: () => { return new stm.DataStatement_U32() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[<expression>[, <expression> ...]]",
                         desc:   "Define dword sized data" } ],
       [ ".lobytes",   { // TODO
                         params: "<expression>[, <expression> ...]",
@@ -142,9 +143,9 @@ export class Ca65Syntax extends SyntaxDef {
                         desc:   "Define byte sized data by extracting only the bank byte " } ],
 
       [ ".res",       { create: () => { return new stm.StorageStatement(1) },
-                        params: "<const-bytes>[, <const-fill>]",
+                        params: "<count>[, <fill>]",
                         desc:   "Reserve storage" } ],
-      [ ".tag",       { create: () => { return new stm.StorageStatement(-1) },
+      [ ".tag",       { // TODO
                         params: "<name>",
                         desc:   "Allocate space for a struct or union" } ],
 

@@ -1,14 +1,13 @@
-!macro LDADDR .addr {
-         lda   #<.addr
-         ldy   #>.addr
-}
+
+.insuffText : !text "REQUIRES 128K IIE OR LATER.",0
+
 
 ; passport/choplifter.a
         ;  lda   (*+$ff) and $ff00,x
 
 
 
-* = $1000
+* = $1000       ; required or locals fail to resolve
 -               ; anonymous locals
                 beq -
                 bne +
@@ -165,7 +164,7 @@ end             !if end - start > 256 {
                 }
                 !macro bne .target {
                     beq * + 5
-                    ; jmp .target
+                    jmp .target
                 }
 
                 +bne end

@@ -19,6 +19,7 @@ export class AcmeSyntax extends SyntaxDef {
   public cheapLocalPrefixes = "@"
   public zoneLocalPrefixes = "."
   public anonLocalChars = "+-"
+  public namedParamPrefixes = ""
   public keywordPrefixes = "!"
   public keywordsInColumn1 = true
   public macroInvokePrefixes = "+"
@@ -74,7 +75,7 @@ export class AcmeSyntax extends SyntaxDef {
       // macros
       [ "!macro",     { create: () => { return new stm.MacroDefStatement() },
                         label:  "",
-                        params: "<macro-name> [ [~]<symbol> [, [~]<symbol> ...] ] \\{ [<block> \\}]",
+                        params: "<macro-name> [ [~]<macro-param> [, [~]<macro-param> ...] ] \\{ [<block> \\}]",
                         desc:   "Define a macro" } ],
 
       // data storage
@@ -114,7 +115,7 @@ export class AcmeSyntax extends SyntaxDef {
                         params: "<and>, <equal>[, <fill>]",
                         desc:   "Fill memory until a matching address is reached" } ],
       [ "!fill",      { create: () => { return new stm.StorageStatement(1) },
-                        params: "<amount>[, <value>]",
+                        params: "<count>[, <fill>]",
                         desc:   "Fill amount of memory with value" } ],
       [ "!fi",        { alias: "!fill" }],
       [ "!skip",      { // TODO
@@ -167,7 +168,7 @@ export class AcmeSyntax extends SyntaxDef {
 
       // looping
       [ "!for",       { create: () => { return new stm.RepeatStatement() },
-                        params: "<symbol-def>, <start>, <end> \\{ [<block> \\}]",
+                        params: "<symbol-def>, {<start>, <end> | <end> } \\{ [<block> \\}]",
                         desc:   "Looping assembly" } ],
       [ "!do",        { // TODO
                         params: "[<condition>] \\{ [<block> \\} [<condition>]]",
