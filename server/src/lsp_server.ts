@@ -9,11 +9,11 @@ import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
-import { OpStatement, Statement } from "./asm/statements"
+import { ContinuedStatement, OpStatement, Statement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
-import { SyntaxNames } from "./asm/syntax"
+import { SyntaxNames } from "./asm/syntaxes/syntax_types"
 import { Isa6502 } from "./isa6502"
 
 //------------------------------------------------------------------------------
@@ -99,12 +99,16 @@ class LspProject extends Project {
 type SemanticState = {
   prevLine: number
   prevStart: number
+  startOffset: number
+  endOffset: number
   data: number[]
 }
 
 type DiagnosticState = {
   sourceFile: SourceFile
   lineNumber: number
+  startOffset: number
+  endOffset: number
   diagnostics: lsp.Diagnostic[]
 }
 
@@ -223,7 +227,8 @@ export class LspServer {
       capabilities: {
         textDocumentSync: lsp.TextDocumentSyncKind.Incremental,
         completionProvider: {
-          triggerCharacters: ["(", ":"],
+          // *** TODO: make this syntax-specific
+          triggerCharacters: ["(", ":", ".", "+", "!"],
           resolveProvider: true
         },
         definitionProvider: true,
@@ -304,6 +309,8 @@ export class LspServer {
           }
         }
       }
+
+      // *** change trigger character after project parsed ***
     }
 
     return result
@@ -393,16 +400,23 @@ export class LspServer {
     this.updateId = setTimeout(() => { this.executeUpdate() }, updateTimeout)
   }
 
+  // only executes if previously scheduled
   private executeUpdate() {
     if (this.updateId !== undefined) {
+
       clearTimeout(this.updateId)
       delete this.updateId
+
+      for (let project of this.projects) {
+        project.update()
+      }
+
+      // *** okay to always to this? or only on actual change? ***
+      this.connection.sendNotification("rpw.syntaxChanged")
+
+      this.scheduleDiagnostics(this.updateFile)
+      delete this.updateFile
     }
-    for (let project of this.projects) {
-      project.update()
-    }
-    this.scheduleDiagnostics(this.updateFile)
-    delete this.updateFile
   }
 
   private scheduleDiagnostics(priorityFile?: SourceFile) {
@@ -415,34 +429,35 @@ export class LspServer {
 
   private executeDiagnostics(priorityFile?: SourceFile) {
     if (this.diagnosticId !== undefined) {
+
       clearTimeout(this.diagnosticId)
       delete this.diagnosticId
-    }
 
-    if (priorityFile) {
-      this.updateDiagnostics(priorityFile)
-    }
-
-    for (let project of this.projects) {
-      for (let sharedFile of project.sharedFiles) {
-        if (sharedFile != priorityFile) {
-          this.updateDiagnostics(sharedFile)
-        }
+      if (priorityFile) {
+        this.updateDiagnostics(priorityFile)
       }
-      for (let module of project.modules) {
-        for (let sourceFile of module.sourceFiles) {
-          if (project.sharedFiles.indexOf(sourceFile) != -1) {
-            continue
-          }
-          if (sourceFile != priorityFile) {
-            this.updateDiagnostics(sourceFile)
+
+      for (let project of this.projects) {
+        for (let sharedFile of project.sharedFiles) {
+          if (sharedFile != priorityFile) {
+            this.updateDiagnostics(sharedFile)
           }
         }
+        for (let module of project.modules) {
+          for (let sourceFile of module.sourceFiles) {
+            if (project.sharedFiles.indexOf(sourceFile) != -1) {
+              continue
+            }
+            if (sourceFile != priorityFile) {
+              this.updateDiagnostics(sourceFile)
+            }
+          }
+        }
       }
-    }
 
-    // *** send message that semantic tokens need refresh ***
-    // this.connection.sendNotification("workspace/semanticTokens/refresh")
+      // *** send message that semantic tokens need refresh ***
+      // this.connection.sendNotification("workspace/semanticTokens/refresh")
+    }
   }
 
   // build a tempory project given a file path
@@ -823,6 +838,15 @@ export class LspServer {
               hoverStr += "Affects: " + affected
             }
           }
+        } else if (statement.keywordDef) {
+          const desc = statement.keywordDef.desc ?? ""
+          if (desc != "") {
+            hoverStr += desc + "\n"
+          }
+          if (statement.keywordDef.label && statement.keywordDef.label[0] == "<") {
+            hoverStr += "<label> "
+          }
+          hoverStr += statement.opExp?.getString() + " " + (statement.keywordDef.params ?? "")
         }
       }
     }
@@ -966,7 +990,7 @@ export class LspServer {
   private updateDiagnostics(sourceFile: SourceFile) {
 
     const diagnostics: lsp.Diagnostic[] = []
-    const state: DiagnosticState = { sourceFile, lineNumber: 0, diagnostics }
+    const state: DiagnosticState = { sourceFile, lineNumber: 0, startOffset: 0, endOffset: 0, diagnostics }
 
     for (let lineNumber = 0; lineNumber < sourceFile.statements.length; ) {
 
@@ -990,6 +1014,8 @@ export class LspServer {
       }
 
       state.lineNumber = lineNumber
+      state.startOffset = statement.startOffset ?? 0
+      state.endOffset = statement.endOffset ?? statement.sourceLine.length
       this.diagnoseExpression(state, statement)
       lineNumber += 1
     }
@@ -1008,9 +1034,9 @@ export class LspServer {
         const symbol = expression.symbol
         if (symbol && symbol.references.length == 0) {
           const expRange = expression.getRange()
-          if (expRange) {
+          if (expRange && expRange.start >= state.startOffset && expRange.end <= state.endOffset) {
             const diagRange = lsp.Range.create(
-              state.lineNumber, expRange.start, state.lineNumber, expRange.end)
+              state.lineNumber, expRange.start - state.startOffset, state.lineNumber, expRange.end - state.startOffset)
             const diag = lsp.Diagnostic.create(diagRange, "Unreferenced label")
             diag.tags = [lsp.DiagnosticTag.Unnecessary]
             diag.severity = lsp.DiagnosticSeverity.Hint
@@ -1025,19 +1051,19 @@ export class LspServer {
     } else if (expression instanceof FileNameExpression) {
       if (expression.hasAnyError()) {
         const expRange = expression.getRange()
-        if (expRange) {
+        if (expRange && expRange.start >= state.startOffset && expRange.end <= state.endOffset) {
           let diagRange: lsp.Range
           let hint: boolean
           if (state.sourceFile.module.project.isTemporary) {
             // dim out the entire line, including put/include
             hint = true
             diagRange = lsp.Range.create(
-              state.lineNumber, 0, state.lineNumber, expRange.end)
+              state.lineNumber, 0, state.lineNumber, expRange.end - state.startOffset)
           } else {
             // error underline just the file name
             hint = false
             diagRange = lsp.Range.create(
-              state.lineNumber, expRange.start, state.lineNumber, expRange.end)
+              state.lineNumber, expRange.start - state.startOffset, state.lineNumber, expRange.end - state.startOffset)
           }
           const diag = lsp.Diagnostic.create(diagRange, "File not found")
           diag.severity = hint ? lsp.DiagnosticSeverity.Hint : lsp.DiagnosticSeverity.Error
@@ -1088,12 +1114,14 @@ export class LspServer {
 
       const nodeRange = node.getRange()
       if (nodeRange) {
-        const diagRange = lsp.Range.create(
-          state.lineNumber, nodeRange.start,
-          state.lineNumber, Math.max(nodeRange.end, nodeRange.start + 1)
-        )
-        const diag = lsp.Diagnostic.create(diagRange, node.errorMessage ?? "", severity)
-        state.diagnostics.push(diag)
+        if (nodeRange.start >= state.startOffset && nodeRange.end <= state.endOffset) {
+          const diagRange = lsp.Range.create(
+            state.lineNumber, nodeRange.start - state.startOffset,
+            state.lineNumber, Math.max(nodeRange.end, nodeRange.start + 1) - state.startOffset
+          )
+          const diag = lsp.Diagnostic.create(diagRange, node.errorMessage ?? "", severity)
+          state.diagnostics.push(diag)
+        }
       }
     }
     return node.errorType == NodeErrorType.Error
@@ -1125,11 +1153,13 @@ export class LspServer {
 
   private getSemanticTokens(sourceFile: SourceFile, startLine: number, endLine: number): lsp.SemanticTokens {
     const data: number[] = []
-    const state: SemanticState = { prevLine: 0, prevStart: 0, data: data }
+    const state: SemanticState = { prevLine: 0, prevStart: 0, startOffset: 0, endOffset: 0, data: data }
     for (let i = startLine; i < endLine; i += 1) {
-      const statement = sourceFile.statements[i]
+      let statement = sourceFile.statements[i]
       if (statement.enabled) {
         state.prevStart = 0
+        state.startOffset = statement.startOffset ?? 0
+        state.endOffset = statement.endOffset ?? statement.sourceLine.length
         this.semanticExpression(state, i, statement)
       }
     }
@@ -1141,7 +1171,19 @@ export class LspServer {
       const symExp = expression
       for (let i = 0; i < symExp.children.length; i += 1) {
         const token = symExp.children[i]
+        const range = token.getRange()
+        if (range) {
+          // NOTE: using range.start instead of range.end
+          //  to protect against token overlapping range
+          if (range.start < state.startOffset) {
+            continue
+          }
+          if (range.start >= state.endOffset) {
+            break
+          }
+        }
         if (token instanceof Token) {
+          // *** TODO: use semanticToken() instead of duplicate code?
           // *** get rid of Symbol check? ***
           if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
             let index = SemanticToken.invalid
@@ -1152,7 +1194,7 @@ export class LspServer {
             } else if (symExp.isVariableType()) {
               index = SemanticToken.var
             } else if (symExp.symbol) {
-              if (symExp.symbol.type == SymbolType.MacroName) {
+              if (symExp.symbol.type == SymbolType.TypeName) {
                 index = SemanticToken.macro
               } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage
@@ -1178,8 +1220,8 @@ export class LspServer {
             if (index == SemanticToken.invalid) {   // ***
               continue
             }
-            state.data.push(lineNumber - state.prevLine, token.start - state.prevStart, token.length, index, bits)
-            state.prevStart = token.start
+            state.data.push(lineNumber - state.prevLine, token.start - state.startOffset - state.prevStart, token.length, index, bits)
+            state.prevStart = token.start - state.startOffset
             state.prevLine = lineNumber
           } else {
             this.semanticToken(state, lineNumber, token)
@@ -1199,6 +1241,17 @@ export class LspServer {
   }
 
   private semanticToken(state: SemanticState, lineNumber: number, token: Token) {
+    const range = token.getRange()
+    if (range) {
+      // NOTE: using range.start instead of range.end
+      //  to protect against token overlapping range
+      if (range.start < state.startOffset) {
+        return
+      }
+      if (range.start >= state.endOffset) {
+        return
+      }
+    }
     let index = -1
     let bits = 0
     if (token.type == TokenType.Comment) {
@@ -1229,8 +1282,8 @@ export class LspServer {
       index = SemanticToken.invalid
     }
     if (index >= 0) {
-      state.data.push(lineNumber - state.prevLine, token.start - state.prevStart, token.length, index, bits)
-      state.prevStart = token.start
+      state.data.push(lineNumber - state.prevLine, token.start - state.startOffset - state.prevStart, token.length, index, bits)
+      state.prevStart = token.start - state.startOffset
       state.prevLine = lineNumber
     }
   }

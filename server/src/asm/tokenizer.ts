@@ -1,5 +1,6 @@
 
-import { Syntax } from "./syntax"
+import { SyntaxDef, OpPatterns, Syntax } from "./syntaxes/syntax_types"
+import { SyntaxDefs } from "./syntaxes/syntax_defs"
 
 //------------------------------------------------------------------------------
 
@@ -108,17 +109,38 @@ export class Token extends Node {
   isEmpty(): boolean {
     return this.start == this.end
   }
+
+  split(offset: number): Token[] {
+    const result: Token[] = []
+    result.push(new Token(this.sourceLine, this.start, this.start + offset, this.type))
+    result.push(new Token(this.sourceLine, this.start + offset, this.end, this.type))
+    return result
+  }
 }
 
 //------------------------------------------------------------------------------
 
 export class Tokenizer {
 
-  // when syntax is unknown, try to accomodate parsing every syntax
-  public syntax = Syntax.UNKNOWN
-
   protected sourceLine: string = ""
   protected position: number = 0
+
+  // when syntax is unknown, try to accommodate parsing every syntax
+  private _syntax = Syntax.UNKNOWN
+  private _syntaxDef = SyntaxDefs[this._syntax]
+
+  public get syntaxDef(): SyntaxDef {
+    return this._syntaxDef
+  }
+
+  public get syntax(): Syntax {
+    return this._syntax
+  }
+
+  public set syntax(syntax: Syntax) {
+    this._syntax = syntax
+    this._syntaxDef = SyntaxDefs[this._syntax]
+  }
 
   protected setSourceLine(sourceLine: string) {
     this.sourceLine = sourceLine
@@ -242,14 +264,22 @@ export class Tokenizer {
       }
 
       if (code >= 0x30 && code <= 0x39) {			// 0-9
-        sawDigit = true
+        if (sawOperator) {
+          sawSymbol = true
+        } else {
+          sawDigit = true
+        }
         this.position += 1
         continue
       }
 
       if ((code >= 0x41 && code <= 0x46) ||		// A-F
           (code >= 0x61 && code <= 0x66)) {		// a-f
-        sawHex = true
+        if (sawOperator) {
+          sawSymbol = true
+        } else {
+          sawHex = true
+        }
         this.position += 1
         continue
       }
@@ -262,62 +292,38 @@ export class Tokenizer {
         continue
       }
 
-      // TODO: Merlin allows symbols to contain any character > ':'
-      //	Specifically, "?" is used in some assembly code.
-      if (char == "?") {
-        if (!this.syntax || this.syntax == Syntax.MERLIN) {
-          sawSymbol = true
-          this.position += 1
-          continue
-        }
-      }
-
       if (start == this.position) {
         sawOperator = true
         this.position += 1
 
-        // collect repeats of same operator into single token
-        const repeatIndex = "=&|:><+-".indexOf(char)
-        if (repeatIndex != -1) {
-          while (this.position < this.sourceLine.length) {
-            if (this.sourceLine[this.position] != char) {
-              break
-            }
-            this.position += 1
-            // limit "=&|:" to doubles only
-            if (repeatIndex < 4) {
-              break
-            }
+        // match operator patterns
+        let opPattern = char
+        let offset = 0
+        while (this.position + offset < this.sourceLine.length) {
+          const nextChar = this.sourceLine[this.position + offset]
+          if (!"<>=!&|^:+-?".includes(nextChar)) {
+            break
           }
-          // look for Merlin's "--^"
-          if (repeatIndex == 7) { // "-"
-            if (!this.syntax || this.syntax == Syntax.MERLIN) {
-              if (this.position - start == 2) {
-                if (this.position < this.sourceLine.length) {
-                  if (this.sourceLine[this.position] == "^") {
-                    this.position += 1
-                  }
-                }
-              }
-            }
+          opPattern += nextChar
+          offset += 1
+          if (OpPatterns.includes(opPattern)) {
+            this.position += offset
+            offset = 0
           }
         }
 
-        // combine some comparison operators (:=, !=, >=, <=, <>, ><)
-        if (this.position < this.sourceLine.length) {
-          if (this.position - start == 1) {
-            const nextChar = this.sourceLine[this.position]
-            if (nextChar == "=") {
-              if (":!><".indexOf(char) != -1) {
-                this.position += 1
-              }
-            } else if (char == ">" && nextChar == "<") {
-              this.position += 1
-            } else if (char == "<" && nextChar == ">") {
-              this.position += 1
-            }
+        // if operator is allowed as start of symbol token, continue tokenizing
+        if (this.position - start == 1) {
+          if (this.syntaxDef.symbolTokenPrefixes.includes(char)) {
+            continue
           }
         }
+
+      // if operator is allowed in the middle of symbol token, continue tokenizing
+      } else if (this.syntaxDef.symbolTokenContents.includes(char)) {
+        sawSymbol = true
+        this.position += 1
+        continue
       }
 
       break

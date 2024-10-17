@@ -1,0 +1,10 @@
+{
+  "settings": {
+    "syntax": "merlin",
+    "upperCase": false
+  },
+  "modules": [
+    { "src": "pass.asm" },
+    { "src": "fail.asm" }
+  ]
+}

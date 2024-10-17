@@ -1,187 +1,18 @@
 
-import { SourceFile, Module, LineRecord } from "./project"
-import { Statement, ConditionalStatement, GenericStatement, ClosingBraceStatement, EquStatement, MacroDefStatement, RepeatStatement, MacroInvokeStatement } from "./statements"
-import { ScopeState, SymbolType, SymbolFrom } from "./symbols"
+import { LineRecord } from "./project"
+import { Assembler, NestingType } from "./assembler"
+import { Statement, ConditionalStatement, GenericStatement, ClosingBraceStatement, EquStatement, ContinuedStatement } from "./statements"
+import { DefineDefStatement } from "./statements"
+import { SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression } from "./expressions"
 
 // just for the CA65 macro invoke work-around
 import { Parser } from "./parser"
-import { Syntax } from "./syntax"
+import { Syntax } from "./syntaxes/syntax_types"
 
 //------------------------------------------------------------------------------
 
-type ConditionalState = {
-  enableCount: number,
-  satisfiedCount: number,
-  statement?: ConditionalStatement
-}
-
-export class Conditional {
-  private enableCount = 1
-  private satisfiedCount = 0
-  public statement?: ConditionalStatement
-  private stack: ConditionalState[] = []
-
-  public push(): boolean {
-    // set an arbitrary limit on stack size to catch infinite recursion
-    if (this.stack.length > 255) {
-      return false
-    }
-    this.stack.push({ enableCount: this.enableCount, satisfiedCount: this.satisfiedCount, statement: this.statement})
-    this.enableCount -= 1
-    this.satisfiedCount = 0
-    this.statement = undefined
-    return true
-  }
-
-  public pull(): boolean {
-    if (this.stack.length == 0) {
-      return false
-    }
-    const state = this.stack.pop()
-    if (state) {
-      this.enableCount = state.enableCount
-      this.satisfiedCount = state.satisfiedCount
-      this.statement = state.statement
-    }
-    return true
-  }
-
-  // True when a previous conditional clause was true,
-  //  used to determine if the "else" clause should be enabled.
-  public wasSatisfied(): boolean {
-    return this.satisfiedCount > 0
-  }
-
-  // Called for each clause, used to control
-  //  enable/disable across clauses.
-  public setSatisfied(isSatisfied: boolean) {
-    if (isSatisfied) {
-      this.satisfiedCount = 1
-      this.enable()
-    } else if (this.satisfiedCount > 0) {
-      // if the previous clause was satisifed,
-      //  disable all remaining clauses
-      if (this.satisfiedCount == 1) {
-        this.disable()
-      }
-      this.satisfiedCount += 1
-    }
-  }
-
-  public enable() {
-    this.enableCount += 1
-  }
-
-  public disable() {
-    this.enableCount -= 1
-  }
-
-  public isEnabled(): boolean {
-    return this.enableCount > 0
-  }
-
-  public isComplete(): boolean {
-    return this.stack.length == 0
-  }
-}
-
-//------------------------------------------------------------------------------
-
-type FileStateEntry = {
-  file: SourceFile | undefined
-  startLineIndex: number
-  curLineIndex: number
-  endLineIndex: number      // exclusive
-  loopCount: number         // includes first pass
-  isMacro: boolean
-}
-
-class FileReader {
-  public state: FileStateEntry
-  private stateStack: FileStateEntry[] = []
-
-  constructor() {
-    this.state = {
-      file: undefined,
-      startLineIndex: 0,
-      curLineIndex: 0,
-      endLineIndex: 0,
-      loopCount: 1,
-      isMacro: false
-    }
-  }
-
-  push(file: SourceFile) {
-    this.stateStack.push(this.state)
-    this.state = {
-      file: file,
-      startLineIndex: 0,
-      curLineIndex: 0,
-      endLineIndex: file.lines.length,
-      loopCount: 1,
-      isMacro: false
-    }
-  }
-
-  pop() {
-    const nextState = this.stateStack.pop()
-    if (nextState) {
-      this.state = nextState
-    }
-  }
-}
-
-//------------------------------------------------------------------------------
-
-class MacroDef {
-
-  // TODO: fill in guts
-
-  constructor(name: SymbolExpression) {
-  }
-}
-
-//------------------------------------------------------------------------------
-
-export enum NestingType {
-  Conditional = 0,
-  Macro       = 1,
-  Repeat      = 2,
-  Struct      = 3,    // CA65, Dummy for MERLIN
-  Enum        = 4,    // CA65
-  Union       = 5,    // CA65
-  Scope       = 6,    // CA65
-  Proc        = 7,    // CA65
-  Zone        = 8,    // ACME
-  PseudoPc    = 9,    // ACME
-  Cpu         = 10,   // ACME
-  Count
-}
-
-type NestingEntry = {
-  type: NestingType
-  statement: Statement
-  bracePopProc?: () => void
-}
-
-export class Preprocessor {
-
-  public module: Module
-  private fileReader = new FileReader()
-  public conditional = new Conditional()
-  public scopeState = new ScopeState()
-  private curLine?: LineRecord
-  private macroDef?: MacroDef
-  private macroStart?: Statement
-  private syntaxStats: number[] = []
-
-  private nestingStack: NestingEntry[] = []
-  private nestingCounts: number[] = new Array(NestingType.Count).fill(0)
-
-  constructor(module: Module) {
-    this.module = module
-  }
+export class Preprocessor extends Assembler {
 
   // (pass 1)
     // parse all statements in all connected source files (no symbol linkage)
@@ -204,6 +35,10 @@ export class Preprocessor {
     const lineRecords: LineRecord[] = []
     this.syntaxStats = syntaxStats
 
+    // *** might be undefined for some syntaxes?
+    this.currentPC = this.module.project.syntaxDef.defaultOrg
+    this.nextPC = undefined
+
     // NOTE: this causes each source line of each source file to be parsed first
     if (!this.includeFile(fileName)) {
       // *** error messaging?
@@ -220,13 +55,20 @@ export class Preprocessor {
             statement: undefined
           }
 
-          this.curLine = line
-
+          this.currentLine = line
           line.statement = this.fileReader.state.file.statements[line.lineNumber]
-          // *** mark statement as used to detect multiple references? ***
 
           // must advance before parsing that may include a different file
           this.fileReader.state.curLineIndex += 1
+
+          // assign PC to "*" expressions now that it's known
+          if (!(line.statement instanceof ContinuedStatement)) {
+            line.statement.forEachExpression((expression) => {
+              if (expression instanceof exp.PcExpression) {
+                expression.setValue(this.currentPC)
+              }
+            })
+          }
 
           let conditional = false
           if (line.statement instanceof ConditionalStatement) {
@@ -240,9 +82,12 @@ export class Preprocessor {
             }
 
             if (conditional) {
+
+              // *** maybe call processSymbolRefs instead ***?
+
               // need symbol references hooked up before resolving conditional expression
               this.processSymbols(line.statement, true)
-              // TODO: consider folding applyConditional into preprocess
+              // *** TODO: consider folding applyConditional into preprocess
               line.statement.applyConditional(this)
             }
           }
@@ -261,7 +106,7 @@ export class Preprocessor {
                 if (line.statement.labelExp) {
                   const labelName = line.statement.labelExp.getString()
                   const foundSym = this.module.symbolMap.get(labelName)
-                  if (foundSym && foundSym.type == SymbolType.MacroName) {
+                  if (foundSym && foundSym.type == SymbolType.TypeName) {
                     const parser = new Parser()
                     const newStatement = parser.reparseAsMacroInvoke(line.statement, this.module.project.syntax)
                     if (newStatement) {
@@ -271,14 +116,33 @@ export class Preprocessor {
                   }
                 }
               }
+
+              // NOTE: need to push zone before processing named params
               line.statement.preprocess(this, enabled)
               this.processSymbols(line.statement, true)
+
+              // force a popScope after a DefineDefStatement because its scope
+              //  only last for that line until its symbols have been processed
+              if (line.statement instanceof DefineDefStatement) {
+                line.statement.endPreprocess(this, enabled)
+              }
             } else {
+              // NOTE: no need to process symbols here because line is disabled
               line.statement.preprocess(this, enabled)
               // TODO: reconcile lineRecord and statement use on disabled lines
               line.statement.enabled = false
               line.statement = new GenericStatement()
             }
+          }
+
+          line.statement.PC = this.currentPC
+          if (this.nextPC !== undefined) {
+            this.currentPC = this.nextPC
+            this.nextPC = undefined
+          } else {
+            const deltaPC = line.statement.getSize() ?? 0
+            // *** TODO: if size undefined, mark error? ***
+            this.currentPC += deltaPC
           }
 
           // don't add new statement if shared file already has one
@@ -295,7 +159,7 @@ export class Preprocessor {
       this.fileReader.pop()
     }
 
-    this.curLine = undefined
+    this.currentLine = undefined
 
     while (true) {
       const entry = this.nestingStack.pop()
@@ -319,98 +183,75 @@ export class Preprocessor {
     return lineRecords
   }
 
-  includeFile(fileName: string): boolean {
-    const currentFile = this.fileReader.state.file
-    const sourceFile = this.module.openSourceFile(fileName, currentFile)
-    if (!sourceFile) {
-      return false
-    }
-    sourceFile.parseStatements(this.syntaxStats)
-    this.fileReader.push(sourceFile)
-    return true
-  }
-
-  public inMacroDef(): boolean {
-    return this.macroDef != undefined
-  }
-
-  // TODO: pass in parameter list too?
-  public startMacroDef(macroName: SymbolExpression) {
-    // NOTE: caller should have checked this and flagged an error
-    if (!this.macroDef) {
-      this.macroStart = this.curLine!.statement
-      this.macroDef = new MacroDef(macroName)
-
-      // TODO: does this scope handling make sense for all syntaxes?
-      this.scopeState.pushScope(macroName.getString())
+  // assign symbol's full name, possibly before scope changes
+  public preprocessSymbol(symExp: SymbolExpression) {
+    if (!symExp.fullName) {
+      symExp.fullName = this.scopeState.setSymbolExpression(symExp)
     }
   }
 
-  public endMacroDef() {
-    // NOTE: caller should have checked this and flagged an error
-    if (this.macroDef) {
-
-      if (this.macroStart) {
-        this.macroStart.foldEnd = this.curLine!.statement
-        this.macroStart = undefined
-      }
-
-      // TODO: does this scope handling make sense for all syntaxes?
-      this.scopeState.popScope()
-
-      this.macroDef = undefined
-    }
-  }
-
-  public topNestingType(): NestingType | undefined {
-    const length = this.nestingStack.length
-    return length > 0 ? this.nestingStack[length - 1].type : undefined
-  }
-
-  public isNested(type: NestingType): boolean {
-    return this.nestingCounts[type] != 0
-  }
-
-  public pushNesting(type: NestingType, bracePopProc?: () => void) {
-    if (this.curLine!.statement) {
-      this.nestingStack.push({ type, statement: this.curLine!.statement, bracePopProc})
-      this.nestingCounts[type] += 1
-    }
-  }
-
-  // NOTE: Caller will have already verified there's an entry
-  //  to pop and that it's the correct one.
-  public popNesting(bracePop = false): boolean {
-    const entry = this.nestingStack.pop()
-    if (entry) {
-      if (this.nestingCounts[entry.type]) {
-        this.nestingCounts[entry.type] -= 1
-        if (bracePop && entry.bracePopProc) {
-          entry.bracePopProc()
+  // TODO: get rid of this after switch to real assembly
+  // *** maybe pass in expression instead?
+  public processSymbolRefs(statement: Statement) {
+    statement.forEachExpression((expression) => {
+      if (expression instanceof SymbolExpression) {
+        const symExp = expression
+        if (!symExp.isDefinition && !symExp.isLocalType() && !symExp.isVariableType()) {
+          if (!symExp.fullName) {
+            // assume caller is in first pass so scope is valid here
+            symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+          }
+          if (symExp.fullName && !symExp.symbol) {
+            const foundSym = this.module.symbolMap.get(symExp.fullName)
+            if (foundSym) {
+                symExp.symbol = foundSym
+                symExp.symbolType = foundSym.type
+                symExp.fullName = foundSym.fullName
+                foundSym.addReference(symExp)
+            }
+          }
         }
-        entry.statement.foldEnd = this.curLine!.statement
-        return true
-      } else {
-        this.nestingStack.push(entry)
+      } else if (expression instanceof exp.PcExpression) {
+        expression.setValue(this.currentPC)
       }
-    }
-    return false
+    })
   }
 
   // *** put in module instead? ***
+  // *** split out first pass code?
   // *** later, when scanning disabled lines, still process references ***
   private processSymbols(statement: Statement, firstPass: boolean) {
     // *** maybe just stop on error while walking instead of walking twice
-    if (!statement.hasAnyError()) {
+    if (!statement.hasAnyError() && !(statement instanceof ContinuedStatement)) {
       statement.forEachExpression((expression) => {
         if (expression instanceof SymbolExpression) {
+
           const symExp = expression
 
-          // look for symbol references that should be converted to variables
           if (firstPass && !symExp.isDefinition) {
+
+            const symName = symExp.getString()
+
+            // look for symbol references that are macro parameters
+            // *** or struct or union ***
+            // *** look at nesting? ***
+            if (this.typeDef && !symExp.symbol) {
+              let paramName = symName
+              if (this.syntaxDef.namedParamPrefixes.includes(symName[0])) {
+                paramName = symName.substring(1)
+              }
+              const foundParam = this.typeDef.getParamMap().get(paramName)
+              if (foundParam) {
+                symExp.symbol = foundParam
+                symExp.symbolType = foundParam.type
+                symExp.fullName = foundParam.fullName
+                foundParam.addReference(symExp)
+              }
+            }
+
+            // look for symbol references that should be converted to variables
             // NOTE: if this changes, also change setSymbolExpression
-            const variableName = symExp.getString()
-            const foundVar = this.module.variableMap.get(variableName)
+            const foundVar = this.module.variableMap.get(symName)
             if (foundVar) {
               symExp.symbol = foundVar
               symExp.symbolType = foundVar.type
@@ -428,7 +269,7 @@ export class Preprocessor {
                 if (!symExp.isVariableType()) {
                   const foundSym = this.module.symbolMap.get(symExp.fullName)
                   if (foundSym) {
-                    if (symExp.symbolFrom != SymbolFrom.Import) {
+                    if (symExp.symbolFrom != SymbolFrom.Import && !symExp.isWeak) {
                       symExp.setError("Duplicate symbol (use Go To Definition)")
                     }
                     // turn symExp into a reference to the original symbol
@@ -497,16 +338,16 @@ export class Preprocessor {
                 // TODO: For now, don't report any missing symbols within
                 //  a macro definition.  This should eventually look at
                 //  named macro parameters and match against those. (ca65-only?)
-                if (firstPass && this.inMacroDef()) {
+                if (firstPass && this.inTypeDef()) {
                   // TODO: be smarter about scoping locals
                   if (!symExp.isLocalType()) {
-                    symExp.suppressUnknown = true
+                    symExp.isWeak = true
                   }
                 }
-                if (!symExp.suppressUnknown) {
+                if (!symExp.isWeak) {
                   // TODO: make temporary project check a setting
                   if (symExp.isLocalType() || !this.module.project.isTemporary) {
-                    if (symExp.symbolType == SymbolType.MacroName) {
+                    if (symExp.symbolType == SymbolType.TypeName) {
                       symExp.setError("Unknown macro or opcode")
                     } else if (!firstPass) {
                       symExp.setError("Symbol not found")
@@ -525,7 +366,7 @@ export class Preprocessor {
 //------------------------------------------------------------------------------
 
 import * as exp from "./expressions"
-import { Op } from "./syntax"
+import { Op } from "./syntaxes/syntax_types"
 
 export class SymbolUtils {
 

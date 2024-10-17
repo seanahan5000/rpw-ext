@@ -1,5 +1,18 @@
 # RPW 65 Changelog
 
+### [1.3.0] - 2024-10-17
+
+Major rewrite of syntax parsing to move from an imperitive implementation to a definition-driven one.
+
+#### Added:
+* Hover, auto complete and descriptions for all directives/psuedo ops
+* 64tass syntax support
+* Missing keywords and aliases for all syntaxes
+* Improved auto-detect of syntax
+* Support for parsing line continuations
+* Many more test cases
+* Many other fixes
+
 ### [1.2.2] - 2024-08-15
 
 General collection of improvements, including Merlin additions so Prince of Persia sources parse cleanly-ish.

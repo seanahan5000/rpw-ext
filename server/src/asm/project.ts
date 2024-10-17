@@ -1,11 +1,12 @@
 
 import * as fs from 'fs'
 import { RpwProject, RpwSettings } from "../rpw_types"
-import { Syntax, SyntaxMap, SyntaxDefs } from "./syntax"
+import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
+import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
 import { Parser } from "./parser"
 import { Preprocessor } from "./preprocessor"
-import { Assembler } from "./assembler"
+import { TypeDef } from "./assembler"
 import { Symbol } from "./symbols"
 
 function fixBackslashes(inString: string): string {
@@ -59,6 +60,7 @@ export class Project {
   private inferredSyntax = Syntax.UNKNOWN
 
   public syntax = Syntax.UNKNOWN
+  public syntaxDef = SyntaxDefs[Syntax.UNKNOWN]
   public upperCase: boolean = true
   public tabSize = 4
   public tabStops = [0, 16, 20, 40]
@@ -184,6 +186,7 @@ export class Project {
     } else {
       this.syntax = this.inferredSyntax
     }
+    this.syntaxDef = SyntaxDefs[this.syntax]
 
     this.upperCase = settings?.upperCase ?? defaults?.upperCase ?? true
     this.tabSize = settings?.tabSize ?? defaults?.tabSize ?? 4
@@ -191,6 +194,8 @@ export class Project {
     if (this.tabStops[0] != 0) {
       this.tabStops.unshift(0)
     }
+
+    // *** this or caller should send syntax changed notification to client ***
   }
 
   update() {
@@ -211,8 +216,13 @@ export class Project {
           if (syntaxStats[i] > bestCount) {
             bestCount = syntaxStats[i]
             bestMatch = i
-          } else if (syntaxStats[i] == bestCount) { // ignore ties
-            bestMatch = Syntax.UNKNOWN
+          } else if (syntaxStats[i] == bestCount) {
+            if (bestMatch == Syntax.MERLIN && i == Syntax.LISA) {
+              // ties between MERLIN and LISA go to MERLIN
+            } else {
+              // ignore ties
+              bestMatch = Syntax.UNKNOWN
+            }
           }
         }
         if (bestMatch != Syntax.UNKNOWN) {
@@ -319,6 +329,9 @@ export class Module {
   public symbolMap = new Map<string, Symbol>
   public variableMap = new Map<string, Symbol>
 
+  // *** split by type ***
+  public macroMap = new Map<string, TypeDef>
+
   //*** separate list of exported symbols (also in this.symbols)
   //*** when creating xxx = $ffff symbols, search all other module exports and link
     //*** linked symbol needs file/line information or linkage
@@ -343,9 +356,10 @@ export class Module {
     this.lineRecords = []
     this.symbolMap = new Map<string, Symbol>
     this.variableMap = new Map<string, Symbol>
+    this.macroMap = new Map<string, TypeDef>
 
-    const prep = new Preprocessor(this)
-    const lineRecords = prep.preprocess(this.srcName, syntaxStats)
+    const asm = new Preprocessor(this)
+    const lineRecords = asm.preprocess(this.srcName, syntaxStats)
     if (!lineRecords) {
       // *** error handling ***
       return
@@ -353,7 +367,6 @@ export class Module {
 
     this.lineRecords = lineRecords
 
-    const asm = new Assembler(this)
     asm.assemble(this.lineRecords)
 
     // link up all symbols

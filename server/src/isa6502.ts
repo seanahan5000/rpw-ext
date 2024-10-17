@@ -173,6 +173,7 @@ export abstract class Isa6502 {
 
   // status flags: "nv1bdizc"
   // TODO: add 65C02 and (maybe) 65816
+  // TODO: support brk $99
   public static ops = [
     { op: "brk", ad: "",    bc: 1, sf: "b",    cy: "7", fc: true }, // 00
     { op: "ora", ad: "idx", bc: 2, sf: "nz",   cy: "6"           }, // 01

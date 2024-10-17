@@ -1,11 +1,11 @@
-This Retro Programmer's Workshop (RPW) 65 extension provides Visual Studio Code support for 6502 assembly language in several common syntaxes.  (See the RPW A2 extension for related functionality.)
+This Retro Programmer's Workshop (RPW) 65 extension provides Visual Studio Code support for 6502 assembly language in several syntaxes.  (See the RPW A2 extension for related functionality.)
 
 Features include:
-* Merlin, dasm, ACME, ca65, and LISA 2.5 syntaxes
+* Merlin, dasm, ACME, ca65, 64tass, and LISA 2.5 syntaxes
 * Semantic syntax highlighting
 * Context specific auto-completion
 * Symbol hover/tooltips
-* Opcode hover with descriptions, modes, cycle counts
+* Opcode and directive hover with descriptions, modes, etc.
 * Variable tab stops with formatting
 * Rename Symbol
 * Renumber Locals
@@ -13,6 +13,10 @@ Features include:
 * Show References
 * Code folding
 * Diagnostic errors and warnings
+
+Newest additions:
+* 64tass syntax support
+* Pseudo-op/directive hover and auto-complete
 
 Note that no external assembler executable is required for any syntax.
 

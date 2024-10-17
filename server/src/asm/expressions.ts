@@ -1,7 +1,7 @@
 
 import { SourceFile } from "./project"
 import { Node, NodeRange, Token } from "./tokenizer"
-import { Syntax, Op } from "./syntax"
+import { Op, Syntax } from "./syntaxes/syntax_types"
 import { Symbol, SymbolType, SymbolFrom, isLocalType } from "./symbols"
 
 //------------------------------------------------------------------------------
@@ -9,6 +9,7 @@ import { Symbol, SymbolType, SymbolFrom, isLocalType } from "./symbols"
 export class Expression extends Node {
 
   public children: Node[] = []
+  public name?: string
 
   constructor(children?: Node[]) {
     super()
@@ -143,6 +144,14 @@ export class NumberExpression extends Expression {
 
 //------------------------------------------------------------------------------
 
+// '[' <expression> [, <expression> ...] ']'
+// *** build array of expressions ***
+export class ArrayExpression extends Expression {
+  // ***
+}
+
+//------------------------------------------------------------------------------
+
 export class ParenExpression extends Expression {
 
   private arg: Expression | undefined
@@ -226,8 +235,8 @@ export class SymbolExpression extends Expression {
   public fullName?: string
   public symbol?: Symbol
 
-  // true if symbol was used in an !ifdef, etc. conditional check
-  public suppressUnknown = false
+  // no error when not found (used in !ifdef, for example)
+  public isWeak: boolean = false
 
   constructor(
       children: Node[],
@@ -451,24 +460,23 @@ export class BinaryExpression extends Expression {
 
 export class PcExpression extends Expression {
 
-  private value: number | undefined
+  private pc?: number
 
-  // TODO: pass in PC address source?
   constructor(token?: Token) {
     super(token ? [token] : undefined)
   }
 
-  public setValue(pc: number) {
-    this.value = pc
+  setValue(pc: number) {
+    this.pc = pc
   }
 
   resolve(): number | undefined {
-    return this.value
+    return this.pc
   }
 
   getSize(): number | undefined {
-    if (this.value !== undefined) {
-      return this.value < 256 ? 1 : 2
+    if (this.pc !== undefined) {
+      return this.pc < 0x100 ? 1 : 2
     }
     // *** else return 2???
   }
@@ -479,41 +487,6 @@ export class PcExpression extends Expression {
 export class FileNameExpression extends Expression {
   constructor(token: Token) {
     super([token])
-  }
-}
-
-//------------------------------------------------------------------------------
-
-// *** get rid of this and handle directly in statements? ***
-
-export class AlignExpression extends Expression {
-
-  private value: number | undefined
-  private alignment: Expression
-  private pc: PcExpression
-
-  // TODO: expression might be different based on syntax
-  constructor(alignment: Expression) {
-    super([alignment])
-    this.alignment = alignment
-    this.pc = new PcExpression()
-  }
-
-  resolve(): number | undefined {
-    if (this.value === undefined) {
-      let pc = this.pc.resolve()
-      if (pc !== undefined) {
-        let align = this.alignment.resolve()
-        if (align !== undefined) {
-          this.value = pc % align
-        }
-      }
-    }
-    return this.value
-  }
-
-  getSize(): number | undefined {
-    return this.resolve()
   }
 }
 

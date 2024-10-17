@@ -3,12 +3,13 @@ import * as lsp from 'vscode-languageserver'
 import { LspServer } from "./lsp_server"
 import { SourceFile } from "./asm/project"
 import { Token, TokenType } from "./asm/tokenizer"
-import { OpStatement, OpMode } from "./asm/statements"
+import { OpStatement, OpMode, ContinuedStatement } from "./asm/statements"
 import { OpcodeSets } from "./asm/opcodes"
-import { Syntax, SyntaxDefs } from "./asm/syntax"
+import { SyntaxDefs } from "./asm/syntaxes/syntax_defs"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
 import { Expression, SymbolExpression } from "./asm/expressions"
+import { ParamsParser } from "./asm/syntaxes/params"
 
 //------------------------------------------------------------------------------
 
@@ -77,6 +78,7 @@ export class Completions {
 
   addOpcodes = 0
   addKeywords = 0
+  addKeyConstants = 0
   addMacros = 0
   addConstants = 0
   addZpage = 0
@@ -85,21 +87,25 @@ export class Completions {
   addLocals = 0
   addUnclassified = 0
 
-  scan(sourceFile: SourceFile, lineNumber: number, position: number): lsp.CompletionItem[] | undefined {
+  scan(sourceFile: SourceFile, lineNumber: number, curPosition: number): lsp.CompletionItem[] | undefined {
 
     let loc: Loc | undefined
-    const statement = sourceFile.statements[lineNumber]
-    const labelRange = statement.labelExp?.getRange()
-    const opRange = statement.opExp?.getRange()
+    const curStatement = sourceFile.statements[lineNumber]
+    const firstStatement = (curStatement instanceof ContinuedStatement) ? curStatement.firstStatement : curStatement
+    const labelRange = firstStatement.labelExp?.getRange()
+    const opRange = firstStatement.opExp?.getRange()
     let checkXY = false
     let checkInd = false
     let appendIndY = false
     let leadingSymbol = ""
 
+    const firstPosition = curPosition + (curStatement.startOffset ?? 0)
+    const syntaxDef = SyntaxDefs[sourceFile.module.project.syntax]
+
     // no completions when in comment (top-level token)
-    for (let token of statement.children) {
+    for (let token of firstStatement.children) {
       if (token instanceof Token && token.type == TokenType.Comment) {
-        if (position >= token.start) {
+        if (firstPosition >= token.start) {
           return
         }
       }
@@ -107,20 +113,20 @@ export class Completions {
 
     // when inside a hex value, don't suggest completions
     //  ("$C" should not suggest "COUNT", for example)
-    const inHex = inHexToken(statement, position)
+    const inHex = inHexToken(firstStatement, firstPosition)
 
-    const prevChar = statement.sourceLine[position - 1] ?? ""
+    const prevChar = firstStatement.sourceLine[firstPosition - 1] ?? ""
 
-    if (statement.opExp && opRange) {
-      if (statement.labelExp && labelRange) {
-        if (position >= labelRange.start && position <= labelRange.end) {
+    if (firstStatement.opExp && opRange) {
+      if (firstStatement.labelExp && labelRange) {
+        if (firstPosition >= labelRange.start && firstPosition <= labelRange.end) {
           loc = Loc.inLabel
         }
       }
       if (loc == undefined) {
-        if (position < opRange.start) {
+        if (firstPosition < opRange.start) {
           loc = Loc.beforeOpcode
-        } else if (position <= opRange.end) {
+        } else if (firstPosition <= opRange.end) {
           loc = Loc.inOpcode
         }
       }
@@ -131,13 +137,13 @@ export class Completions {
         //  loc = Loc.afterArgs
         loc = Loc.afterOpcode
       }
-    } else if (statement.labelExp && labelRange) {
-      if (position >= labelRange.start && position <= labelRange.end) {
+    } else if (firstStatement.labelExp && labelRange) {
+      if (firstPosition >= labelRange.start && firstPosition <= labelRange.end) {
         loc = Loc.inLabel
       } else {
         loc = Loc.afterLabel
       }
-    } else if (position == 0) {
+    } else if (firstPosition == 0) {
       loc = Loc.inLabel
     } else {
       loc = Loc.afterLabel
@@ -156,10 +162,12 @@ export class Completions {
       // use default completions
     } else if (loc == Loc.inOpcode) {
       const firstChar = opRange ? opRange.sourceLine[opRange.start] : ""
-      const syntax = sourceFile.module.project.syntax
-      // TODO: more logic here
-      if ((firstChar == "." || firstChar == ":") && syntax == Syntax.CA65) {
+      if (syntaxDef.keywordPrefixes.includes(firstChar)) {
+        // TODO: what if prefix is also used for symbol? (dasm)
         this.addKeywords = ++index
+        leadingSymbol = firstChar
+      } else if (syntaxDef.macroInvokePrefixes.includes(firstChar)) {
+        this.addMacros = ++index
         leadingSymbol = firstChar
       } else {
         // might depend on statement type
@@ -169,15 +177,15 @@ export class Completions {
       }
     } else if ((loc == Loc.afterOpcode || loc == Loc.inArgs) && !inHex) {
       // initial args completions
-      if (statement instanceof OpStatement) {
-        if (statement.mode == OpMode.NONE) {
-          if (statement.opcode.NONE) {
+      if (firstStatement instanceof OpStatement) {
+        if (firstStatement.mode == OpMode.NONE) {
+          if (firstStatement.opcode.NONE) {
             // use default completions
             // TODO: how to force none?
           } else {
             // NOTE: nothing has been typed yet to assign a mode,
             //  so everything is possible at this point
-            if (statement.opNameLC == "jsr" || statement.opNameLC == "jmp") {
+            if (firstStatement.opNameLC == "jsr" || firstStatement.opNameLC == "jmp") {
               this.addCode = ++index
               this.addUnclassified = ++index
             } else {
@@ -187,7 +195,7 @@ export class Completions {
             }
           }
         } else {
-          switch (statement.mode) {
+          switch (firstStatement.mode) {
             case OpMode.A:
               // use default completions
               // TODO: how to force none?
@@ -204,8 +212,8 @@ export class Completions {
               this.addUnclassified = ++index
               break
             case OpMode.ABS:
-              if (statement.opNameLC == "jsr" || statement.opNameLC == "jmp") {
-                // TODO: handle both zone and cheap locals
+              if (firstStatement.opNameLC == "jsr" || firstStatement.opNameLC == "jmp") {
+                // *** TODO: handle both zone and cheap locals
                 if (prevChar == ":") {
                   this.addLocals = ++index
                 } else {
@@ -241,7 +249,7 @@ export class Completions {
               break
             case OpMode.REL:
               // TODO: constrain to only close-by code
-              // TODO: handle both zone and cheap locals
+              // *** TODO: handle both zone and cheap locals
               if (prevChar == ":") {
                 this.addLocals = ++index
               } else {
@@ -255,6 +263,7 @@ export class Completions {
         if (!inHex) {
           // TODO: need better auto completes based on keyword
           // TODO: better completes for macros
+          this.addKeyConstants = ++index
           this.addConstants = ++index
           this.addZpage = ++index
           this.addData = ++index
@@ -271,16 +280,18 @@ export class Completions {
         this.addCode = ++index
         this.addUnclassified = ++index
       }
+    // } else if (loc == Loc.afterOpcode || loc == Loc.inArgs) {
+    //   // ***
     }
 
     // if "X" or "Y" at the end of an indirect opcode triggered
     //  a completion, don't return any results
-    if (checkXY && position > 1) {
-      let p = position
-      const prevCharLC = statement.sourceLine[--p].toLowerCase()
+    if (checkXY && firstPosition > 1) {
+      let p = firstPosition
+      const prevCharLC = firstStatement.sourceLine[--p].toLowerCase()
       if (prevCharLC == "x" || prevCharLC == "y") {
         while (p > 0) {
-          const c = statement.sourceLine[--p]
+          const c = firstStatement.sourceLine[--p]
           if (c == " " || c == "\t") {
             continue
           }
@@ -322,17 +333,40 @@ export class Completions {
     if (this.addKeywords) {
       const syntax = sourceFile.module.project.syntax
       if (syntax) {
-        for (let [key] of SyntaxDefs[syntax].keywordMap) {
+        for (let [key, keywordDef] of syntaxDef.keywordMap) {
           if (sourceFile.module.project.upperCase) {
             key = key.toUpperCase()
           }
-          // TODO: only pad keywords that have arguements
-          // TODO: use settings instead of 4
-          key = key.padEnd(4 - leadingSymbol.length, " ")
+
+          // don't include keywords that don't start with the leading symbol
+          if (leadingSymbol != "" && !key.startsWith(leadingSymbol)) {
+            continue
+          }
+
+          const params = keywordDef.params ?? ""
+          const desc = keywordDef.desc ?? ""
+
+          // only pad keywords that have arguments
+          if (params != "") {
+            // TODO: use settings instead of 4
+            key = key.padEnd(3 - leadingSymbol.length, " ")
+            key += " "
+          }
           let item = lsp.CompletionItem.create(key)
           item.sortText = `${this.addKeywords}_${key}`
           item.kind = lsp.CompletionItemKind.Text
-          // TODO: tie this to syntax, check for "!", and/or "+"
+
+          // add keyword documentation
+          // TODO: better formatting (markdown?)
+          if (params != "") {
+            // TODO: sanitize parameter string to human-readable
+            item.detail = params
+          }
+          if (desc != "") {
+            item.documentation = desc
+          }
+
+          // *** TODO: tie this to syntax, check for "!", and/or "+"
           if (leadingSymbol == key[0]) {
             item.insertText = key.substring(1)
           }
@@ -345,7 +379,7 @@ export class Completions {
         || this.addMacros || this.addUnclassified) {
       for (const [key, symbol] of sourceFile.module.symbolMap) {
 
-        if (symbol.type == SymbolType.MacroName) {
+        if (symbol.type == SymbolType.TypeName) {
           if (this.addMacros) {
             // TODO: add leading "+" for ACME syntax? trigger character?
             const item = lsp.CompletionItem.create(key)
@@ -459,6 +493,18 @@ export class Completions {
             item.kind = lsp.CompletionItemKind.Function
             completions.push(item)
           }
+        }
+      }
+    }
+
+    if (this.addKeyConstants) {
+      if (firstStatement.keywordDef?.paramsList) {
+        const constNames = ParamsParser.getConstantNames(firstStatement.keywordDef.paramsList, syntaxDef.paramDefMap)
+        for (let name of constNames) {
+          const item = lsp.CompletionItem.create(name)
+          item.sortText = `${this.addKeyConstants}_${name}`
+          item.kind = lsp.CompletionItemKind.Constant
+          completions.push(item)
         }
       }
     }
