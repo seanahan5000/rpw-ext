@@ -5,7 +5,7 @@ import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
 
-import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
+import { RpwProject, RpwSettings } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
@@ -14,6 +14,7 @@ import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
 import { SyntaxNames } from "./asm/syntaxes/syntax_types"
+import { SourceDoc } from "./code/source_doc"
 import { Isa6502 } from "./isa6502"
 
 //------------------------------------------------------------------------------
@@ -46,6 +47,30 @@ export enum SemanticModifier {
   local     = 0,
   global    = 1,      // TODO: make use of this?
   external  = 2
+}
+
+//------------------------------------------------------------------------------
+
+// *** TODO: figure out how to share this with client ***
+
+type GetCodeBytesArgs = {
+  startLine?: number
+  endLine?: number
+  cycleCounts?: boolean
+}
+
+type CodeBytesEntry = {
+	a?: number			// address
+	d?: number[]		// data bytes
+	e?: boolean			// empty src line
+	c?: string			// cycle count ("3", "2/3", "4+", etc.)
+}
+
+type CodeBytes = {
+  modTime?: number
+  startLine: number
+  cycleCounts?: boolean
+  entries: CodeBytesEntry[]
 }
 
 //------------------------------------------------------------------------------
@@ -92,6 +117,10 @@ class LspProject extends Project {
     this.server.removeTemporary(this, fullPath)
     return super.openSourceFile(module, fullPath)
   }
+
+  codeBytesChanged() {
+    this.server.connection.sendNotification("rpw.codeBytesChanged")
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -114,7 +143,7 @@ type DiagnosticState = {
 
 export class LspServer {
 
-  private connection: lsp.Connection
+  /*private*/ connection: lsp.Connection
   /*private*/ documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument)
 
   private isInitialized: Promise<boolean>
@@ -218,10 +247,10 @@ export class LspServer {
   onInitialize(params: lsp.InitializeParams): lsp.InitializeResult {
 
     // TODO: enable this for debugging immediately after initialize
-    // const n = 1
-    // while (n) {
-    //   console.log()
-    // }
+    const n = 1
+    while (n) {
+      console.log()
+    }
 
     const result: lsp.InitializeResult = {
       capabilities: {
@@ -326,24 +355,11 @@ export class LspServer {
 
       const project = new LspProject(this, await this.defaultSettings)
       if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
+        // *** will this get reported? ***
         throw new Error("Failed to load project")
       }
       this.projects.push(project)
     }
-
-    // if no project, scan for ASM.* files
-    // if (this.projects.length == 0) {
-    //   const files = fs.readdirSync(this.workspaceFolderPath)
-    //   for (let i = 0; i < files.length; i += 1) {
-    //     if (files[i].toUpperCase().indexOf("ASM.") != 0) {
-    //       continue
-    //     }
-    //     if (!this.addFileProject(files[i], false)) {
-    //       // TODO: error handling
-    //     }
-    //     break
-    //   }
-    // }
 
     this.isInitialized_resolve(true)
 
@@ -354,10 +370,13 @@ export class LspServer {
     //   this.connection.console.log('Workspace folder change event received.')
     // })
 
+    this.scheduleUpdate()
+
     // send this so client will ask for initial syntax
     this.connection.sendNotification("rpw.syntaxChanged")
 
-    this.scheduleUpdate()
+    // send this so client will ask for initial code bytes
+    this.connection.sendNotification("rpw.codeBytesChanged")
   }
 
   private async onDidChangeConfiguration() {
@@ -371,6 +390,9 @@ export class LspServer {
 
     // send this so client will ask for syntax
     this.connection.sendNotification("rpw.syntaxChanged")
+
+    // send this so client will ask for initial code bytes
+    this.connection.sendNotification("rpw.codeBytesChanged")
   }
 
   // TODO: need fallback if vscode client not present
@@ -384,6 +406,7 @@ export class LspServer {
     const lowerCase = config.case?.lowerCaseCompletions ?? false
     const upperCase = !lowerCase
     // TODO: could also use "editor.rulers"
+    // *** TODO: should change column settings to match editor.rulers
     const c1 = config.columns?.c1 ?? 16
     const c2 = config.columns?.c2 ?? 4
     const c3 = config.columns?.c3 ?? 20
@@ -532,8 +555,14 @@ export class LspServer {
         const project = sourceFile.module.project as LspProject
         if (project && project.isTemporary) {
           this.removeDiagnostics(sourceFile)
-          const index = this.projects.indexOf(project)
-          this.projects.splice(index, 1)
+          // remove file from module
+          let index = sourceFile.module.sourceFiles.indexOf(sourceFile)
+          sourceFile.module.sourceFiles.splice(index, 1)
+          // if module now empty, remove project
+          if (sourceFile.module.sourceFiles.length == 0) {
+            index = this.projects.indexOf(project)
+            this.projects.splice(index, 1)
+          }
         }
       }
     }
@@ -606,9 +635,136 @@ export class LspServer {
       return
     }
 
-    if (params.command == "rpw65.renumberLocals") {
+    this.executeUpdate()
 
-      this.executeUpdate()
+    if (params.command == "rpw65.getCodeBytesXXX") {
+
+      let startLine: number | undefined
+      let endLine: number | undefined
+      let cycleCounts = false
+      if (params.arguments && params.arguments.length > 1) {
+        startLine = params.arguments[1].startLine
+        endLine = params.arguments[1].endLine
+        cycleCounts = params.arguments[1].cycleCounts ?? false
+      }
+      if (startLine === undefined) {
+        startLine = 0
+      }
+
+      // no .lst file, so try sourceFile.module.lineRecords
+      if (!sourceFile.module.sourceDocs) {
+        if (sourceFile.module.lineRecords) {
+          const codeBytes: CodeBytes = {
+            startLine,
+            cycleCounts,
+            entries: []
+          }
+          let lineIndex = 0
+          for (let line of sourceFile.module.lineRecords) {
+            if (line.sourceFile == sourceFile) {
+              if (lineIndex >= startLine) {
+                if (endLine !== undefined && lineIndex >= endLine) {
+                  break
+                }
+                let entry: CodeBytesEntry = {}
+                if (line.address || (line.bytes && line.bytes.length > 0)) {
+                  entry.a = line.address
+                  entry.d = []
+                  if (line.bytes) {
+                    for (let i = 0; i < line.bytes.length; i += 1) {
+                      entry.d.push(line.bytes[i])
+                    }
+                  }
+                  if (line.statement?.sourceLine == "") {
+                    entry.e = true
+                  }
+                  if (cycleCounts) {
+                    if (line.statement instanceof OpStatement) {
+                      if (line.bytes && line.bytes[0]) {
+                        entry.c = Isa6502.ops[line.bytes[0]].cy
+                        if (entry.c == "2/3+") {
+                          let pageCross = false
+                          if (line.address && line.bytes[1]) {
+                            let offset = line.bytes[1]
+                            if (offset > 127) {
+                              offset -= 256
+                            }
+                            const dstPage = (line.address + 2 + offset) >> 8
+                            pageCross = line.address >> 8 != dstPage
+                          }
+                          entry.c = pageCross ? "2/4" : "2/3"
+                          // *** swap to 4/2 and 3/2 if negative branch ***
+                        } else if (entry.c == "4+") {
+                          if (line.bytes[1] == 0x00) {
+                            entry.c = "4"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                // if (line.address != -1 && line.objLength != 0) {
+                //   if (line.objBuffer) {
+                //     entry.a = line.address
+                //     entry.d = []
+                //     for (let i = 0; i < line.objLength; i += 1) {
+                //       entry.d.push(line.objBuffer[line.objOffset + i])
+                //     }
+                //   }
+                // }
+                codeBytes.entries.push(entry)
+              }
+              lineIndex += 1
+            }
+          }
+          return codeBytes
+        }
+        return
+      }
+
+      // find file in sourceDocs
+      let sourceDoc: SourceDoc | undefined
+      for (let doc of sourceFile.module.sourceDocs) {
+        if (filePath.endsWith(doc.name)) {
+          sourceDoc = doc
+          break
+        }
+      }
+      if (!sourceDoc) {
+        return
+      }
+
+      if (endLine === undefined || endLine > sourceDoc.sourceLines.length) {
+        endLine = sourceDoc.sourceLines.length
+      }
+
+      const codeBytes: CodeBytes = {
+        modTime: sourceFile.module.lstModTime,
+        startLine: startLine,
+        entries: []
+      }
+      for (let i = startLine; i < endLine; i += 1) {
+        const line = sourceDoc.sourceLines[i]
+        let entry: CodeBytesEntry = {}
+        if (line.address != -1 && line.objLength != 0) {
+          if (line.objBuffer) {
+            entry.a = line.address
+            entry.d = []
+            for (let i = 0; i < line.objLength; i += 1) {
+              entry.d.push(line.objBuffer[line.objOffset + i])
+            }
+            if (line.label == "" && line.opcode == "" &&
+                line.args == "" && line.comment == "") {
+              entry.e = true
+            }
+          }
+        }
+        codeBytes.entries.push(entry)
+      }
+      return codeBytes
+    }
+
+    if (params.command == "rpw65.renumberLocals") {
 
       const range = params.arguments[1] as lsp.Range
       if (!range) {
@@ -638,11 +794,9 @@ export class LspServer {
         edits.push(edit)
       }
       return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits }
+    }
 
-    } else if (params.command == "rpw65.getSyntax") {
-
-      this.executeUpdate()
-
+    if (params.command == "rpw65.getSyntax") {
       let syntax = SyntaxNames[sourceFile.module.project.syntax]
       if (syntax) {
         const syntaxes: string[] = []
@@ -652,7 +806,7 @@ export class LspServer {
         }
         return { syntax, syntaxes }
       }
-
+      return
     }
   }
 

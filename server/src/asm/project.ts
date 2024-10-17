@@ -9,6 +9,9 @@ import { Preprocessor } from "./preprocessor"
 import { TypeDef } from "./assembler"
 import { Symbol } from "./symbols"
 
+import { SourceDocBuilder } from "../code/source_builder"
+import { SourceDoc } from "../code/source_doc"
+
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
 }
@@ -70,6 +73,7 @@ export class Project {
 
   public rootDir = "."
   public srcDir: string = ""
+  public binDir: string = ""
 
   public includePaths: string[] = []
   public isTemporary = false
@@ -102,6 +106,7 @@ export class Project {
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
+    this.binDir = this.buildFullDirName(rpwProject.binDir)
 
     if (rpwProject.includes) {
       for (let include of rpwProject.includes) {
@@ -132,9 +137,13 @@ export class Project {
       return false
     }
     for (let module of rpwProject.modules) {
+
       if (module.src) {
         let srcPath = ""
         let srcName = fixBackslashes(module.src)
+        let lstFilePath: string | undefined
+
+        // TODO: is this all really needed?  just use cleanPath?
         const lastSlash = srcName.lastIndexOf("/")
         if (lastSlash != -1) {
           srcPath = srcName.substring(0, lastSlash)
@@ -147,7 +156,13 @@ export class Project {
           }
         }
 
-        this.modules.push(new Module(this, srcPath, srcName))
+        if (module.lst) {
+          lstFilePath = fixBackslashes(module.lst)
+          // *** add a base path from project? lstDir? ***
+          // *** other cleanup on lstFilePath?
+        }
+
+        this.modules.push(new Module(this, srcPath, srcName, lstFilePath))
       }
     }
     return true
@@ -165,6 +180,9 @@ export class Project {
         this.getDirectories(fullName, list)
       }
     }
+  }
+
+  codeBytesChanged() {
   }
 
   settingsChanged(newDefaultSettings?: RpwSettings) {
@@ -326,6 +344,9 @@ export class Module {
   public project: Project
   private srcPath: string     // always in the form "/path" or ""
   private srcName: string     // always just the file name (*** without suffix?)
+  private lstFilePath?: string
+  public lstModTime = 0
+
   public symbolMap = new Map<string, Symbol>
   public variableMap = new Map<string, Symbol>
 
@@ -345,10 +366,46 @@ export class Module {
   // list of all statements for the module, in assembly order, including macro expansions
   public lineRecords: LineRecord[] = []
 
-  constructor(project: Project, srcPath: string, srcName: string) {
+  public sourceDocs?: SourceDoc[]
+
+  constructor(project: Project, srcPath: string, srcName: string, lstName?: string) {
     this.project = project
     this.srcPath = srcPath
     this.srcName = srcName
+
+    if (lstName) {
+
+      this.lstFilePath = cleanPath(this.project.binDir + "/" + lstName)
+
+      if (!fs.existsSync(this.lstFilePath)) {
+        //*** throw error?
+        return
+      }
+
+      this.lstModTime = fs.statSync(this.lstFilePath).mtime.getTime()
+      this.scanLstFile()
+
+      // watch for changes in .lst file
+      // TODO: change to fs.watch to monitor the entire bin directory
+      fs.watchFile(this.lstFilePath, { interval: 1000 }, (curStat, prevStat) => {
+        if (curStat.mtime.getTime() != prevStat.mtime.getTime()) {
+          this.lstModTime = curStat.mtime.getTime()
+          this.scanLstFile()
+          this.project.codeBytesChanged()
+        }
+      })
+    }
+  }
+
+  private scanLstFile() {
+    return
+    // const lstText = fs.readFileSync(this.lstFilePath!, 'utf8')
+    // const lstLines = lstText.split(/\r?\n/)
+    // const settings = RpwSettingsDefaults    // TODO: clean this up
+    // this.sourceDocs = SourceDocBuilder.buildLstDocs(settings, this.lstFilePath!/***/, lstLines)
+    // // *** builder needs to throw errors ***
+
+    // // *** link SourceDocs to modules sources
   }
 
   update(syntaxStats: number[]) {
