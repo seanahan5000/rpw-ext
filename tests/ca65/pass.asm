@@ -1,66 +1,66 @@
 
-; .defined is a function not a keyword
-.if     !.defined( BUILD_ORIGINAL )     ; *** hover over .defined
-.endif
+; ; .defined is a function not a keyword
+; .if     !.defined( BUILD_ORIGINAL )     ; *** hover over .defined
+; .endif
 
 
-.macro .phx arg1,arg2
-.endmacro
+; .macro .phx arg1,arg2
+; .endmacro
 
 
-; .phx 1,2                                 ;*** check arg count?
-                .phx 1,2
+; ; .phx 1,2                                 ;*** check arg count?
+;                 .phx 1,2
 
-.struct HullVertex                      ;*** why unreferenced?
-        vx              .byte
-        vy              .byte
-        vz              .byte
-.endstruct
-
-                .assert HullVertex::vy = 1, error, "Bad offset"
-
-                .byte HullVertex::vy    ;*** why no hover?
-
-
-ZP_TEMP_COUNTER1 := $0a
-.loop:  lda ZP_TEMP_COUNTER1    ; current point in the circle           ;$8065
-
-
-.linecont+
-.feature labels_without_colons on
-
-; *** test with space after "\" -- should be error (EOL expected)
-
-; *** in elite harmless, why does error count change while clicking through
-;   files with errors?
-
-.macro JUNK_BYTE value
-		.byte value
-.endmacro
-; 	JUNK_BYTE {$08,$00,$03,$a5,$00,$00,$04,$a9}
-
-;     .ifblank inverse
-;     .else
-;     .endif
-
-; .struct HullVertex
+; .struct HullVertex                      ;*** why unreferenced?
 ;         vx              .byte
 ;         vy              .byte
 ;         vz              .byte
-;         signs_vis       .byte
-;         faces1and2      .byte
-;         faces3and4      .byte
 ; .endstruct
 
+;                 .assert HullVertex::vy = 1, error, "Bad offset"
 
-LOAD_BASE       =   $8000
-precedence      =   $800-$800+LOAD_BASE ;*** why no hover?
-                .if precedence-LOAD_BASE ;*** why no auto-complete suggestion?
-                error
-                .endif
+;                 .byte HullVertex::vy    ;*** why no hover?
 
-; *** precedence problem, different from other syntaxes
-                ; LDA #>LOAD_BASE+$0100
+
+; ZP_TEMP_COUNTER1 := $0a
+; .loop:  lda ZP_TEMP_COUNTER1    ; current point in the circle           ;$8065
+
+
+; .linecont+
+; .feature labels_without_colons on
+
+; ; *** test with space after "\" -- should be error (EOL expected)
+
+; ; *** in elite harmless, why does error count change while clicking through
+; ;   files with errors?
+
+; .macro JUNK_BYTE value
+; 		.byte value
+; .endmacro
+; ; 	JUNK_BYTE {$08,$00,$03,$a5,$00,$00,$04,$a9}
+
+; ;     .ifblank inverse
+; ;     .else
+; ;     .endif
+
+; ; .struct HullVertex
+; ;         vx              .byte
+; ;         vy              .byte
+; ;         vz              .byte
+; ;         signs_vis       .byte
+; ;         faces1and2      .byte
+; ;         faces3and4      .byte
+; ; .endstruct
+
+
+; LOAD_BASE       =   $8000
+; precedence      =   $800-$800+LOAD_BASE ;*** why no hover?
+;                 .if precedence-LOAD_BASE ;*** why no auto-complete suggestion?
+;                 error
+;                 .endif
+
+; ; *** precedence problem, different from other syntaxes
+;                 ; LDA #>LOAD_BASE+$0100
 
 ;===============================================================================
 
@@ -84,7 +84,15 @@ _Clear          .addr   $0D00, $AF13, _Clear
 Msg:            .asciiz "Hello world"
 
                 .feature string_escapes+
-                .asciiz "X\\X\"X\'X\rX\nX\tX\x1F"
+                .asciiz '"'
+                .asciiz "'"
+                .asciiz "\\"
+                .asciiz "\""
+                .asciiz "\'"
+                .asciiz "\t"
+                .asciiz "\n"
+                .asciiz "\r"
+                .asciiz "\x1A"
 
 ; *** why are escape chars above making these orange? ***
 addr            :=  $1000

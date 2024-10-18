@@ -68,7 +68,7 @@ class ConstantParam extends Param {
     const token = parser.getNextToken()
     if (token) {
       if (token.getString() == '"') {
-        const expression = parser.parseStringExpression(token, parser.syntaxDef.allowStringEscapes)
+        const expression = parser.parseStringExpression(token, parser.syntaxDef.stringEscapeChars)
         parser.addExpression(expression)
         if (expression.getString() == this.contents) {
           expression.name = parentName
@@ -194,7 +194,7 @@ class TermParam extends Param {
       }
 
       const allowUnterminated = false
-      const expression = parser.parseStringExpression(token, parser.syntaxDef.allowStringEscapes, allowUnterminated)
+      const expression = parser.parseStringExpression(token, parser.syntaxDef.stringEscapeChars, allowUnterminated)
       expression.name = this.termName
       parser.addExpression(expression)
       return true

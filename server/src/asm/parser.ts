@@ -1117,7 +1117,7 @@ export class Parser extends Tokenizer {
         // *** how to choose between string literals and strings? ***
         // *** pick these values dynamically ***
         const allowUnterminated = false
-        return this.parseStringExpression(token, this.syntaxDef.allowStringEscapes, allowUnterminated)
+        return this.parseStringExpression(token, this.syntaxDef.stringEscapeChars, allowUnterminated)
       }
       if (str == "!") {
         // *** LISA supports '!' prefix for decimal numbers, including "!-9"
@@ -1232,6 +1232,9 @@ export class Parser extends Tokenizer {
           token.setError("Invalid binary format")
         }
         forceLong = str.length > 8
+        if ((str.length % 8) != 0) {
+          token.setWarning("Unusual number of binary digits")
+        }
       } else if (str != "") {
         token.setError("Unexpected token, expecting binary digits")
       }
@@ -1245,7 +1248,7 @@ export class Parser extends Tokenizer {
   // Collect all tokens of a string, including opening quote,
   //  actual text, escape characters and terminating quote.
 
-  parseStringExpression(quoteToken: Token, allowEscapes: boolean, allowUnterminated = false): exp.StringExpression {
+  parseStringExpression(quoteToken: Token, stringEscapes: string, allowUnterminated = false): exp.StringExpression {
 
     quoteToken.type = TokenType.Quote
     this.startExpression(quoteToken)
@@ -1271,20 +1274,39 @@ export class Parser extends Tokenizer {
         token = new Token(this.sourceLine, this.position, this.position + 1, quoteToken.type)
         break
       }
-      if (nextChar == "\\" && allowEscapes) {
+      if (nextChar == "\\" && stringEscapes) {
         // close string if any, and add character escape token
         if (!token.isEmpty()) {
           this.addToken(token)
           this.position = token.end
         }
+
         token = new Token(this.sourceLine, this.position, this.position + 1, TokenType.Escape)
         if (token.end == this.sourceLine.length) {
           token.setError("Unterminated character escape")
           break
         }
+
         token.end += 1
+
+        const escapeChar = token.getString()[1]
+        if (!stringEscapes.includes(escapeChar)) {
+          token.setError("Unknown character escape")
+        } else if (escapeChar == "x") {
+          if (token.end + 2 > this.sourceLine.length) {
+            token.setError("Character hex escape requires two digits")
+            break
+          }
+          token.end += 2
+          const value = parseInt(token.getString().substring(2), 16)
+          if (value != value) {
+            token.setError("Invalid character hex escape")
+          }
+        }
         this.addToken(token)
         this.position = token.end
+
+        // start up a new string run
         token = new Token(this.sourceLine, this.position, this.position, TokenType.String)
         continue
       }

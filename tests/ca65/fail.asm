@@ -1,3 +1,4 @@
+                .asciiz "\x0"           ; ERROR: two digits required
 
 
 
@@ -5,6 +6,12 @@
                 .feature labels_without_colons-
 no_colon                                ; ERROR: missing colon
                 .feature labels_without_colons+
+
+                .asciiz "\0"            ; ERROR: not supported
+                .asciiz "\z"            ; ERROR: not supported
+                .asciiz "\x"            ; ERROR: digits required
+                .asciiz "\x0"           ; ERROR: two digits required
+                .asciiz "\xZ0"          ; ERROR: two hex digits required
 
 ; TODO: errors in strings with escapes when string_escapes not set
                 .feature string_escapes-

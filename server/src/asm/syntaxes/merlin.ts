@@ -26,7 +26,7 @@ export class MerlinSyntax extends SyntaxDef {
   public allowLabelTrailingColon = false
   public allowIndentedAssignment = false
   public allowLineContinuation = false
-  public allowStringEscapes = false
+  public stringEscapeChars = "\\\'\"tnr"
   public scopeSeparator = ""
   public defaultOrg = 0x8000        // TODO: check this value
 

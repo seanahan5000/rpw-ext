@@ -10,8 +10,6 @@ import * as stm from "../statements"
 //    (Section: The maths parser)
 //------------------------------------------------------------------------------
 
-// TODO: support all the ACME alias (!h for !hex, etc.)
-
 export class AcmeSyntax extends SyntaxDef {
 
   public symbolTokenPrefixes = "!@."
@@ -27,7 +25,7 @@ export class AcmeSyntax extends SyntaxDef {
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
   public allowLineContinuation = false
-  public allowStringEscapes = false
+  public stringEscapeChars = "\\\'\"0tnr"
   public scopeSeparator = ""
   public defaultOrg = 0x0800        // TODO: choose correct value
 

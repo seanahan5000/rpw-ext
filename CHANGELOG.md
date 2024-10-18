@@ -1,5 +1,13 @@
 # RPW 65 Changelog
 
+### [1.3.1] - 2024-10-18
+
+#### Added:
+
+* ACME v.97: Support string escape characters, added since v.96
+* ACME v.97: Warn on binary constants with digits that are not mod 8
+* CA65: Support \x## string escapes
+
 ### [1.3.0] - 2024-10-17
 
 Major rewrite of syntax parsing to move from an imperitive implementation to a definition-driven one.

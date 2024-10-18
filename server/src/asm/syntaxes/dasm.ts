@@ -30,7 +30,7 @@ export class DasmSyntax extends SyntaxDef {
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = false
   public allowLineContinuation = false
-  public allowStringEscapes = false
+  public stringEscapeChars = ""
   public scopeSeparator = ""
   public defaultOrg = 0x0800        // TODO: choose correct value
 

@@ -143,7 +143,7 @@ export class SyntaxDef {
   // support "\\" at the end of line
   public allowLineContinuation: boolean = false
 
-  public allowStringEscapes: boolean = false
+  public stringEscapeChars: string = ""
 
   // normally "::" or "." for syntaxes that support scoping
   public scopeSeparator: string = ""

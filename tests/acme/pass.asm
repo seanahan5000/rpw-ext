@@ -1,12 +1,5 @@
 
-                ; * = $1000
-                ; !text "\"               ; good
-                ; !text "\""              ; bad FIXME
-                ; !text '"'               ; good
-                ; !text "\'"              ; okay but probably not a single quote
-                ; !text "'"               ; okay
-                ; !text "\n"              ; okay
-
+                * = $1000
 
 test1           !zone
                 bne .loc1
@@ -42,11 +35,12 @@ symbol2         =   $30
 tz              =   3
 l1              =   $1000
 .j2             =   $F000
-a               =   $12345678
+a               =   $12345678  ; TODO: assembler fails with "Symbol already defined"
 a1              =   1234
 a2              =   5678
 BUFSIZE         =   99
 
+; *** TODO: assembler warns on strange number of binary digits ***
                 !08 127, symbol, -128
                 !by 14, $3d, %0110, <*, "c"
                 ; !by &304
@@ -103,17 +97,15 @@ BUFSIZE         =   99
                 }
                 !tx "Test"
 
-                ; !text "X\\X\"X\'X\rX\nX\tX\x1F"
-                !text "\\"
-                ; !text "\""              ; *** problem
                 !text '"'
                 !text "'"
+                !text "\\"
+                !text "\""
                 !text "\'"
-                !text "\r"
-                !text "\n"
                 !text "\t"
-                !text "\x1F"
-
+                !text "\n"
+                !text "\r"
+                !text "\0"
 
 Char_NewLine    =   $8d
 offset          =   99

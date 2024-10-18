@@ -1887,7 +1887,7 @@ export class UsrStatement extends Statement {
       }
 
       if (str == "(") {
-        const strExpression = parser.parseStringExpression(token, true, false)
+        const strExpression = parser.parseStringExpression(token, parser.syntaxDef.stringEscapeChars, false)
         parser.addExpression(strExpression)
         continue
 
