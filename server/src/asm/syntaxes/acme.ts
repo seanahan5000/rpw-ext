@@ -36,7 +36,7 @@ export class AcmeSyntax extends SyntaxDef {
 
     this.keywordMap = new Map<string, KeywordDef>([
       [ "!cpu",       { create: () => { return new stm.CpuStatement() },
-                        params: "{6502|6510|65c02|65816} [ \\{ [<block> \\} ]]",
+                        params: "{6502|6510|65c02|65816|65el02} [ \\{ [<block> \\} ]]",
                         desc:   "Select the processor to produce code for" } ],
 
       // equates
