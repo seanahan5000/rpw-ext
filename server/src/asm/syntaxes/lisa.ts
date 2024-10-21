@@ -32,7 +32,7 @@ export class LisaSyntax extends SyntaxDef {
   public allowLineContinuation = false
   public stringEscapeChars = ""
   public scopeSeparator = ""
-  public defaultOrg = 0x0800        // TODO: choose correct value
+  public defaultOrg = 0x0800
 
   constructor() {
     super()

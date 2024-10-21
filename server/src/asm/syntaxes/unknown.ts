@@ -17,7 +17,7 @@ export class UnknownSyntax extends SyntaxDef {
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
   public allowLineContinuation = true
-  public stringEscapeChars = "\\\'\"0tnrx"
+  public stringEscapeChars = "\\'\"0tnrx"
   public scopeSeparator = "::"
   public defaultOrg = 0x0800
 

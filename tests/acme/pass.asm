@@ -149,6 +149,7 @@ offset          =   99
                     }
                 }
                 !set a = 0
+                ; !while loop_flag = TRUE {
                 ; !do while loop_flag = TRUE {
                 ;     lda #a
                 ;     sta label + a

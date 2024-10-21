@@ -25,7 +25,7 @@ export class AcmeSyntax extends SyntaxDef {
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
   public allowLineContinuation = false
-  public stringEscapeChars = "\\\'\"0tnr"
+  public stringEscapeChars = "\\'\"0tnr"
   public scopeSeparator = ""
   public defaultOrg = 0x0800        // TODO: choose correct value
 
@@ -85,6 +85,7 @@ export class AcmeSyntax extends SyntaxDef {
                         desc:   "Insert 8-bit values" } ],
       [ "!by",        { alias: "!byte" }],
       [ "!08",        { alias: "!byte" }],
+      [ "!8",         { alias: "!byte" }],
       [ "!word",      { create: () => { return new stm.DataStatement_X16() },
                         params: "<expression>[, <expression> ...]",
                         desc:   "Insert 16-bit values in little endian byte order" } ],
@@ -172,6 +173,9 @@ export class AcmeSyntax extends SyntaxDef {
                         params: "<symbol-def>, {<start>, <end> | <end> } \\{ [<block> \\}]",
                         desc:   "Looping assembly" } ],
       [ "!do",        { // TODO
+                        params: "[<condition>] \\{ [<block> \\} [<condition>]]",
+                        desc:   "Looping assembly" } ],
+      [ "!while",     { // TODO
                         params: "[<condition>] \\{ [<block> \\} [<condition>]]",
                         desc:   "Looping assembly" } ],
 

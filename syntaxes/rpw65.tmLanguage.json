@@ -4,7 +4,22 @@
   "name": "rpw65",
   "patterns": [
     {
+      "include": "#keywords-acme"
+    },
+    {
+      "include": "#keywords-ca65"
+    },
+    {
+      "include": "#keywords-dasm"
+    },
+    {
+      "include": "#keywords-lisa"
+    },
+    {
       "include": "#keywords-merlin"
+    },
+    {
+      "include": "#keywords-64tass"
     },
     {
       "include": "#mnemonics-6502"
@@ -50,6 +65,16 @@
               "include": "#string-character-escape"
             }
           ]
+        },
+        {
+          "name": "string.quoted.single.rpw65",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "include": "#string-character-escape"
+            }
+          ]
         }
       ]
     },
@@ -57,7 +82,7 @@
       "patterns": [
         {
           "name": "constant.character.escape.rpw65",
-          "match": "\\[n]"
+          "match": "\\\\."
         }
       ]
     },
@@ -77,35 +102,59 @@
         }
       ]
     },
+    "keywords-acme": {
+      "patterns": [
+        {
+          "name": "keyword.control.rpw65",
+          "match": "(^|\\s)!(?i:08|8|16|24|32|addr|address|align|be16|be24|be32|bin|binary|by|byte|convtab|cpu|ct|do|endoffile|eof|error|fi|fill|for|h|hex|if|ifdef|ifndef|initmem|le16|le24|le32|macro|pet|pseudopc|raw|scr|scrxor|serious|set|skip|sl|source|src|svl|symbollist|text|to|tx|warn|while|wo|word|xor|zn|zone)\\s"
+        }
+      ]
+    },
+    "keywords-ca65": {
+      "patterns": [
+        {
+          "name": "keyword.control.rpw65",
+          "match": "(^|\\s).(?i:addr|align|asciiz|asize|assert|bankbytes|bss|byt|byte|charmap|code|condes|constructor|cpu|data|dbyt|define|delmac|delmacro|destructor|dword|else|elseif|end|endenum|endif|endmac|endmacro|endproc|endrep|endrepeat|endscope|endstruct|endunion|enum|error|exitmac|exitmacro|export|exportzp|faraddr|fatal|feature|fileopt|fopt|forceimport|global|globalzp|hibytes|if|ifblank|ifconst|ifdef|ifnblank|ifndef|ifnref|ifref|import|importzp|incbin|include|interruptor|isize|listbytes|literal|lobytes|local|localchar|mac|macpack|macro|org|out|pagelen|pagelength|paramcount|popcharmap|popcpu|popseg|proc|pushcharmap|pushcpu|pushseg|referto|refto|reloc|repeat|res|rodata|scope|segment|set|setcpu|struct|tag|time|undef|undefine|union|version|warning|word|zeropage)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "(^|\\s).(?i:autoimport|case|debuginfo|linecont|list|smart)(\\+|\\-)?\\s"
+        }
+      ]
+    },
+    "keywords-dasm": {
+      "patterns": [
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:align|byte|echo|eif|elif|else|end|endif|endm|err|eqm|equ|hex|if|ifconst|ifnconst|incbin|incdir|include|mac|macro|mexit|list|long|org|processor|rend|repeat|repend|rorg|set|setstr|subroutine|word)\\s"
+        },
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:dc(.(?i:b|w|l|s))?|ds(.(?i:b|w|l))?|dv(.(?i:b|w|l))?|seg(.u)?)\\s"
+        }
+      ]
+    },
+    "keywords-lisa": {
+      "patterns": [
+        {
+          "name": "keyword.control.rpw65",
+          "match": "\\s(?i:.da|.el|.if|.fi|adr|asc|blk|byt|dby|dci|dcm|dfs|dph|epz|equ|gen|hby|hex|icl|inv|let|lst|nls|nog|obj|org|pag|pau|phs|sav|str|ttl|usr)\\s"
+        }
+      ]
+    },
     "keywords-merlin": {
       "patterns": [
         {
           "name": "keyword.control.rpw65",
-          "match": "\\s(?i:EQU|ORG|ERR|XC|ENT)\\s"
-        },
+          "match": "\\s(?i:adr|adrl|asc|ast|chk|cyc|da|dat|db|dci|ddb|dend|dfb|do|ds|dsk|dum|dummy|dw|else|end|ent|eom|equ|err|exp|ext|fin|fls|hex|if|inv|kbd|lst|lstdo|lup|mac|mx|obj|org|pag|page|pau|pmc|put|rel|rev|sav|skp|str|sw|tr|ttl|typ|usr|txc|txi|txt|use|var|xc|<<<|>>>|--\\^)\\s"
+        }
+      ]
+    },
+    "keywords-64tass": {
+      "patterns": [
         {
           "name": "keyword.control.rpw65",
-          "match": "\\s(?i:PUT|USE|SAV|DSK)\\s"
-        },
-        {
-          "name": "keyword.control.rpw65",
-          "match": "\\s(?i:MAC|EOM|DUM|DUMMY|DEND|USR|LUP)\\s"
-        },
-        {
-          "name": "keyword.control.rpw65",
-          "match": "\\s(?i:DB|DFB|DDB|DW|DA|DS|HEX)\\s"
-        },
-        {
-          "name": "keyword.control.rpw65",
-          "match": "\\s(?i:ASC|DCI|REV|STR)\\s"
-        },
-        {
-          "name": "keyword.control.rpw65",
-          "match": "\\s(?i:TXT|TXC|TXI)\\s"
-        },
-        {
-          "name": "keyword.control.rpw65",
-          "match": "\\s(?i:DO|ELSE|FIN)\\s"
+          "match": "\\s.(?i:bend|bfor|binary|binclude|block|break|breakif|brept|bwhile|byte|addr|align|alignblk|alignind|alignpageind|case|cdef|cerror|char|comment|continue|continueif|cp|cwarn|default|dint|dsection|dstruct|dunion|dword|edef|else|elsif|enc|encode|end|endalignblk|endblock|endc|endcomment|endencode|endf|endfor|endfunction|endif|endlogical|endm|endmacro|endn|endnamespace|endp|endpage|endproc|endrept|ends|endsection|endsegment|endstruct|endswitch|endu|endunion|endv|endvirtual|endwhile|endweak|endwith|eor|error|fi|fill|for|from|function|goto|here|if|ifeq|ifmi|ifne|ifpl|include|lbl|logical|long|lint|macro|namespace|next|null|offs|option|page|pend|proc|proff|pron|ptext|rept|rta|section|seed|segment|send|sfunction|shift|shiftl|sint|struct|switch|tdef|text|union|var|virtual|warn|weak|while|with|word)\\s"
         }
       ]
     },

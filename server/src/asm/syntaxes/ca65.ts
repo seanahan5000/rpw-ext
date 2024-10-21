@@ -26,7 +26,7 @@ export class Ca65Syntax extends SyntaxDef {
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
   public allowLineContinuation = true
-  public stringEscapeChars = "\\\'\"tnrx"
+  public stringEscapeChars = "\\'\"tnrx"
   public scopeSeparator = "::"
   public defaultOrg = 0x0800        // TODO: choose correct value
 

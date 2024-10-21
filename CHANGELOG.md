@@ -1,5 +1,15 @@
 # RPW 65 Changelog
 
+### [1.3.2] - 2024-10-21
+
+Updates to default syntax hiliting definitions in rpw65.tmLanguage.json
+
+#### Added:
+
+* All directives/psuedo ops
+* Single quoted string pattern
+* Corrected escape character pattern
+
 ### [1.3.1] - 2024-10-18
 
 #### Added:
