@@ -324,9 +324,100 @@ export const Opcodes65816 = {
 	}
 }
 
+export const Opcodes65EL02 = {
+	"nxt": {
+		"NONE": 0x02
+	},
+	"ent": {
+		"NONE": 0x22
+	},
+	"nxa": {
+		"NONE": 0x42
+	},
+	"rer": {
+		"REL": 0x82
+	},
+	"rea": {
+		"ABS": 0x44
+	},
+	"rei": {
+		"ZP":  0x54
+	},
+	"rhi": {
+		"NONE": 0x0B
+	},
+	"rhx": {
+		"NONE": 0x1B
+	},
+	"rli": {
+		"NONE": 0x2B
+	},
+	"rlx": {
+		"NONE": 0x3B
+	},
+	"rha": {
+		"NONE": 0x4B
+	},
+	"rhy": {
+		"NONE": 0x5B
+	},
+	"rla": {
+		"NONE": 0x6B
+	},
+	"rly": {
+		"NONE": 0x7B
+	},
+	"txr": {
+		"NONE": 0x8B
+	},
+	"trx": {
+		"NONE": 0xAB
+	},
+	"txi": {
+		"NONE": 0x5C
+	},
+	"tix": {
+		"NONE": 0xDC
+	},
+	"mul": {
+		"ZP": 0x0F,
+		"ZPX": 0x1F,
+		"ABS": 0x2F,
+		"ABSX": 0x3F,
+	},
+	"div": {
+		"ZP": 0x4F,
+		"ZPX": 0x5F,
+		"ABS": 0x6F,
+		"ABSX": 0x7F,
+	},
+	"zea": {
+		"NONE": 0x8F
+	},
+	"sea": {
+		"NONE": 0x9F
+	},
+	"tda": {
+		"NONE": 0xAF
+	},
+	"tad": {
+		"NONE": 0xBF
+	},
+	"pld": {
+		"NONE": 0xCF
+	},
+	"phd": {
+		"NONE": 0xDF
+	},
+	"mmu": {
+		"IMM": 0xEF
+	}
+}
+
 
 export const OpcodeSets = [
 	Opcodes6502,
 	Opcodes65C02,
-	Opcodes65816
+	Opcodes65816,
+	Opcodes65EL02
 ]
