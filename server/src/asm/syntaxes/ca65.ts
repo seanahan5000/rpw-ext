@@ -379,12 +379,26 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".debuginfo", { // TODO
                         params: "{-|+|off|on}",
                         desc:   "Switch on or off debug info generation" } ],
-      [ ".smart",     { // TODO
-                        params: "[{-|+|off|on}]",
-                        desc:   "Switch on or off smart mode" } ],
       [ ".case",      { // TODO
                         params: "[{-|+|off|on}]",
                         desc:   "Switch on or off case sensitivity on identifiers" } ],
+
+      // 65816-only
+      [ ".smart",     { // TODO
+                        params: "[{-|+|off|on}]",
+                        desc:   "Switch on or off smart mode" } ],
+      [ ".a8",        { // TODO
+                        params: "",
+                        desc:   "Assume the accumulator is 8 bit" } ],
+      [ ".a16",       { // TODO
+                        params: "",
+                        desc:   "Assume the accumulator is 16 bit" } ],
+      [ ".i8",        { // TODO
+                        params: "",
+                        desc:   "Assume the index registers are 8 bit" } ],
+      [ ".i16",       { // TODO
+                        params: "",
+                        desc:   "Assume the index registers are 16 bit" } ],
 
       // *** these don't currently get parsed unless they're in the keyword position ***
 

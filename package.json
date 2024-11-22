@@ -1,11 +1,11 @@
 {
 	"name": "rpw65",
 	"displayName": "RPW 65",
-	"description": "Multi-syntax language extension for 6502 assembly, in Merlin, dasm, ACME, ca65, 64tass, and LISA 2.5 syntaxes",
+	"description": "Multi-syntax language extension for 6502 assembly, in Merlin, dasm, ACME, ca65, 64tass, ORCA/M (APW), and LISA 2.5 syntaxes",
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "1.3.2",
+	"version": "1.4.0",
 	"repository": {
     "type": "git",
     "url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -37,7 +37,7 @@
 			"properties": {
 				"rpw65.syntax": {
 					"type": "string",
-					"enum": ["merlin", "dasm", "acme", "ca65", "lisa", "64tass"],
+					"enum": ["merlin", "dasm", "acme", "ca65", "lisa", "64tass", "orca/m"],
 					"markdownDescription": "Assembler syntax to apply to source files.  A hybrid union of the syntaxes is used if none is chosen."
 				},
 				"rpw65.showErrors": {

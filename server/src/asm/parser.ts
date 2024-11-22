@@ -1,89 +1,15 @@
 
-// MERLIN
-  // label starts in first column
-  // locals start with ':'
-  // no operator precedence (left to right)
-// DASM
-  // scoped with SUBROUTINE
-  // locals start with '.'
-// ACME
-  // keywords start with '!'
-  // locals scoped with !zone
-  // locals start with '.' or '@'
-    // '.' scoped to !zone, '@' scoped to previous global
-  // locals of '+++' and '---'
-  // symbol names are case sensitive
-  // {} groups
-  // does not allow "LSR A" -- just "LSR"
-  // has operator precendence
-  // +/- branches
-  // +name to invoke macro
-  // '.' and '#' in binary values
-  // indented everything (labels)
-  // *=$9999 to set org (any column)
-// CA65
-  // keywords start with '.'
-  // label starts in first column, ends with ':'
-    // trailing ':' requirement turned off with feature
-  // locals scoped with .PROC
-  // locals start with '@'
-    // scoped to previous non-local
-    // changable using .LOCALCHAR
-  // locals of ':+++' and ':---' -> ':' label
-  // has named scopes, using ':', '::' for global scope
-    // .SCOPE applies to non-local labels
-    // .PROC is an implicit scope
-// LISA
-  // locals start with '^' followed by 0-9
-    // scoped globally and repeatedly
-    // <# and ># to reference
-// SBASM
-  // label always at position 0
-  // keywords start with '.'
-  // trailing ':' on labels is optional
-  // label name should be followed by a white space or EOL
-  // equates must resolve without forward references
-  // local labels start with '.' and scoped to previous global
-  // macro label start with ':'
-  // global labels can contain '.'
-  // scope other locals using GLOBAL:LOCAL name
-
-//               MERLIN  DASM  CA65  ACME  LISA  SBASM
-//  --------     ------  ----  ----  ----  ----  -----
-//  !keyword                         ACME
-//  .keyword                   CA65              SBASM
-//  :local       MERLIN
-//  :macrolocal                                  SBASM
-//  .local               DASM        ACME        SBASM
-//  @local                     CA65
-//  label:                     CA65
-//  +/-                              ACME
-//  ^#,<#,>#                               LISA
-//  +macro                           ACME
-
-//               MERLIN  DASM  CA65  ACME  LISA  SBASM
-//  --------     ------  ----  ----  ----  ----  -----
-//  indented
-//  assign         no    no    YES   YES   no    ???
-//
-//  *=$FFFF        no    no    ???   YES   no    ???
-//
-//  keywords
-//  in col 0       no    ???   YES   ???   no    ???
-//
-//  .locals        no    YES   ???   ???   no    ???
-//
-//  .keywords      no    YES   ???   ???   no    ???
-
 import { SourceFile } from "./project"
 import { Node, Token, TokenType, Tokenizer } from "./tokenizer"
-import { OpcodeSets } from "./opcodes"
 import { Op, OpDef, SyntaxDef, Syntax, SyntaxMap, KeywordDef } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { SymbolType, SymbolFrom } from "./symbols"
 import { ParamsParser } from "./syntaxes/params"
 import * as exp from "./expressions"
 import * as stm from "./statements"
+
+// TODO: don't call this directly -- get from something else
+import { isaSet65xx } from "../isa65xx"
 
 //------------------------------------------------------------------------------
 
@@ -436,6 +362,16 @@ export class Parser extends Tokenizer {
 
     // DASM allows optional "." or "#" on all directives
     if (!this.syntax || this.syntax == Syntax.DASM) {
+      // NOTE: "#" is not included in DasmSyntax.symbolTokenPrefixes
+      //  because that conflicts with parsing # immediates elsewhere.
+      //  Instead, do the explicit extension here.
+      if (keywordLC == "#") {
+        const altToken = this.getVeryNextToken()
+        if (altToken) {
+          token.end = altToken.end
+          keywordLC = token.getString().toLowerCase()
+        }
+      }
       if (keywordLC[0] == "." || keywordLC[0] == "#") {
         altwordLC = keywordLC.substring(1)
       }
@@ -568,24 +504,24 @@ export class Parser extends Tokenizer {
       opNameLC = opNameLC.substring(0, n)
       // TODO: check for known suffixes here?
     }
-    for (let i = 0; i < OpcodeSets.length; i += 1) {
-      const opcodeSet = OpcodeSets[i]
-      let opcode = (opcodeSet as {[key: string]: any})[opNameLC]
-      if (opcode !== undefined) {
-        token.type = TokenType.Opcode
-        let forceLong = false
-        if (!this.syntax || this.syntax == Syntax.MERLIN) {
-          // on Merlin, ":" immediately after opcode forces 16-bit addressing
-          const c = this.peekVeryNextChar()
-          if (c == ":") {
-            this.position += 1
-            token.end += 1
-            forceLong = true
-          }
+
+    // TODO: how should this be chosen? get from statement?
+    const isa = isaSet65xx.getIsa("65el02")
+
+    const opcode = isa.findByName(opNameLC)
+    if (opcode) {
+      token.type = TokenType.Opcode
+      let forceLong = false
+      if (!this.syntax || this.syntax == Syntax.MERLIN) {
+        // on Merlin, ":" immediately after opcode forces 16-bit addressing
+        const c = this.peekVeryNextChar()
+        if (c == ":") {
+          this.position += 1
+          token.end += 1
+          forceLong = true
         }
-        // TODO: pass in suffix?
-        return this.initStatement(new stm.OpStatement(opcode, opSuffix, i, forceLong), token)
       }
+      return this.initStatement(new stm.OpStatement(opcode, opSuffix, forceLong), token)
     }
   }
 
@@ -1213,7 +1149,7 @@ export class Parser extends Tokenizer {
       str = token.getString()
       if (token.type == TokenType.HexNumber || token.type == TokenType.DecNumber) {
         value = parseInt(str, 16)
-        if (value != value) {
+        if (Number.isNaN(value)) {
           token.setError("Invalid hex format")
         }
         forceLong = str.length > 2
@@ -1222,17 +1158,18 @@ export class Parser extends Tokenizer {
       }
     } else if (str == "%") {
       // *** should "%" be DecNumber or left as Operator?
-      // *** support ACME's %..####.. format too
+      // TODO: support ACME's %..####..
+      // TODO: support "_" within value
       token.type = TokenType.DecNumber
       token = this.mustAddNextToken("expecting binary digits")
       str = token.getString()
       if (token.type == TokenType.DecNumber) {
         value = parseInt(str, 2)
-        if (value != value) {
+        if (Number.isNaN(value)) {
           token.setError("Invalid binary format")
         }
         forceLong = str.length > 8
-        if ((str.length % 8) != 0) {
+        if (str.length > 4 && (str.length % 8) != 0) {
           token.setWarning("Unusual number of binary digits")
         }
       } else if (str != "") {
@@ -1240,8 +1177,12 @@ export class Parser extends Tokenizer {
       }
     } else /*if (token.type == TokenType.DecNumber)*/ {
       value = parseInt(str, 10)
+      if (Number.isNaN(value)) {
+        token.setError("Invalid format")
+      }
       forceLong = value > 256 || value < -127
     }
+    // NOTE: constructor will change value of NaN to undefined
     return new exp.NumberExpression(this.endExpression(), value, forceLong)
   }
 
@@ -1574,6 +1515,13 @@ class ExpressionBuilder {
           this.opStack.push(nextOp)
         }
         continue
+      }
+
+      // if not expecting a unary expression,
+      //  don't try to parse a value expression
+      if (!isUnary) {
+        this.parser.setPosition(token.start)
+        break
       }
 
       // values/operands are always pushed to output stack

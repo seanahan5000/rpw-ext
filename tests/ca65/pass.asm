@@ -347,11 +347,6 @@ barG            := $20
                 .setcpu "65c02"
 four            .set 4
 four            .set 3
-                .smart
-                .smart -
-                .smart +
-                .smart on
-                .smart off
                 .tag my_struct
                 .word $0D00, $AF13, _Clear
                 .zeropage
@@ -363,5 +358,15 @@ four            .set 3
                 .export my_export2:far
                 .import my_import2:far
                 .export bar1: far
+
+                .smart
+                .smart -
+                .smart +
+                .smart on
+                .smart off
+                .a8
+                .a16
+                .i8
+                .i16
 
                 .end

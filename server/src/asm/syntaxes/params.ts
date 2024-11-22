@@ -1,6 +1,6 @@
 
 import { Parser } from "../parser"
-import { TokenType } from "../tokenizer"
+import { Token, TokenType } from "../tokenizer"
 import { SymbolType } from "../symbols"
 import { Syntax, ParamDef } from "../syntaxes/syntax_types"
 import * as exp from "../expressions"
@@ -77,7 +77,6 @@ class ConstantParam extends Param {
         expression.setError("Unexpected expression: expected " + this.contents)
         return false
       }
-
 
       if (token.getString().toLowerCase() == this.contents) {
         if (token.type != TokenType.Operator) {
@@ -234,6 +233,11 @@ class TermParam extends Param {
       return this.addSymbolExpression(parser, "symbol name", false, SymbolType.Simple, true)
     }
 
+    // specific to ORCA/M
+    if (this.termType == "condef") {
+      return this.addCondefExpression(parser)
+    }
+
     if (this.termType == "block") {
       parser.startExpression()
       while (true) {
@@ -295,8 +299,152 @@ class TermParam extends Param {
     parser.addMissingToken("Expected " + typeName)
     return false
   }
+
+  // specific to ORCA/M
+  private addCondefExpression(parser: Parser): boolean {
+    parser.startExpression()
+
+    let token: Token | undefined
+    token = parser.mustAddNextToken("Expecting DC type")
+    if (token.type == TokenType.DecNumber) {
+      // TODO: get repeat count
+      token = parser.mustAddNextToken("Expecting DC type")
+      // TODO: create number expression and give it a name
+    }
+    if (token.type == TokenType.Missing) {
+      return false
+    }
+
+    let typeStr = token.getString()
+    token.type = TokenType.Keyword
+
+    token = parser.mustGetNextToken("Expecting '")
+    if (token.type == TokenType.Missing) {
+      return false
+    }
+
+    let parseExpressions = true
+    if (typeStr == "c") {
+
+      const allowUnterminated = false
+      const expression = parser.parseStringExpression(token, parser.syntaxDef.stringEscapeChars, allowUnterminated)
+      parser.addExpression(expression)
+      parseExpressions = false
+
+    } else {
+
+      token.type = TokenType.Keyword
+      parser.addToken(token)
+
+      let size = 0
+      switch (typeStr) {
+        case "a":
+          typeStr = "a2"
+          // fall through
+        case "a1":
+        case "a2":
+        case "a3":
+        case "a4":
+          size = typeStr.charCodeAt(1) - "0".charCodeAt(0)
+          break
+        case "d":
+        case "e":
+        case "f":
+          // TODO: support floating point scientific notation
+          break
+        case "b":
+        case "h":
+          parseExpressions = false
+          const valType = typeStr == "b" ? "binary" : "hex"
+
+          token = parser.mustGetNextToken(`Expecting ${valType} value`)
+          if (token.type == TokenType.Missing) {
+            return false
+          }
+
+          let numString = ""
+          while (true) {
+            if (token.type != TokenType.DecNumber && token.type != TokenType.HexNumber) {
+              token.setError(`Expecting ${valType} value`)
+              return false
+            }
+
+            parser.addToken(token)
+            numString += token.getString()
+
+            token = parser.getNextToken()
+            if (!token) {
+              return false
+            }
+            if (token.getString() == "'") {
+              token.type = TokenType.Keyword
+              break
+            }
+          }
+          if (valType == "hex") {
+            if (numString.length & 1) {
+              numString += "0"
+            }
+          } else {
+            numString = numString.padEnd(16, "0")
+          }
+          break
+        case "i":
+          typeStr = "i2"
+          // fall through
+        case "i1":
+        case "i2":
+        case "i3":
+        case "i4":
+        case "i5":
+        case "i6":
+        case "i7":
+        case "i8":
+          size = typeStr.charCodeAt(1) - "0".charCodeAt(0)
+          break
+        case "r":
+          break
+        case "s1":
+        case "s2":
+        case "s3":
+        case "s4":
+          size = typeStr.charCodeAt(1) - "0".charCodeAt(0)
+          break
+        default:
+          token.setError("Unexpected type")
+          return false
+      }
+    }
+
+    if (parseExpressions) {
+      while (true) {
+        const expression = parser.parseExpression()
+        if (!expression) {
+          return false
+        }
+        parser.addExpression(expression)
+        const res = parser.mustAddToken([",", "'"])
+        if (res.index < 0) {
+          // *** set error?
+          return false
+        }
+        if (res.index == 1) {
+          if (res.token) {
+            res.token.type = TokenType.Keyword
+          }
+          break
+        }
+      }
+    }
+
+    const expression = new exp.CondefExpression(parser.endExpression())
+    expression.name = this.termName
+    parser.addExpression(expression)
+    return true
+  }
 }
 
+//------------------------------------------------------------------------------
 
 class OneOfParam extends Param {
   constructor(params: Param[]) {

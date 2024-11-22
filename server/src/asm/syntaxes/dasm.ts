@@ -17,7 +17,7 @@ import * as stm from "../statements"
 
 export class DasmSyntax extends SyntaxDef {
 
-  public symbolTokenPrefixes = ".#"
+  public symbolTokenPrefixes = "."
   public symbolTokenContents = "."
   public cheapLocalPrefixes = ""
   public zoneLocalPrefixes = "."
@@ -217,6 +217,7 @@ export class DasmSyntax extends SyntaxDef {
       [ ">",   { pre: 20, op: Op.HighByte }], // high-byte
 
       [ "(",   { pre: 0,  op: Op.Group, end: ")" }],
+      [ "[",   { pre: 0,  op: Op.Group, end: "]" }],
       [ "{",   { pre: 0,  op: Op.Group, end: "}" }]
     ])
 

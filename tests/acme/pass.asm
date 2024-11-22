@@ -194,8 +194,15 @@ end             !if end - start > 256 {
                 }
 
                 !cpu 6502
-                !cpu 65816
+                !cpu 65816 {
+                    !al
+                    !as
+                    !rl
+                    !rs
+                }
                 !cpu 65c02 {
+                }
+                !cpu 65el02 {
                 }
 
                 !addr k_chrout = $ffd2

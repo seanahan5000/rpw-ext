@@ -9,12 +9,12 @@ import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
-import { ContinuedStatement, OpStatement, Statement } from "./asm/statements"
+import { Statement, OpStatement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
 import { SyntaxNames } from "./asm/syntaxes/syntax_types"
-import { Isa6502 } from "./isa6502"
+import { OpcodeDef, OpMode, isaSet65xx } from "./isa65xx"
 
 //------------------------------------------------------------------------------
 
@@ -726,33 +726,39 @@ export class LspServer {
             const opName = res.expression.getString()
             const opNameLC = opName.toLowerCase()
             const upperCase = (opName != opNameLC)
-            let opMatches = []
-            for (let i = 0; i < Isa6502.ops.length; i += 1) {
-              const opEntry = Isa6502.ops[i]
-              if (opEntry.op == opNameLC) {
-                const opCopy: any = { ...opEntry }
-                opCopy.opValue = i
-                opMatches.push(opCopy)
-              }
-            }
+            let opMatches: OpcodeDef[] = []
+
+            // TODO: how should this be chosen? get from statement?
+            // TODO: mechanism to enable 65c02 and 65816
+            const isa = isaSet65xx.getIsa("65816")
+
+            const opType = isa.opcodeByName.get(opNameLC)
+            opType?.forEach((value, key) => {
+              opMatches.push(value)
+            })
+
             // add opcode description
-            hoverStr += Isa6502.opDescs.get(opNameLC) ?? ""
+            hoverStr += isa.getDescByName(opNameLC) ?? ""
+
             if (opMatches.length > 0) {
-              hoverStr += "\n"
+
+              // add status flags affected
+              const flags = opMatches[0].sf
+              let affected = ""
+              if (flags) {
+                affected = flags.toUpperCase()
+              } else {
+                affected = "none"
+              }
+              hoverStr += "\nAffects: " + affected + "\n"
 
               // sort opMatches by addressing mode
 
-              const sortOrder = [
-                "","a","imm","zp","abs","jsr","jab","zpx","abx","zpy","aby","idx","idy","rel","jin"
-              ]
-
               opMatches.sort((a, b): number => {
-                const ia = sortOrder.indexOf(a.ad)
-                const ib = sortOrder.indexOf(b.ad)
-                if (ia < ib) {
+                if (a.mode < b.mode) {
                   return -1
                 }
-                if (ia > ib) {
+                if (a.mode > b.mode) {
                   return 1
                 }
                 return 0
@@ -761,17 +767,19 @@ export class LspServer {
               for (let opEntry of opMatches) {
 
                 // data bytes
-                let lineStr = (opEntry as any).opValue.toString(16).padStart(2, "0").toUpperCase()
+                let lineStr = opEntry.val.toString(16).padStart(2, "0").toUpperCase()
                 if (opEntry.bc == 2) {
                   lineStr += " 12"
                 } else if (opEntry.bc == 3) {
                   lineStr += " 34 12"
+                } else if (opEntry.bc == 4) {
+                  lineStr += " 56 34 12 "
                 }
 
                 lineStr = lineStr.padEnd(10, "\xA0")
 
                 // opcode
-                lineStr += (upperCase ? opEntry.op.toUpperCase() : opEntry.op) + " "
+                lineStr += (upperCase ? opEntry.name.toUpperCase() : opEntry.name) + " "
 
                 // addressing mode expression, if any
                 let opExp = ""
@@ -779,40 +787,69 @@ export class LspServer {
                   opExp = "$12"
                 } else if (opEntry.bc == 3) {
                   opExp = "$1234"
+                } else if (opEntry.bc == 4) {
+                  opExp = "$123456"
                 }
 
-                switch (opEntry.ad) {
-                  case "":
-                  case "a":
+                switch (opEntry.mode) {
+                  case OpMode.NONE:     //
+                  case OpMode.A:        // a
                     break
-                  case "imm":
+                  case OpMode.IMM:      // #$FF
                     lineStr += "#" + opExp
                     break
-                  case "zp":
-                  case "abs":
-                  case "jsr":
-                  case "jab":
+                  case OpMode.ZP:       // $FF
+                  case OpMode.ABS:      // $FFFF
+                  case OpMode.LABS:     // $FFFFFF
                     lineStr += opExp
                     break
-                  case "zpx":
-                  case "abx":
+                  case OpMode.ZPX:      // $FF,X
+                  case OpMode.ABSX:     // $FFFF,X
+                  case OpMode.LABX:     // $FFFFFF,X
                     lineStr += opExp + (upperCase ? ",X" : ",x")
                     break
-                  case "zpy":
-                  case "aby":
+                  case OpMode.ZPY:      // $FF,Y
+                  case OpMode.ABSY:     // $FFFF,Y
                     lineStr += opExp + (upperCase ? ",Y" : ",y")
                     break
-                  case "idx":
+                  case OpMode.INDX:     // ($FF,X)
+                  case OpMode.AXI:      // ($FFFF,X)
                     lineStr += "(" + opExp + (upperCase ? ",X)" : ",x)")
                     break
-                  case "idy":
+                  case OpMode.INDY:     // ($FF),Y
                     lineStr += "(" + opExp + (upperCase ? "),Y" : "),y")
                     break
-                  case "rel":
-                    lineStr += "*+" + opExp
+                  case OpMode.REL:      // *+-$FF
+                  case OpMode.LREL:     // *+-$FFFF
+                    lineStr += "*+-" + opExp
                     break
-                  case "jin":
+                  case OpMode.INZ:      // ($FF)
+                  case OpMode.IND:      // ($FFFF)
                     lineStr += "(" + opExp + ")"
+                    break
+                  case OpMode.LIY:      // [$FF],Y
+                    lineStr += "[" + opExp + (upperCase ? "],Y" : "],y")
+                    break
+                  case OpMode.LIN:      // [$FF]
+                  case OpMode.ALI:      // [$FFFF]
+                    lineStr += "[" + opExp + "]"
+                    break
+                  case OpMode.STS:      // stack,S
+                    lineStr += opExp + (upperCase ? ",S" : ",s")
+                    break
+                  case OpMode.SIY:      // (stack,S),Y
+                    lineStr += "(" + opExp + (upperCase ? ",S),Y" : ",s),y")
+                    break
+                  case OpMode.SD:       // #$FF,#$FF
+                    // TODO:
+                    break
+
+                  // 65EL02-only
+                  case OpMode.STS:      // stack,R
+                    lineStr += opExp + (upperCase ? ",R" : ",r")
+                    break
+                  case OpMode.SIY:      // (stack,R),Y
+                    lineStr += "(" + opExp + (upperCase ? ",R),Y" : ",r),y")
                     break
                 }
 
@@ -825,17 +862,6 @@ export class LspServer {
 
                 hoverStr += lineStr + "\n"
               }
-
-              // add status flags affected
-
-              const flags = opMatches[0].sf
-              let affected = ""
-              if (flags) {
-                affected = flags.toUpperCase()
-              } else {
-                affected = "none"
-              }
-              hoverStr += "Affects: " + affected
             }
           }
         } else if (statement.keywordDef) {
@@ -1091,9 +1117,15 @@ export class LspServer {
   }
 
   private diagnoseNode(state: DiagnosticState, node: Node): boolean {
+    const includeWeak = !state.sourceFile.module.project.isTemporary
     if (node.errorType != NodeErrorType.None) {
       let severity: lsp.DiagnosticSeverity
       switch (node.errorType) {
+        case NodeErrorType.ErrorWeak:
+          if (!includeWeak) {
+            return false
+          }
+          // fall through
         default:
         case NodeErrorType.Error:
           if (!this.showErrors) {
@@ -1124,7 +1156,8 @@ export class LspServer {
         }
       }
     }
-    return node.errorType == NodeErrorType.Error
+    return node.errorType == NodeErrorType.Error ||
+           (node.errorType == NodeErrorType.ErrorWeak && includeWeak)
   }
 
   //----------------------------------------------------------------------------

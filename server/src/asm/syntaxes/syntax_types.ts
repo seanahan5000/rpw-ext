@@ -160,7 +160,8 @@ export const enum Syntax {
   CA65    = 3,
   ACME    = 4,
   LISA    = 5,
-  TASS64  = 6
+  TASS64  = 6,
+  ORCAM   = 7
 }
 
 export const SyntaxNames = [
@@ -170,17 +171,19 @@ export const SyntaxNames = [
   "CA65",
   "ACME",
   "LISA",
-  "64TASS"
+  "64TASS",
+  "ORCA/M"
 ]
 
 export const SyntaxMap = new Map<string, number>([
-  [ "UNKNOWN", 0 ],
-  [ "MERLIN",  1 ],
-  [ "DASM",    2 ],
-  [ "CA65",    3 ],
-  [ "ACME",    4 ],
-  [ "LISA",    5 ],
-  [ "64TASS",  6 ]
+  [ "UNKNOWN", Syntax.UNKNOWN ],
+  [ "MERLIN",  Syntax.MERLIN  ],
+  [ "DASM",    Syntax.DASM    ],
+  [ "CA65",    Syntax.CA65    ],
+  [ "ACME",    Syntax.ACME    ],
+  [ "LISA",    Syntax.LISA    ],
+  [ "64TASS",  Syntax.TASS64  ],
+  [ "ORCA/M",  Syntax.ORCAM   ]
 ])
 
 //------------------------------------------------------------------------------

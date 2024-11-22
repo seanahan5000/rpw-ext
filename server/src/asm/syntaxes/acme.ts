@@ -36,7 +36,7 @@ export class AcmeSyntax extends SyntaxDef {
 
     this.keywordMap = new Map<string, KeywordDef>([
       [ "!cpu",       { create: () => { return new stm.CpuStatement() },
-                        params: "{6502|6510|65c02|65816} [ \\{ [<block> \\} ]]",
+                        params: "{6502|6510|65c02|65816|65el02} [ \\{ [<block> \\} ]]",
                         desc:   "Select the processor to produce code for" } ],
 
       // equates
@@ -201,6 +201,20 @@ export class AcmeSyntax extends SyntaxDef {
       [ "!serious",   { create: () => { return new stm.AssertTrueStatement("fatal", true) },
                         params: "<string-value> [, <string-value> ...]",
                         desc:   "Generate a serious error, immediately stopping assembly" } ],
+
+      // 65816-only
+      [ "!al",        { // TODO
+                        params: "[\\{ [<block> \\}]]",
+                        desc:   "Assume long (16-bit) accumulator" } ],
+      [ "!as",        { // TODO
+                        params: "[\\{ [<block> \\}]]",
+                        desc:   "Assume short (8-bit) accumulator" } ],
+      [ "!rl",        { // TODO
+                        params: "[\\{ [<block> \\}]]",
+                        desc:   "Assume long (16-bit) index registers" } ],
+      [ "!rs",        { // TODO
+                        params: "[\\{ [<block> \\}]]",
+                        desc:   "Assume short (8-bit) index registers" } ],
     ])
 
     /*

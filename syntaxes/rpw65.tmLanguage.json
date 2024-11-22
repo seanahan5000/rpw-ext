@@ -25,6 +25,12 @@
       "include": "#mnemonics-6502"
     },
     {
+      "include": "#mnemonics-65C02"
+    },
+    {
+      "include": "#mnemonics-65816"
+    },
+    {
       "include": "#comments"
     },
     {
@@ -106,7 +112,7 @@
       "patterns": [
         {
           "name": "keyword.control.rpw65",
-          "match": "(^|\\s)!(?i:08|8|16|24|32|addr|address|align|be16|be24|be32|bin|binary|by|byte|convtab|cpu|ct|do|endoffile|eof|error|fi|fill|for|h|hex|if|ifdef|ifndef|initmem|le16|le24|le32|macro|pet|pseudopc|raw|scr|scrxor|serious|set|skip|sl|source|src|svl|symbollist|text|to|tx|warn|while|wo|word|xor|zn|zone)\\s"
+          "match": "(^|\\s)!(?i:08|8|16|24|32|addr|address|al|align|as|autsiz|be16|be24|be32|bin|binary|by|byte|convtab|cpu|ct|databank|dpage|do|endoffile|eof|error|fi|fill|for|h|hex|if|ifdef|ifndef|initmem|le16|le24|le32|macro|mansiz|pet|pseudopc|raw|rl|rs|scr|scrxor|serious|set|skip|sl|source|src|svl|symbollist|text|to|tx|warn|while|wo|word|xl|xor|xs|zn|zone)\\s"
         }
       ]
     },
@@ -114,7 +120,7 @@
       "patterns": [
         {
           "name": "keyword.control.rpw65",
-          "match": "(^|\\s).(?i:addr|align|asciiz|asize|assert|bankbytes|bss|byt|byte|charmap|code|condes|constructor|cpu|data|dbyt|define|delmac|delmacro|destructor|dword|else|elseif|end|endenum|endif|endmac|endmacro|endproc|endrep|endrepeat|endscope|endstruct|endunion|enum|error|exitmac|exitmacro|export|exportzp|faraddr|fatal|feature|fileopt|fopt|forceimport|global|globalzp|hibytes|if|ifblank|ifconst|ifdef|ifnblank|ifndef|ifnref|ifref|import|importzp|incbin|include|interruptor|isize|listbytes|literal|lobytes|local|localchar|mac|macpack|macro|org|out|pagelen|pagelength|paramcount|popcharmap|popcpu|popseg|proc|pushcharmap|pushcpu|pushseg|referto|refto|reloc|repeat|res|rodata|scope|segment|set|setcpu|struct|tag|time|undef|undefine|union|version|warning|word|zeropage)\\s"
+          "match": "(^|\\s).(?i:a16|a8|addr|align|asciiz|asize|assert|bankbytes|bss|byt|byte|charmap|code|condes|constructor|cpu|data|dbyt|define|delmac|delmacro|destructor|dword|else|elseif|end|endenum|endif|endmac|endmacro|endproc|endrep|endrepeat|endscope|endstruct|endunion|enum|error|exitmac|exitmacro|export|exportzp|faraddr|fatal|feature|fileopt|fopt|forceimport|global|globalzp|hibytes|i8|i16|if|ifblank|ifconst|ifdef|ifnblank|ifndef|ifnref|ifref|import|importzp|incbin|include|interruptor|isize|listbytes|literal|lobytes|local|localchar|mac|macpack|macro|org|out|pagelen|pagelength|paramcount|popcharmap|popcpu|popseg|proc|pushcharmap|pushcpu|pushseg|referto|refto|reloc|repeat|res|rodata|scope|segment|set|setcpu|struct|tag|time|undef|undefine|union|version|warning|word|zeropage)\\s"
         },
         {
           "name": "keyword.control.rpw65",
@@ -154,7 +160,7 @@
       "patterns": [
         {
           "name": "keyword.control.rpw65",
-          "match": "\\s.(?i:bend|bfor|binary|binclude|block|break|breakif|brept|bwhile|byte|addr|align|alignblk|alignind|alignpageind|case|cdef|cerror|char|comment|continue|continueif|cp|cwarn|default|dint|dsection|dstruct|dunion|dword|edef|else|elsif|enc|encode|end|endalignblk|endblock|endc|endcomment|endencode|endf|endfor|endfunction|endif|endlogical|endm|endmacro|endn|endnamespace|endp|endpage|endproc|endrept|ends|endsection|endsegment|endstruct|endswitch|endu|endunion|endv|endvirtual|endwhile|endweak|endwith|eor|error|fi|fill|for|from|function|goto|here|if|ifeq|ifmi|ifne|ifpl|include|lbl|logical|long|lint|macro|namespace|next|null|offs|option|page|pend|proc|proff|pron|ptext|rept|rta|section|seed|segment|send|sfunction|shift|shiftl|sint|struct|switch|tdef|text|union|var|virtual|warn|weak|while|with|word)\\s"
+          "match": "(^|\\s).(?i:bend|bfor|binary|binclude|block|break|breakif|brept|bwhile|byte|addr|align|alignblk|alignind|alignpageind|case|cdef|cerror|char|comment|continue|continueif|cp|cwarn|default|dint|dsection|dstruct|dunion|dword|edef|else|elsif|enc|encode|end|endalignblk|endblock|endc|endcomment|endencode|endf|endfor|endfunction|endif|endlogical|endm|endmacro|endn|endnamespace|endp|endpage|endproc|endrept|ends|endsection|endsegment|endstruct|endswitch|endu|endunion|endv|endvirtual|endwhile|endweak|endwith|eor|error|fi|fill|for|from|function|goto|here|if|ifeq|ifmi|ifne|ifpl|include|lbl|logical|long|lint|macro|namespace|next|null|offs|option|page|pend|proc|proff|pron|ptext|rept|rta|section|seed|segment|send|sfunction|shift|shiftl|sint|struct|switch|tdef|text|union|var|virtual|warn|weak|while|with|word)\\s"
         }
       ]
     },
@@ -183,10 +189,22 @@
         {
           "name": "keyword.mnemonic.rpw65",
           "match": "\\s(?i:CLC|CLD|CLI|CLV|SEC|SED|SEI|BRK|NOP|RTI)\\s"
-        },
+        }
+      ]
+    },
+    "mnemonics-65c02": {
+      "patterns": [
         {
           "name": "keyword.mnemonic.rpw65",
-          "match": "\\s(?i:BRA|PHX|PHY|PLX|PLY|STZ|TRB|TSB)\\s"
+          "match": "\\s(?i:bra|phx|phy|plx|ply|stz|trb|tsb)\\s"
+        }
+      ]
+    },
+    "mnemonics-65816": {
+      "patterns": [
+        {
+          "name": "keyword.mnemonic.rpw65",
+          "match": "\\s(?i:brl|cop|jsl|mvn|mvp|pea|pei|per|phb|phd|phk|plb|pld|rep|rtl|sep|tcd|tcs|tdc|tsc|txy|tyx|wdm|xba|xce)\\s"
         }
       ]
     }

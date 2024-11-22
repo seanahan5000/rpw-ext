@@ -1,13 +1,14 @@
 
 import * as exp from "./expressions"
-import { Parser } from "./parser"
 import { Assembler, NestingType } from "./assembler"
-import { Preprocessor, SymbolUtils } from "./preprocessor"
+import { Parser } from "./parser"
+import { Preprocessor, SymbolUtils } from "./assembler"
 import { SymbolType, SymbolFrom } from "./symbols"
 import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
-import { Isa6502 } from "../isa6502"
 import { KeywordDef } from "./syntaxes/syntax_types"
+
+import { OpcodeType, OpMode } from "../isa65xx"
 
 //==============================================================================
 //#region Statement
@@ -155,57 +156,33 @@ export class ContinuedStatement extends Statement {
     this.children = firstStatement.children
   }
 }
-
 //#endregion
 //==============================================================================
 //#region Opcodes
 //==============================================================================
 
-export enum OpMode {
-  NONE,
-  A,
-  IMM,
-  ZP,
-  ZPX,
-  ZPY,
-  ABS,
-  ABSX,
-  ABSY,
-  IND,
-  INDX,
-  INDY,
-  REL
-}
-
-
-export enum OpCpu {
-  M6502  = 0,
-  M65C02 = 1,
-  M65816 = 2
-}
-
 export class OpStatement extends Statement {
 
-  public opcode: any
+  public opcode: OpcodeType
   public opSuffix: string
-  public cpu: OpCpu
+  // public cpu: OpCpu
   private forceLong: boolean
   public mode: OpMode = OpMode.NONE
-  private opByte?: number
   private expression?: exp.Expression
 
-  constructor(opcode: any, opSuffix: string, cpu: OpCpu, forceLong: boolean) {
+  constructor(opcode: OpcodeType, opSuffix: string/*, cpu: OpCpu*/, forceLong: boolean) {
     super()
     this.opcode = opcode
     this.opSuffix = opSuffix
-    this.cpu = cpu
+    // this.cpu = cpu
     this.forceLong = forceLong
   }
 
+  // TODO: parse more addressing modes (65C02, 65816, 65EL02)
   parse(parser: Parser) {
     let token: Token | undefined
 
-    if (this.opcode.NONE === undefined) {
+    if (this.opcode.get(OpMode.NONE) === undefined) {
       token = parser.mustGetNextToken("expecting opcode expression")
     } else {
       token = parser.getNextToken()
@@ -220,351 +197,416 @@ export class OpStatement extends Statement {
 
     let str = token?.getString().toLowerCase() ?? ""
     if (str == "") {
-      if (this.opcode.NONE === undefined) {
-        this.opExp?.setError("Mode not allowed for this opcode")
-      }
+
       // TODO: check for INC/DEC and promote opcode to 65C02
+
       this.mode = OpMode.NONE
-      this.opByte = this.opcode.NONE
+      if (this.opcode.get(OpMode.NONE) === undefined) {
+        if (this.opcode.get(OpMode.A)) {
+          this.mode = OpMode.A
+        }
+      }
+
     } else if (token) {
+
       if (str == "a") {
+
         parser.addToken(token)
+
         // TODO: check for INC/DEC and promote opcode to 65C02
-        if (this.opcode.A === undefined) {
+
+        if (this.opcode.get(OpMode.A) === undefined) {
           token.setError("Accumulator mode not allowed for this opcode")
         } else if (parser.syntax == Syntax.ACME || parser.syntax == Syntax.DASM) {
           token.setError("Accumulator mode not allowed for this syntax")
         }
         token.type = TokenType.Opcode
         this.mode = OpMode.A
-        this.opByte = this.opcode.A
+
       } else if (str == "#") {
+
+        // TODO: *** "(#<label+1)" done by DASM, etc ***
+
         parser.addToken(token)
-        if (this.opcode.IMM === undefined) {
-          this.opExp?.setError("Opcode does not support this addressing mode")
-        }
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
-        this.opByte = this.opcode.IMM
         this.expression = parser.mustAddNextExpression()
+
       } else if (str == "/") {			// same as "#>"
+
         parser.addToken(token)
-        if (this.opcode.IMM === undefined) {
-          this.opExp?.setError("Opcode does not support this addressing mode")
-        } else if (parser.syntax && parser.syntax != Syntax.LISA) {
-          // *** don't bother with this message ***
+        if (parser.syntax && parser.syntax != Syntax.LISA) {
+          // TODO: also supported by ORCA/M
+          // TODO: don't bother with this message
           token.setError("Syntax specific to LISA assembler")
           // TODO: would be clearer to extend warning to entire expression
         }
         this.mode = OpMode.IMM
-        this.opByte = this.opcode.IMM
         // *** this loses the implied ">" operation
         this.expression = parser.mustAddNextExpression()
-      } else if ((str == "(" && !parser.requireBrackets)
-          || (str == "[" && (parser.allowBrackets || parser.requireBrackets))) {
-        const closingChar = str == "(" ? ")" : "]"
-        parser.addToken(token)
-        // *** check opcode has this address mode ***
-        token.type = TokenType.Opcode
+
+      } else if (str == "(" || str == "[") {
+
+        // TODO: split address mode parsing into a separate function
+
+        // default to indirect for any mode starting with ( or [
         this.mode = OpMode.IND
-        this.opByte = this.opcode.IND
+
+        token.type = TokenType.Opcode
+        parser.addToken(token)
+        const closingChar = str == "(" ? ")" : "]"
+
         this.expression = parser.mustAddNextExpression()
 
         let res = parser.mustAddToken([",", closingChar], TokenType.Opcode)
-        if (res.index == 0) {               // (exp,X)
-          this.mode = OpMode.INDX
-          this.opByte = this.opcode.INDX
+        if (res.index == 0) {
+
+          // ($FF,X) or ($FFFF,X) or ($FF,S),Y or ($FF,R),Y
+          // [$FF,X] or [$FFFF,X] or [$FF,S],Y or [$FF,R],Y
+
           const c = parser.peekVeryNextChar()
-          res = parser.mustAddToken("x", TokenType.Opcode)
-          if (res.index == 0 && res.token) {
-            if (this.opcode.INDX === undefined) {
-              this.opExp?.setError("Opcode does not support this addressing mode")
+          res = parser.mustAddToken(["x", "s", "r"], TokenType.Opcode)
+          if (res.index < 0) {
+            return
+          }
+
+          if (res.index == 0) {
+
+            // ($FF,X) or ($FFFF,X)
+            // [$FF,X] or [$FFFF,X]  (not valid)
+
+            if (closingChar == ")") {
+              this.mode = OpMode.INDX
             } else {
-              if (parser.syntax == Syntax.DASM) {
-                if (c == " " || c == "\t") {
-                  res.token.setError("DASM doesn't allow space between ',' and X register")
+              this.opExp?.setErrorWeak("Opcode does not support this addressing mode")
+            }
+
+            if (parser.syntax == Syntax.DASM) {
+              if (c == " " || c == "\t") {
+                res.token!.setError("DASM doesn't allow space between ',' and X register")
+              }
+            }
+            parser.mustAddToken(closingChar, TokenType.Opcode)
+
+          } else if (res.index > 0) {
+
+            // ($FF,S),Y or ($FF,R),Y
+            // [$FF,S],Y or [$FF,R],Y  (not valid)
+
+            parser.mustAddToken(closingChar, TokenType.Opcode)
+            res = parser.mustAddToken(",", TokenType.Opcode)
+            if (res.index == 0) {
+              res = parser.mustAddToken("y", TokenType.Opcode)
+              if (res.index == 0) {
+                if (closingChar == ")") {
+                  this.mode = res.index == 0 ? OpMode.SIY : OpMode.RIY
+                } else {
+                  this.opExp?.setErrorWeak("Opcode does not support this addressing mode")
                 }
               }
             }
-            token.type = TokenType.Opcode
           }
-          parser.mustAddToken(closingChar, TokenType.Opcode)
           return
-        }
-        if (res.index == 1) {        // (exp) or (exp),Y
-          this.mode = OpMode.INDY
-          this.opByte = this.opcode.INDY
+
+        } else {
+
           let nextToken = parser.addNextToken()
           if (!nextToken) {
-            this.mode = OpMode.IND
-            this.opByte = this.opcode.IND
-            if (this.opcode.IND === undefined) {
-              this.opExp?.setError("Opcode does not support this addressing mode")
+
+            // ($FF) or ($FFFF)
+            // [$FF] or [$FFFF]
+            if (closingChar == ")") {
+              this.mode = OpMode.IND
+            } else {
+              this.mode = OpMode.ALI
             }
+
           } else {
+
+            // ($FF),Y
+            // [$FF],Y
+            if (closingChar == ")") {
+              this.mode = OpMode.INDY
+            } else {
+              this.mode = OpMode.LIY
+            }
+
             token = nextToken
             str = token.getString()
             if (str == ",") {
               token.type = TokenType.Opcode
               const c = parser.peekVeryNextChar()
               res = parser.mustAddToken("y", TokenType.Opcode)
-              if (res.index == 0 && res.token) {
-                if (this.opcode.INDY === undefined) {
-                  this.opExp?.setError("Opcode does not support this addressing mode")
-                } else {
-                  if (parser.syntax == Syntax.DASM) {
-                    if (c == " " || c == "\t") {
-                      res.token.setError("DASM doesn't allow space between ',' and Y register")
-                    }
+              if (res.index == 0) {
+                if (parser.syntax == Syntax.DASM) {
+                  if (c == " " || c == "\t") {
+                    res.token!.setError("DASM doesn't allow space between ',' and Y register")
                   }
                 }
               }
+              // TODO: maybe undo token adds
             } else {
-              // *** should maybe undo this push ***
+              // TODO: maybe undo token add
               token.setError("Unexpected token")
             }
           }
-        } else {
-          return
         }
+
       } else {
 
-        // handle special case branch/jump labels
-        // *** TODO: this should all be folded into expression parsing
-
-        if (this.opcode.REL || (this.opcode.ABS &&
-            (this.opNameLC == "jmp" || this.opNameLC == "jsr"))) {
-
-          // *** move to parser ***
-          // *** these are valid outside of branch/jump opcodes ***
-
-          if (this.opcode.REL) {
-            this.mode = OpMode.REL            // exp
-            this.opByte = this.opcode.REL
-          } else {
-            this.mode = OpMode.ABS            // exp
-            this.opByte = this.opcode.ABS
-          }
-
-          const isDefinition = false
-          if (str == ">" || str == "<") {
-            if (!parser.syntax || parser.syntax == Syntax.LISA) {
-              this.expression = parser.parseLisaLocal(token, isDefinition)
-              parser.addExpression(this.expression)
-              return
-            }
-          } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
-            this.expression = parser.parseCA65Local(token, isDefinition)
+        const isDefinition = false
+        if (str == ">" || str == "<") {
+          if (!parser.syntax || parser.syntax == Syntax.LISA) {
+            this.expression = parser.parseLisaLocal(token, isDefinition)
             parser.addExpression(this.expression)
-            return
-          } else if (parser.syntaxDef.anonLocalChars && parser.syntaxDef.anonLocalChars.includes(str[0])) {
-            if (str[0] == str[str.length - 1]) {
-              // TODO: This only handles "-", not "+" because it would otherwise
-              //  be parsed as a unary operator.  See Parser.parseValueExpression
-              //  for the code that should be handling this.
-              if (str.length > 9) {
-                token.setError("Anonymous local is too long")
-                parser.addExpression(new exp.BadExpression([token]))
-                return
-              }
+          }
+        } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
+          this.expression = parser.parseCA65Local(token, isDefinition)
+          parser.addExpression(this.expression)
+        } else if (parser.syntaxDef.anonLocalChars && parser.syntaxDef.anonLocalChars.includes(str[0])) {
+          if (str[0] == str[str.length - 1]) {
+            // TODO: This only handles "-", not "+" because it would otherwise
+            //  be parsed as a unary operator.  See Parser.parseValueExpression
+            //  for the code that should be handling this.
+            if (str.length > 9) {
+              token.setError("Anonymous local is too long")
+              this.expression = new exp.BadExpression([token])
+              parser.addExpression(this.expression)
+            } else {
               token.type = TokenType.Label
               this.expression = parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
               parser.addExpression(this.expression)
-              return
             }
           }
         }
 
-        this.expression = parser.mustAddNextExpression(token)
+        if (!this.expression) {
+          this.expression = parser.mustAddNextExpression(token)
+        }
 
         token = parser.addNextToken()
         if (!token) {
-          if (this.opcode.REL) {
+          if (this.opcode.get(OpMode.REL)) {
             this.mode = OpMode.REL            // exp
-            this.opByte = this.opcode.REL
+          } else if (this.opcode.get(OpMode.LREL)) {
+            this.mode = OpMode.LREL           // exp
+          } else if (this.opcode.get(OpMode.ABS)) {
+            this.mode = OpMode.ABS            // exp
+          } else if (this.opcode.get(OpMode.LABS)) {
+            this.mode = OpMode.LABS           // exp
+          } else if (this.opcode.get(OpMode.ZP)) {
+            this.mode = OpMode.ZP             // PEI exp
           } else if (this.opNameLC == "brk") {
             this.mode = OpMode.IMM            // exp
-            this.opByte = this.opcode.IMM
-          } else {
-            this.mode = OpMode.ABS            // exp
-            this.opByte = this.opcode.ABS
+          }
+        } else if (token.getString() == ",") {
+
+          // exp,X or exp,Y or exp,S or exp,R
+
+          // TODO: what about 65816 SD mode? #$FF,#$FF
+
+          token.type = TokenType.Opcode
+          const c = parser.peekVeryNextChar()
+          token = parser.mustAddNextToken("expecting 'X', 'Y', 'S' or 'R'")
+          if (token.type != TokenType.Missing) {
+            str = token.getString().toLowerCase()
+            if (str == "x") {             // exp,X
+              this.mode = OpMode.ABSX
+            } else if (str == "y") {      // exp,Y
+              this.mode = OpMode.ABSY
+            } else if (str == "s") {      // exp,S
+              // TODO: check for 65816 mode
+              this.mode = OpMode.STS
+            } else if (str == "r") {      // exp,R
+              // TODO: check for 65el02 mode
+              this.mode = OpMode.STR
+            } else if (str != "") {
+              token.setError("Unexpected token, expecting 'X', 'Y', 'S' or 'R'")
+              return
+            }
+            token.type = TokenType.Opcode
+            if (parser.syntax == Syntax.DASM) {
+              if (c == " " || c == "\t") {
+                token.setError("DASM doesn't allow space between ',' and X or Y register")
+              }
+            }
           }
         } else {
-          if (token.getString() == ",") {   // exp,X or exp,Y
-            token.type = TokenType.Opcode
-            const c = parser.peekVeryNextChar()
-            token = parser.mustAddNextToken("expecting 'X' or 'Y'")
-            if (token.type != TokenType.Missing) {
-              str = token.getString().toLowerCase()
-              if (str == "x") {             // exp,X
-                this.mode = OpMode.ABSX
-                this.opByte = this.opcode.ABSX
-                token.type = TokenType.Opcode
-              } else if (str == "y") {      // exp,Y
-                this.mode = OpMode.ABSY
-                this.opByte = this.opcode.ABSY
-                token.type = TokenType.Opcode
-              } else if (str != "") {
-                token.setError("Unexpected token, expecting 'X' or 'Y'")
-                return
-              }
-              if (parser.syntax == Syntax.DASM) {
-                if (c == " " || c == "\t") {
-                  token.setError("DASM doesn't allow space between ',' and X or Y register")
-                }
-              }
-            }
-          } else {
-            token.setError("Unexpected token, expecting ','")
-          }
+          token.setError("Unexpected token, expecting ','")
         }
       }
-    }
-  }
-
-  // TODO: what is the TypeScript magic to avoid this?
-  private checkMode(mode: OpMode): boolean {
-    switch (mode) {
-      case OpMode.NONE:
-        return this.opcode.NONE !== undefined
-      case OpMode.A:
-        return this.opcode.A !== undefined
-      case OpMode.IMM:
-        return this.opcode.IMM !== undefined
-      case OpMode.ZP:
-        return this.opcode.ZP !== undefined
-      case OpMode.ZPX:
-        return this.opcode.ZPX !== undefined
-      case OpMode.ZPY:
-        return this.opcode.ZPY !== undefined
-      case OpMode.ABS:
-        return this.opcode.ABS !== undefined
-      case OpMode.ABSX:
-        return this.opcode.ABSX !== undefined
-      case OpMode.ABSY:
-        return this.opcode.ABSY !== undefined
-      case OpMode.IND:
-        return this.opcode.IND !== undefined
-      case OpMode.INDX:
-        return this.opcode.INDX !== undefined
-      case OpMode.INDY:
-        return this.opcode.INDY !== undefined
-      case OpMode.REL:
-        return this.opcode.REL !== undefined
-    }
-    return false
-  }
-
-  // called after symbols have been processed
-  //  TODO: make this part of assemble phases
-  postProcessSymbols(symUtils: SymbolUtils) {
-    if (this.expression) {
-      switch (this.mode) {
-        case OpMode.NONE:
-        case OpMode.A:
-          // mode already checked
-          break
-        case OpMode.IMM:
-          // mode already checked
-          symUtils.markConstants(this.expression)
-          const immValue = this.expression.resolve()
-          if (immValue === undefined) {
-            if (this.expression instanceof exp.StringExpression) {
-              this.expression.setError("String expression not valid here")
-            }
-          } else {
-            if (immValue > 255) {
-              this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
-            }
-          }
-          break
-        case OpMode.ZP:
-        case OpMode.ZPX:
-        case OpMode.ZPY:
-          // will never be ZPAGE at this point
-          break
-        case OpMode.ABS:
-          if (this.opNameLC == "jmp") {
-            symUtils.markCode(this.expression)
-            break
-          }
-          if (this.opNameLC == "jsr") {
-            symUtils.markSubroutine(this.expression)
-            break
-          }
-          // fall through
-        case OpMode.ABSX:
-        case OpMode.ABSY:
-          const size = this.expression.getSize() ?? 0
-          if (size == 1 && !this.forceLong) {
-            let newMode: OpMode
-            let newOpByte: number
-            if (this.mode == OpMode.ABS) {
-              newMode = OpMode.ZP
-              newOpByte = this.opcode.ZP
-            } else if (this.mode == OpMode.ABSX) {
-              newMode = OpMode.ZPX
-              newOpByte = this.opcode.ZPX
-            } else {
-              newMode = OpMode.ZPY
-              newOpByte = this.opcode.ZPY
-            }
-            if (this.checkMode(newMode)) {
-              this.mode = newMode
-              this.opByte = newOpByte
-              symUtils.markZPage(this.expression)
-            } else {
-              // TODO: warn that ABS mode will be used instead of ZP?
-              this.opExp?.setWarning("ZP address forced to ABS")
-            }
-          } else {
-            symUtils.markData(this.expression)
-          }
-          if (!this.checkMode(this.mode)) {
-            // TODO: put this on an args expression instead
-            this.opExp?.setError("Opcode does not support this addressing mode")
-          }
-          break
-        case OpMode.IND:
-          // mode already checked
-          break
-        case OpMode.INDX:
-        case OpMode.INDY:
-          // mode already checked
-          symUtils.markZPage(this.expression)
-          const value = this.expression.resolve()
-          if (value !== undefined) {
-            if (value > 255) {
-              this.expression.setError("Expression too large for addressing mode")
-            }
-          }
-          break
-        case OpMode.REL:
-          symUtils.markCode(this.expression)
-          break
-      }
-    }
-
-    // if opcode has label, label must be code
-    if (this.labelExp) {
-      symUtils.markCode(this.labelExp)
     }
   }
 
   pass1(asm: Assembler): number | undefined {
-    if (this.opByte !== undefined) {
-      return Isa6502.ops[this.opByte].bc
+
+    // opcode promotion/demotion happens here
+
+    let opDef = this.opcode.get(this.mode)
+    const expSize = this.expression?.getSize() ?? 0
+    let newMode = this.mode
+
+    switch (this.mode) {
+
+      case OpMode.ABS:      // $FFFF
+      case OpMode.ABSX:     // $FFFF,X
+      case OpMode.ABSY:     // $FFFF,Y
+        if (expSize == 1 && !this.forceLong) {
+          if (this.mode == OpMode.ABS) {
+            newMode = OpMode.ZP   // $FF
+          } else if (this.mode == OpMode.ABSX) {
+            newMode = OpMode.ZPX  // $FF,X
+          } else {
+            newMode = OpMode.ZPY  // $FF,Y
+          }
+          if (!this.opcode.get(newMode)) {
+            // TODO: warn that ABS mode will be used instead of ZP?
+            this.opExp?.setWarning("ZP address forced to ABS")
+          }
+        } else if (expSize == 3) {
+          if (this.mode == OpMode.ABS || !opDef) {
+            newMode = OpMode.LABS   // $FFFFFF
+          } else if (this.mode == OpMode.ABSX || !opDef) {
+            newMode = OpMode.LABX   // $FFFFFF,X
+          } else {
+            break
+          }
+        }
+        break
+
+      case OpMode.IND:      // ($FFFF)
+        if (expSize == 1 && !this.forceLong) {
+          newMode = OpMode.INZ    // ($FF)
+        }
+        break
+
+      case OpMode.INDX:     // ($FF,X)
+        if (expSize == 2) {
+          newMode = OpMode.AXI    // ($FFFF,X)
+        }
+        break
+
+      case OpMode.ALI:      // [$FFFF]
+        if (expSize == 1 && !this.forceLong) {
+          newMode = OpMode.LIN    // [$FF]
+        }
+        break
+    }
+
+    if (newMode != this.mode) {
+      const newOpDef = this.opcode.get(newMode)
+      if (newOpDef) {
+        opDef = newOpDef
+        this.mode = newMode
+      }
+    }
+
+    if (!opDef) {
+      // special-case brk instruction with optional extra argument
+      if (this.opNameLC == "brk") {
+        if (this.mode == OpMode.IMM || this.mode == OpMode.ZP) {
+          return 1
+        }
+      }
+      this.opExp?.setErrorWeak("Opcode does not support this addressing mode")
+    } else {
+      return opDef.bc
     }
   }
 
   pass2(asm: Assembler, dataBytes: number[]): void {
-    if (this.opByte !== undefined) {
-      dataBytes[0] = this.opByte
+
+    // *** warning when it's too late to demote to zpage? ***
+
+    const opDef = this.opcode.get(this.mode)
+    if (opDef !== undefined) {
+
+      // TODO: this needs to be reworked
+      if (this.expression) {
+        switch (this.mode) {
+          // case OpMode.NONE:
+          // case OpMode.A:
+          case OpMode.IMM:
+            if (this.expression) {
+              asm.symUtils.markConstants(this.expression)
+              const immValue = this.expression.resolve()
+              if (immValue === undefined) {
+                if (this.expression instanceof exp.StringExpression) {
+                  this.expression.setError("String expression not valid here")
+                }
+              } else {
+                // TODO: skip if 65816
+                // if (immValue > 255) {
+                //   this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
+                // }
+              }
+            }
+            break
+          case OpMode.ZP:
+          case OpMode.ZPX:
+          case OpMode.ZPY:
+            asm.symUtils.markZPage(this.expression)
+            break
+          case OpMode.ABS:
+            if (opDef && opDef.fc) {
+              if (this.opNameLC == "jmp") {
+                asm.symUtils.markCode(this.expression)
+                break
+              }
+              if (this.opNameLC == "jsr" || this.opNameLC == "jsl") {
+                asm.symUtils.markSubroutine(this.expression)
+                break
+              }
+            }
+            // fall through
+          case OpMode.ABSX:
+          case OpMode.ABSY:
+            asm.symUtils.markData(this.expression)
+            break
+          case OpMode.IND:
+            break
+          case OpMode.INDX:
+          case OpMode.INDY:
+            asm.symUtils.markZPage(this.expression)
+            const value = this.expression.resolve()
+            if (value !== undefined) {
+              if (value > 255) {
+                this.expression.setError("Expression too large for addressing mode")
+              }
+            }
+            break
+
+          case OpMode.REL:
+          case OpMode.LREL:
+            if (opDef && opDef.fc) {
+              asm.symUtils.markCode(this.expression)
+            }
+            break
+
+          // case OpMode.INZ:      // ($FF)
+          // case OpMode.LIN:      // [$FF]
+          // case OpMode.LIY:      // [$FF],Y
+          // case OpMode.AXI:      // ($FFFF,X)
+          // case OpMode.LABS:     // $FFFFFF
+          // case OpMode.LABX:     // $FFFFFF,X
+          // case OpMode.ALI:      // [$FFFF]
+          // case OpMode.STS:      // stack,S
+          // case OpMode.SIY:      // (stack,S),Y
+          // case OpMode.SD:       // #$FF,#$FF
+          // case OpMode.STR:      // stack,R
+          // case OpMode.RIY:      // (stack,R),Y
+        }
+      }
+
+      if (this.labelExp) {
+        asm.symUtils.markCode(this.labelExp)
+      }
+
+      dataBytes[0] = opDef.val
       if (this.expression) {
         let value = this.expression.resolve()
         if (value !== undefined) {
-          const bc = Isa6502.ops[this.opByte].bc
-          if (bc == 2) {
+          if (opDef.bc == 2) {
             if (this.mode == OpMode.REL) {
               value = value - this.PC! - 2
               if (value < -128 || value > 127) {
@@ -579,11 +621,13 @@ export class OpStatement extends Statement {
                 //   return
                 // }
               } else if (value < -128 || value > 255) {
-                this.expression.setWarning(`Value ${value} will be truncated to 8 bits`)
+                // TODO: skip this if 65816
+                // this.expression.setWarning(`Value ${value} will be truncated to 8 bits`)
               }
             }
             dataBytes[1] = value & 0xff
-          } if (bc == 3) {
+          } if (opDef.bc == 3) {
+            // TODO: check LREL offset
             dataBytes[1] = (value >> 0) & 0xff
             dataBytes[2] = (value >> 8) & 0xff
           }
@@ -1184,7 +1228,7 @@ export class StorageStatement extends Statement {
       if (countArg) {
         this.countValue = countArg.resolve()
         if (this.countValue === undefined) {
-          countArg.setError("Must resolve on first pass")
+          countArg.setErrorWeak("Must resolve on first pass")
         }
       } else {
         // assume if count isn't found, must be Merlin "\\"
@@ -1241,12 +1285,12 @@ export class AlignStatement extends Statement {
       if (andArg && equalArg) {
         const andValue = andArg.resolve()
         if (andValue === undefined) {
-          andArg.setError("Must resolve on first pass")
+          andArg.setErrorWeak("Must resolve on first pass")
           return
         }
         const equalValue = equalArg.resolve()
         if (equalValue === undefined) {
-          equalArg.setError("Must resolve on first pass")
+          equalArg.setErrorWeak("Must resolve on first pass")
           return
         }
         this.padValue = (equalValue - prep.getCurrentPC()) & andValue
@@ -1258,7 +1302,7 @@ export class AlignStatement extends Statement {
       if (boundaryArg) {
         const value = boundaryArg.resolve()
         if (value === undefined) {
-          boundaryArg.setError("Must resolve on first pass")
+          boundaryArg.setErrorWeak("Must resolve on first pass")
           return
         }
         boundaryValue = value
@@ -1269,7 +1313,7 @@ export class AlignStatement extends Statement {
       if (offsetArg) {
         const value = offsetArg.resolve()
         if (value === undefined) {
-          offsetArg.setError("Must resolve on first pass")
+          offsetArg.setErrorWeak("Must resolve on first pass")
           return
         }
         offsetValue = value
@@ -1828,7 +1872,7 @@ export class OrgStatement extends Statement {
       if (valueArg) {
         const orgValue = valueArg.resolve()
         if (orgValue === undefined) {
-          valueArg.setError("Must resolve in first pass")
+          valueArg.setErrorWeak("Must resolve in first pass")
         } else if (orgValue < 0 || orgValue > 0xFFFF) {
           valueArg.setError("Invalid org value " + orgValue)
         } else {
@@ -2042,7 +2086,7 @@ export class DummyStatement extends Statement {
         const orgValue = valueArg.resolve()
         if (orgValue === undefined) {
           // *** TODO: only if doing full assemble ***
-          valueArg.setError("Must resolve in first pass")
+          valueArg.setErrorWeak("Must resolve in first pass")
         } else {
           prep.setNextPC(orgValue)
         }

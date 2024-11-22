@@ -1,12 +1,25 @@
 # RPW 65 Changelog
 
+### [1.4.0] - 2024-11-22
+
+Mainly the addition of 65816 and ORCA/M parsing and hiliting
+
+#### Added:
+* Parsing and hiliting of all 65816 and 65EL02 opcodes and addressing modes
+* Preliminary ORCA/M (APW) syntax definition
+* DASM: Brackets in place of parens
+
+#### Fixed:
+* All: Expression parsing crash on invalid hex values ("$XX", for example)
+* DASM: Regression in handling of "#" prefix on pseudo-ops
+
 ### [1.3.2] - 2024-10-21
 
 Updates to default syntax hiliting definitions in rpw65.tmLanguage.json
 
 #### Added:
 
-* All directives/psuedo ops
+* All directives/pseudo ops
 * Single quoted string pattern
 * Corrected escape character pattern
 
@@ -20,10 +33,10 @@ Updates to default syntax hiliting definitions in rpw65.tmLanguage.json
 
 ### [1.3.0] - 2024-10-17
 
-Major rewrite of syntax parsing to move from an imperitive implementation to a definition-driven one.
+Major rewrite of syntax parsing to move from an imperative implementation to a definition-driven one.
 
 #### Added:
-* Hover, auto complete and descriptions for all directives/psuedo ops
+* Hover, auto complete and descriptions for all directives/pseudo ops
 * 64tass syntax support
 * Missing keywords and aliases for all syntaxes
 * Improved auto-detect of syntax

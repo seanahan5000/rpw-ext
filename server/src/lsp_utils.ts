@@ -3,13 +3,13 @@ import * as lsp from 'vscode-languageserver'
 import { LspServer } from "./lsp_server"
 import { SourceFile } from "./asm/project"
 import { Token, TokenType } from "./asm/tokenizer"
-import { OpStatement, OpMode, ContinuedStatement } from "./asm/statements"
-import { OpcodeSets } from "./asm/opcodes"
+import { ContinuedStatement, OpStatement } from "./asm/statements"
 import { SyntaxDefs } from "./asm/syntaxes/syntax_defs"
 import { SymbolType } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
 import { Expression, SymbolExpression } from "./asm/expressions"
 import { ParamsParser } from "./asm/syntaxes/params"
+import { isaSet65xx, OpMode } from "./isa65xx"
 
 //------------------------------------------------------------------------------
 
@@ -179,7 +179,7 @@ export class Completions {
       // initial args completions
       if (firstStatement instanceof OpStatement) {
         if (firstStatement.mode == OpMode.NONE) {
-          if (firstStatement.opcode.NONE) {
+          if (firstStatement.opcode.get(OpMode.NONE)) {
             // use default completions
             // TODO: how to force none?
           } else {
@@ -212,7 +212,8 @@ export class Completions {
               this.addUnclassified = ++index
               break
             case OpMode.ABS:
-              if (firstStatement.opNameLC == "jsr" || firstStatement.opNameLC == "jmp") {
+            case OpMode.LABS:
+                if (firstStatement.opNameLC == "jsr" || firstStatement.opNameLC == "jmp") {
                 // *** TODO: handle both zone and cheap locals
                 if (prevChar == ":") {
                   this.addLocals = ++index
@@ -230,12 +231,17 @@ export class Completions {
             case OpMode.ZPY:
             case OpMode.ABSX:
             case OpMode.ABSY:
+            case OpMode.LABX:
               this.addData = ++index
               this.addZpage = ++index
               this.addUnclassified = ++index
               checkXY = true
               break
+            case OpMode.AXI:
+              checkXY = true
+              // fall through
             case OpMode.IND:
+            case OpMode.ALI:
               this.addZpage = ++index
               this.addData = ++index
               this.addUnclassified = ++index
@@ -243,11 +249,18 @@ export class Completions {
               break
             case OpMode.INDX:
             case OpMode.INDY:
+            case OpMode.LIY:
               this.addZpage = ++index
               this.addUnclassified = ++index
               checkXY = true
               break
+            case OpMode.INZ:
+            case OpMode.LIN:
+              this.addZpage = ++index
+              this.addUnclassified = ++index
+              break
             case OpMode.REL:
+            case OpMode.LREL:
               // TODO: constrain to only close-by code
               // *** TODO: handle both zone and cheap locals
               if (prevChar == ":") {
@@ -257,6 +270,13 @@ export class Completions {
                 this.addUnclassified = ++index
               }
               break
+
+            // TODO: smart completions for these modes
+              // STS, // stack,S
+              // SIY, // (stack,S),Y
+              // SD,  // #$FF,#$FF
+              // STR, // stack,R
+              // RIY, // (stack,R),Y
           }
         }
       } else {
@@ -310,24 +330,23 @@ export class Completions {
     const completions: lsp.CompletionItem[] = []
 
     if (this.addOpcodes) {
-      for (let i = 0; i < OpcodeSets.length; i += 1) {
-        const opcodeSet = OpcodeSets[i]
-        // TODO: decide if opcodes should be limited to just 6502?
-        for (let key in opcodeSet) {
-          let opcode = (opcodeSet as {[key: string]: any})[key]
-          if (sourceFile.module.project.upperCase) {
-            key = key.toUpperCase()
-          }
-          // only add trailing space for opcodes that have addressing modes
-          if (!opcode.NONE) {
-            key = key.padEnd(4, " ")
-          }
-          let item = lsp.CompletionItem.create(key)
-          item.sortText = `${this.addOpcodes}_${key}`
-          item.kind = lsp.CompletionItemKind.Text
-          completions.push(item)
+
+      // TODO: how should this be chosen? get from statement?
+      const isa = isaSet65xx.getIsa("65816")
+
+      isa.opcodeByName.forEach((value, key) => {
+        if (sourceFile.module.project.upperCase) {
+          key = key.toUpperCase()
         }
-      }
+        // only add trailing space for opcodes that have addressing modes
+        if (!value.get(OpMode.NONE)) {
+          key = key.padEnd(4, " ")
+        }
+        let item = lsp.CompletionItem.create(key)
+        item.sortText = `${this.addOpcodes}_${key}`
+        item.kind = lsp.CompletionItemKind.Text
+        completions.push(item)
+      })
     }
 
     if (this.addKeywords) {

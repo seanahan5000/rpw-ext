@@ -3,6 +3,9 @@
 BUILD = 0
         .endweak
 
+; *** scope symbols inside a .block/.bend group ***
+;   *** needed for Loderunner ***
+
 ; my_macro2       .macro param
 ;                 lda #\param
 ;                 .endmacro
@@ -53,6 +56,7 @@ BUILD = 0
                 .cpu "65c02"
                 .cpu "65816"
                 .cpu "default"
+                .cpu "65el02"
                 .cpu "6502"
 
 * = $1000
@@ -309,6 +313,16 @@ red             .from vic.colors
 
                 .proff
                 .pron
+
+; 65816-only
+                .al
+                .as
+                .xl
+                .xs
+                .autsiz
+                .mansiz
+                .databank $10
+                .dpage $400
 
 .end
 ; This is ignored

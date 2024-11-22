@@ -10,6 +10,7 @@ import { DasmSyntax } from "./dasm"
 import { LisaSyntax } from "./lisa"
 import { MerlinSyntax } from "./merlin"
 import { Tass64Syntax } from "./64tass"
+import { OrcaMSyntax } from "./orcam"
 
 //------------------------------------------------------------------------------
 
@@ -20,7 +21,8 @@ export const SyntaxDefs: SyntaxDef[] = [
   new Ca65Syntax(),
   new AcmeSyntax(),
   new LisaSyntax(),
-  new Tass64Syntax()
+  new Tass64Syntax(),
+  new OrcaMSyntax()
 ]
 
 //------------------------------------------------------------------------------

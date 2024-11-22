@@ -7,6 +7,7 @@ import { SyntaxDefs } from "./syntaxes/syntax_defs"
 export enum NodeErrorType {
   None,
   Error,
+  ErrorWeak,
   Warning,
   Info
 }
@@ -35,6 +36,14 @@ export abstract class Node {
     }
   }
 
+  setErrorWeak(message: string) {
+    if (this.errorType != NodeErrorType.Error &&
+        this.errorType != NodeErrorType.ErrorWeak) {
+      this.errorType = NodeErrorType.ErrorWeak
+      this.errorMessage = message
+    }
+  }
+
   setWarning(message: string) {
     if (this.errorType != NodeErrorType.Error &&
         this.errorType != NodeErrorType.Warning) {
@@ -43,8 +52,9 @@ export abstract class Node {
     }
   }
 
-  hasError(): boolean {
-    return this.errorType == NodeErrorType.Error
+  hasError(includingWeak = true): boolean {
+    return this.errorType == NodeErrorType.Error ||
+      (this.errorType == NodeErrorType.ErrorWeak && includingWeak)
   }
 }
 

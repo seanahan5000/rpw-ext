@@ -5,7 +5,7 @@ import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
 import { Parser } from "./parser"
-import { Preprocessor } from "./preprocessor"
+import { Preprocessor } from "./assembler"
 import { TypeDef } from "./assembler"
 import { Symbol } from "./symbols"
 

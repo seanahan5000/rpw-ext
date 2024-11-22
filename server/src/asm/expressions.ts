@@ -89,16 +89,16 @@ export class Expression extends Node {
 
   // return true if this expression or any of its children have an error
   // TODO: return Node | undefined instead?
-  hasAnyError(): boolean {
-    if (this.hasError()) {
+  hasAnyError(includingWeak = true): boolean {
+    if (this.hasError(includingWeak)) {
       return true
     }
     for (let i = 0; i < this.children.length; i += 1) {
       const child = this.children[i]
       if (child instanceof Expression) {
-        return child.hasAnyError()
+        return child.hasAnyError(includingWeak)
       } else {
-        return child.hasError()
+        return child.hasError(includingWeak)
       }
     }
     return false
@@ -124,12 +124,16 @@ export class BadExpression extends Expression {
 //------------------------------------------------------------------------------
 
 export class NumberExpression extends Expression {
-  private value: number
+  private value?: number
   private force16: boolean
 
   constructor(children: Node[], value: number, force16: boolean) {
     super(children)
-    this.value = value
+    if (Number.isNaN(value)) {
+      this.value = undefined
+    } else {
+      this.value = value
+    }
     this.force16 = force16
   }
 
@@ -138,7 +142,9 @@ export class NumberExpression extends Expression {
   }
 
   getSize(): number | undefined {
-    return this.force16 || this.value > 255 || this.value < -128 ? 2 : 1
+    if (this.value !== undefined) {
+      return this.force16 || this.value > 255 || this.value < -128 ? 2 : 1
+    }
   }
 }
 
@@ -487,6 +493,16 @@ export class PcExpression extends Expression {
 export class FileNameExpression extends Expression {
   constructor(token: Token) {
     super([token])
+  }
+}
+
+//------------------------------------------------------------------------------
+
+// NOTE: specific to ORCA/M
+
+export class CondefExpression extends Expression {
+  constructor(children?: Node[]) {
+    super(children)
   }
 }
 

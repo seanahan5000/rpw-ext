@@ -11,7 +11,6 @@
                 dc.b "\t"
                 dc.b "\x1F"
 
-
 PUHEIGHT = 1
 	ldx (#PUHEIGHT-1)  ; get line count to draw player 1
 
@@ -53,12 +52,17 @@ symbol3         eqm $3000
 symbol4         set $4000
 ; symbol5         setstr var+1
 
+                lda [$ff],y
+                lda [$ff,x]
+                jmp [$ffff]
+
                 dc  0,1,2,3
                 dc.b -1,1,2,3,<symbol1
                 dc.b #<symbol1
                 dc.w $ffff
                 dc.l $7fffffff
                 dc.s "test"
+                dc.w [symbol1+128]/2
 
                 ; dc.s "X\\X\"X\'X\rX\nX\tX\x1F"
                 dc.s "\\"
@@ -102,6 +106,10 @@ wait            = 1
                 if wait
                 else
                 eif
+
+                #if wait
+                #else
+                #eif
 
                 repeat 2
                 repend

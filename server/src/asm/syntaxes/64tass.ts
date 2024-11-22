@@ -34,7 +34,7 @@ export class Tass64Syntax extends SyntaxDef {
     this.keywordMap = new Map<string, KeywordDef>([
       // target
       [ ".cpu",     { create: () => { return new stm.CpuStatement() },
-                      params: '{"6502"|"65c02"|"65816"|"default"}',
+                      params: '{"6502"|"65c02"|"65816"|"65el02"|"default"}',
                       desc:   "Selects CPU according to the string argument" } ],
 
       // equates
@@ -436,6 +436,32 @@ export class Tass64Syntax extends SyntaxDef {
                       params: "",
                       desc:   "End of .comment block" } ],
       [ ".endc",    { alias: ".endcomment" } ],
+
+      // 65816-only
+      [ ".al",        { // TODO
+                        params: "",
+                        desc:   "Select long (16-bit) accumulator immediate constants" } ],
+      [ ".as",        { // TODO
+                        params: "",
+                        desc:   "Select short (8-bit) accumulator immediate constants" } ],
+      [ ".xl",        { // TODO
+                        params: "",
+                        desc:   "Select long (16-bit) index register immediate constants" } ],
+      [ ".xs",        { // TODO
+                        params: "",
+                        desc:   "Select short (8-bit) index register immediate constants" } ],
+      [ ".autsiz",    { // TODO
+                        params: "",
+                        desc:   "Select automatic adjustment of immediate constant sizes based on SEP/REP instructions" } ],
+      [ ".mansiz",    { // TODO
+                        params: "",
+                        desc:   "Select manual adjustment of immediate constant sizes based on SEP/REP instructions" } ],
+      [ ".databank",  { // TODO
+                        params: "<expression>",
+                        desc:   "Data bank (absolute) addressing is only used for addresses falling into this 64 KiB bank" } ],
+      [ ".dpage",     { // TODO
+                        params: "<expression>",
+                        desc:   "Direct (zero) page addressing is only used for addresses falling into a specific 256 byte address range" } ],
     ])
 
     this.unaryOpMap = new Map<string, OpDef>([
