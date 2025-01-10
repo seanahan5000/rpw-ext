@@ -7,11 +7,11 @@
 	"license": "MIT",
 	"version": "1.4.0",
 	"repository": {
-    "type": "git",
-    "url": "https://github.com/seanahan5000/rpw-ext.git"
-  },
+		"type": "git",
+		"url": "https://github.com/seanahan5000/rpw-ext.git"
+	},
 	"categories": [
-		"Programming Languages"
+		"Programming Languages", "Debuggers"
 	],
 	"keywords": [
 		"6502",
@@ -30,6 +30,10 @@
 	},
 	"icon": "rpw65-icon.png",
 	"main": "./client/out/extension",
+  "activationEvents": [
+    "onDebugResolve:rpw65",
+    "onDebugDynamicConfigurations:rpw65"
+  ],
 	"contributes": {
 		"configuration": {
 			"type": "object",
@@ -108,7 +112,37 @@
 					"command": "rpw65.renumberLocals",
 					"group": "1_modification"
 				}
+			],
+
+			"editor/title/run": [
+				{
+					"command": "extension.rpw65.runEditorContents",
+					"when": "resourceLangId == markdown",
+					"group": "navigation@1"
+				},
+				{
+					"command": "extension.rpw65.debugEditorContents",
+					"when": "resourceLangId == markdown",
+					"group": "navigation@2"
+				}
+			],
+			"commandPalette": [
+				{
+					"command": "extension.rpw65.debugEditorContents",
+					"when": "resourceLangId == markdown"
+				},
+				{
+					"command": "extension.rpw65.runEditorContents",
+					"when": "resourceLangId == markdown"
+				}
+			],
+			"debug/variables/context": [
+				{
+					"command": "extension.rpw65.toggleFormatting",
+					"when": "debugType == 'rpw65' && debugProtocolVariableMenuContext == 'simple'"
+				}
 			]
+
 		},
 		"commands": [
 			{
@@ -134,7 +168,27 @@
 			{
 				"command": "rpw65.rightArrowIndent",
 				"title": "Right Arrow Indentation"
-			}
+			},
+
+      {
+        "command": "extension.rpw65.debugEditorContents",
+        "title": "Debug File",
+        "category": "Mock Debug",
+        "enablement": "!inDebugMode",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "extension.rpw65.runEditorContents",
+        "title": "Run File",
+        "category": "Mock Debug",
+        "enablement": "!inDebugMode",
+        "icon": "$(play)"
+      },
+      {
+        "command": "extension.rpw65.toggleFormatting",
+        "title": "Toggle between decimal and hex formatting"
+      }
+
 		],
 		"keybindings": [
 			{
@@ -222,6 +276,120 @@
 					]
 				}
 			}
+		],
+		"breakpoints": [
+			{
+				"language": "rpw65"
+			}
+		],
+    "debuggers": [
+      {
+        "type": "rpw65",
+        "languages": [
+          "rpw65"
+        ],
+        "label": "Mock Debug",
+        "runtime": "node",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to a text file.",
+                "default": "${workspaceFolder}/${command:AskForProgramName}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Automatically stop after launch.",
+                "default": true
+              },
+              "trace": {
+                "type": "boolean",
+                "description": "Enable logging of the Debug Adapter Protocol.",
+                "default": true
+              },
+              "compileError": {
+                "type": "string",
+                "description": "Simulates a compile error in 'launch' request.",
+                "enum": [
+                  "default",
+                  "show",
+                  "hide"
+                ],
+                "enumDescriptions": [
+                  "default: show fake compile error to user",
+                  "show fake compile error to user",
+                  "do not show fake compile error to user"
+                ]
+              }
+            }
+          },
+          "attach": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to a text file.",
+                "default": "${workspaceFolder}/${command:AskForProgramName}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Automatically stop after attach.",
+                "default": true
+              },
+              "trace": {
+                "type": "boolean",
+                "description": "Enable logging of the Debug Adapter Protocol.",
+                "default": true
+              },
+              "compileError": {
+                "type": "string",
+                "description": "Simulates a compile error in 'attach' request.",
+                "enum": [
+                  "default",
+                  "show",
+                  "hide"
+                ],
+                "enumDescriptions": [
+                  "default: show fake compile error to user",
+                  "show fake compile error to user",
+                  "do not show fake compile error to user"
+                ]
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "rpw65",
+            "request": "launch",
+            "name": "Ask for file name",
+            "program": "${workspaceFolder}/${command:AskForProgramName}",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Mock Debug: Launch",
+            "description": "A new configuration for 'debugging' a user selected markdown file.",
+            "body": {
+              "type": "rpw65",
+              "request": "launch",
+              "name": "Ask for file name",
+              "program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
+              "stopOnEntry": true
+            }
+          }
+        ],
+        "variables": {
+          "AskForProgramName": "extension.rpw65.getProgramName"
+        }
+      }
 		]
 	},
 	"scripts": {
@@ -232,7 +400,6 @@
 		"build": "npm run esbuild-base -- --sourcemap",
 		"esbuild-watch": "npm run esbuild-base -- --sourcemap --watch",
 		"test-compile": "tsc -p ./",
-
 		"compile": "tsc -b",
 		"watch": "tsc -b -w",
 		"postinstall": "cd client && npm install && cd ../server && npm install && cd .."
@@ -240,7 +407,10 @@
 	"devDependencies": {
 		"@types/node": "^16.18.34",
 		"esbuild": "^0.19.5",
-		"typescript": "^5.1.3"
+		"typescript": "^5.1.3",
+		"await-notify": "^1.0.1",
+		"base64-js": "^1.5.1",
+		"path-browserify": "^1.0.1"
 	},
 	"dependencies": {
 		"fs-extra": "^11.1.1"
