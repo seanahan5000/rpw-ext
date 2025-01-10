@@ -21,62 +21,62 @@ interface IRuntimeStepInTargets {
 	label: string;
 }
 
-interface IRuntimeStackFrame {
-	index: number;
-	name: string;
-	file: string;
-	line: number;
-	column?: number;
-	instruction?: number;
-}
+// interface IRuntimeStackFrame {
+// 	index: number;
+// 	name: string;
+// 	file: string;
+// 	line: number;
+// 	column?: number;
+// 	instruction?: number;
+// }
 
-interface IRuntimeStack {
-	count: number;
-	frames: IRuntimeStackFrame[];
-}
+// interface IRuntimeStack {
+// 	count: number;
+// 	frames: IRuntimeStackFrame[];
+// }
 
-interface RuntimeDisassembledInstruction {
-	address: number;
-	instruction: string;
-	line?: number;
-}
+// interface RuntimeDisassembledInstruction {
+// 	address: number;
+// 	instruction: string;
+// 	line?: number;
+// }
 
-export type IRuntimeVariableType = number | boolean | string | RuntimeVariable[];
+// export type IRuntimeVariableType = number | boolean | string | RuntimeVariable[];
 
-export class RuntimeVariable {
-	private _memory?: Uint8Array;
+// export class RuntimeVariable {
+// 	private _memory?: Uint8Array;
 
-	public reference?: number;
+// 	public reference?: number;
 
-	public get value() {
-		return this._value;
-	}
+// 	public get value() {
+// 		return this._value;
+// 	}
 
-	public set value(value: IRuntimeVariableType) {
-		this._value = value;
-		this._memory = undefined;
-	}
+// 	public set value(value: IRuntimeVariableType) {
+// 		this._value = value;
+// 		this._memory = undefined;
+// 	}
 
-	public get memory() {
-		if (this._memory === undefined && typeof this._value === 'string') {
-			this._memory = new TextEncoder().encode(this._value);
-		}
-		return this._memory;
-	}
+// 	public get memory() {
+// 		if (this._memory === undefined && typeof this._value === 'string') {
+// 			this._memory = new TextEncoder().encode(this._value);
+// 		}
+// 		return this._memory;
+// 	}
 
-	constructor(public readonly name: string, private _value: IRuntimeVariableType) {}
+// 	constructor(public readonly name: string, private _value: IRuntimeVariableType) {}
 
-	public setMemory(data: Uint8Array, offset = 0) {
-		const memory = this.memory;
-		if (!memory) {
-			return;
-		}
+// 	public setMemory(data: Uint8Array, offset = 0) {
+// 		const memory = this.memory;
+// 		if (!memory) {
+// 			return;
+// 		}
 
-		memory.set(data, offset);
-		this._memory = memory;
-		this._value = new TextDecoder().decode(memory);
-	}
-}
+// 		memory.set(data, offset);
+// 		this._memory = memory;
+// 		this._value = new TextDecoder().decode(memory);
+// 	}
+// }
 
 interface Word {
 	name: string;
@@ -111,7 +111,7 @@ export class MockRuntime extends EventEmitter {
 		return this._sourceFile;
 	}
 
-	private variables = new Map<string, RuntimeVariable>();
+	// private variables = new Map<string, RuntimeVariable>();
 
 	// the contents (= lines) of the one and only file
 	private sourceLines: string[] = [];
@@ -194,34 +194,34 @@ export class MockRuntime extends EventEmitter {
 	 */
 	public step(instruction: boolean, reverse: boolean) {
 
-		if (instruction) {
-			if (reverse) {
-				this.instruction--;
-			} else {
-				this.instruction++;
-			}
-			this.sendEvent('stopOnStep');
-		} else {
+		// if (instruction) {
+		// 	if (reverse) {
+		// 		this.instruction--;
+		// 	} else {
+		// 		this.instruction++;
+		// 	}
+		// 	this.sendEvent('stopOnStep');
+		// } else {
 			if (!this.executeLine(this.currentLine, reverse)) {
 				if (!this.updateCurrentLine(reverse)) {
 					this.findNextStatement(reverse, 'stopOnStep');
 				}
 			}
-		}
+		// }
 	}
 
 	private updateCurrentLine(reverse: boolean): boolean {
-		if (reverse) {
-			if (this.currentLine > 0) {
-				this.currentLine--;
-			} else {
-				// no more lines: stop at first line
-				this.currentLine = 0;
-				this.currentColumn = undefined;
-				this.sendEvent('stopOnEntry');
-				return true;
-			}
-		} else {
+		// if (reverse) {
+		// 	if (this.currentLine > 0) {
+		// 		this.currentLine--;
+		// 	} else {
+		// 		// no more lines: stop at first line
+		// 		this.currentLine = 0;
+		// 		this.currentColumn = undefined;
+		// 		this.sendEvent('stopOnEntry');
+		// 		return true;
+		// 	}
+		// } else {
 			if (this.currentLine < this.sourceLines.length-1) {
 				this.currentLine++;
 			} else {
@@ -230,7 +230,7 @@ export class MockRuntime extends EventEmitter {
 				this.sendEvent('end');
 				return true;
 			}
-		}
+		// }
 		return false;
 	}
 
@@ -290,38 +290,38 @@ export class MockRuntime extends EventEmitter {
 	/**
 	 * Returns a fake 'stacktrace' where every 'stackframe' is a word from the current line.
 	 */
-	public stack(startFrame: number, endFrame: number): IRuntimeStack {
+	// public stack(startFrame: number, endFrame: number): IRuntimeStack {
 
-		const line = this.getLine();
-		const words = this.getWords(this.currentLine, line);
-		words.push({ name: 'BOTTOM', line: -1, index: -1 });	// add a sentinel so that the stack is never empty...
+	// 	const line = this.getLine();
+	// 	const words = this.getWords(this.currentLine, line);
+	// 	words.push({ name: 'BOTTOM', line: -1, index: -1 });	// add a sentinel so that the stack is never empty...
 
-		// if the line contains the word 'disassembly' we support to "disassemble" the line by adding an 'instruction' property to the stackframe
-		const instruction = line.indexOf('disassembly') >= 0 ? this.instruction : undefined;
+	// 	// if the line contains the word 'disassembly' we support to "disassemble" the line by adding an 'instruction' property to the stackframe
+	// 	const instruction = line.indexOf('disassembly') >= 0 ? this.instruction : undefined;
 
-		const column = typeof this.currentColumn === 'number' ? this.currentColumn : undefined;
+	// 	const column = typeof this.currentColumn === 'number' ? this.currentColumn : undefined;
 
-		const frames: IRuntimeStackFrame[] = [];
-		// every word of the current line becomes a stack frame.
-		for (let i = startFrame; i < Math.min(endFrame, words.length); i++) {
+	// 	const frames: IRuntimeStackFrame[] = [];
+	// 	// every word of the current line becomes a stack frame.
+	// 	for (let i = startFrame; i < Math.min(endFrame, words.length); i++) {
 
-			const stackFrame: IRuntimeStackFrame = {
-				index: i,
-				name: `${words[i].name}(${i})`,	// use a word of the line as the stackframe name
-				file: this._sourceFile,
-				line: this.currentLine,
-				column: column, // words[i].index
-				instruction: instruction ? instruction + i : 0
-			};
+	// 		const stackFrame: IRuntimeStackFrame = {
+	// 			index: i,
+	// 			name: `${words[i].name}(${i})`,	// use a word of the line as the stackframe name
+	// 			file: this._sourceFile,
+	// 			line: this.currentLine,
+	// 			column: column, // words[i].index
+	// 			instruction: instruction ? instruction + i : 0
+	// 		};
 
-			frames.push(stackFrame);
-		}
+	// 		frames.push(stackFrame);
+	// 	}
 
-		return {
-			frames: frames,
-			count: words.length
-		};
-	}
+	// 	return {
+	// 		frames: frames,
+	// 		count: words.length
+	// 	};
+	// }
 
 	/*
 	 * Determine possible column breakpoint positions for the given line.
@@ -370,29 +370,29 @@ export class MockRuntime extends EventEmitter {
 		this.breakPoints.delete(this.normalizePathAndCasing(path));
 	}
 
-	public setDataBreakpoint(address: string, accessType: 'read' | 'write' | 'readWrite'): boolean {
+	// public setDataBreakpoint(address: string, accessType: 'read' | 'write' | 'readWrite'): boolean {
 
-		const x = accessType === 'readWrite' ? 'read write' : accessType;
+	// 	const x = accessType === 'readWrite' ? 'read write' : accessType;
 
-		const t = this.breakAddresses.get(address);
-		if (t) {
-			if (t !== x) {
-				this.breakAddresses.set(address, 'read write');
-			}
-		} else {
-			this.breakAddresses.set(address, x);
-		}
-		return true;
-	}
+	// 	const t = this.breakAddresses.get(address);
+	// 	if (t) {
+	// 		if (t !== x) {
+	// 			this.breakAddresses.set(address, 'read write');
+	// 		}
+	// 	} else {
+	// 		this.breakAddresses.set(address, x);
+	// 	}
+	// 	return true;
+	// }
 
-	public clearAllDataBreakpoints(): void {
-		this.breakAddresses.clear();
-	}
+	// public clearAllDataBreakpoints(): void {
+	// 	this.breakAddresses.clear();
+	// }
 
-	public setExceptionsFilters(namedException: string | undefined, otherExceptions: boolean): void {
-		this.namedException = namedException;
-		this.otherExceptions = otherExceptions;
-	}
+	// public setExceptionsFilters(namedException: string | undefined, otherExceptions: boolean): void {
+	// 	this.namedException = namedException;
+	// 	this.otherExceptions = otherExceptions;
+	// }
 
 	public setInstructionBreakpoint(address: number): boolean {
 		this.instructionBreakpoints.add(address);
@@ -403,53 +403,53 @@ export class MockRuntime extends EventEmitter {
 		this.instructionBreakpoints.clear();
 	}
 
-	public async getGlobalVariables(cancellationToken?: () => boolean ): Promise<RuntimeVariable[]> {
+	// public async getGlobalVariables(cancellationToken?: () => boolean ): Promise<RuntimeVariable[]> {
 
-		let a: RuntimeVariable[] = [];
+	// 	let a: RuntimeVariable[] = [];
 
-		for (let i = 0; i < 10; i++) {
-			a.push(new RuntimeVariable(`global_${i}`, i));
-			if (cancellationToken && cancellationToken()) {
-				break;
-			}
-			await timeout(1000);
-		}
+	// 	for (let i = 0; i < 10; i++) {
+	// 		a.push(new RuntimeVariable(`global_${i}`, i));
+	// 		if (cancellationToken && cancellationToken()) {
+	// 			break;
+	// 		}
+	// 		await timeout(1000);
+	// 	}
 
-		return a;
-	}
+	// 	return a;
+	// }
 
-	public getLocalVariables(): RuntimeVariable[] {
-		return Array.from(this.variables, ([name, value]) => value);
-	}
+	// public getLocalVariables(): RuntimeVariable[] {
+	// 	return Array.from(this.variables, ([name, value]) => value);
+	// }
 
-	public getLocalVariable(name: string): RuntimeVariable | undefined {
-		return this.variables.get(name);
-	}
+	// public getLocalVariable(name: string): RuntimeVariable | undefined {
+	// 	return this.variables.get(name);
+	// }
 
 	/**
 	 * Return words of the given address range as "instructions"
 	 */
-	public disassemble(address: number, instructionCount: number): RuntimeDisassembledInstruction[] {
+	// public disassemble(address: number, instructionCount: number): RuntimeDisassembledInstruction[] {
 
-		const instructions: RuntimeDisassembledInstruction[] = [];
+	// 	const instructions: RuntimeDisassembledInstruction[] = [];
 
-		for (let a = address; a < address + instructionCount; a++) {
-			if (a >= 0 && a < this.instructions.length) {
-				instructions.push({
-					address: a,
-					instruction: this.instructions[a].name,
-					line: this.instructions[a].line
-				});
-			} else {
-				instructions.push({
-					address: a,
-					instruction: 'nop'
-				});
-			}
-		}
+	// 	for (let a = address; a < address + instructionCount; a++) {
+	// 		if (a >= 0 && a < this.instructions.length) {
+	// 			instructions.push({
+	// 				address: a,
+	// 				instruction: this.instructions[a].name,
+	// 				line: this.instructions[a].line
+	// 			});
+	// 		} else {
+	// 			instructions.push({
+	// 				address: a,
+	// 				instruction: 'nop'
+	// 			});
+	// 		}
+	// 	}
 
-		return instructions;
-	}
+	// 	return instructions;
+	// }
 
 	// private methods
 
@@ -550,91 +550,91 @@ export class MockRuntime extends EventEmitter {
 			}
 		}
 
-		const line = this.getLine(ln);
+		// const line = this.getLine(ln);
 
-		// find variable accesses
-		let reg0 = /\$([a-z][a-z0-9]*)(=(false|true|[0-9]+(\.[0-9]+)?|\".*\"|\{.*\}))?/ig;
-		let matches0: RegExpExecArray | null;
-		while (matches0 = reg0.exec(line)) {
-			if (matches0.length === 5) {
+		// // find variable accesses
+		// let reg0 = /\$([a-z][a-z0-9]*)(=(false|true|[0-9]+(\.[0-9]+)?|\".*\"|\{.*\}))?/ig;
+		// let matches0: RegExpExecArray | null;
+		// while (matches0 = reg0.exec(line)) {
+		// 	if (matches0.length === 5) {
 
-				let access: string | undefined;
+		// 		let access: string | undefined;
 
-				const name = matches0[1];
-				const value = matches0[3];
+		// 		const name = matches0[1];
+		// 		const value = matches0[3];
 
-				let v = new RuntimeVariable(name, value);
+		// 		let v = new RuntimeVariable(name, value);
 
-				if (value && value.length > 0) {
+		// 		if (value && value.length > 0) {
 
-					if (value === 'true') {
-						v.value = true;
-					} else if (value === 'false') {
-						v.value = false;
-					} else if (value[0] === '"') {
-						v.value = value.slice(1, -1);
-					} else if (value[0] === '{') {
-						v.value = [
-							new RuntimeVariable('fBool', true),
-							new RuntimeVariable('fInteger', 123),
-							new RuntimeVariable('fString', 'hello'),
-							new RuntimeVariable('flazyInteger', 321)
-						];
-					} else {
-						v.value = parseFloat(value);
-					}
+		// 			if (value === 'true') {
+		// 				v.value = true;
+		// 			} else if (value === 'false') {
+		// 				v.value = false;
+		// 			} else if (value[0] === '"') {
+		// 				v.value = value.slice(1, -1);
+		// 			} else if (value[0] === '{') {
+		// 				v.value = [
+		// 					new RuntimeVariable('fBool', true),
+		// 					new RuntimeVariable('fInteger', 123),
+		// 					new RuntimeVariable('fString', 'hello'),
+		// 					new RuntimeVariable('flazyInteger', 321)
+		// 				];
+		// 			} else {
+		// 				v.value = parseFloat(value);
+		// 			}
 
-					if (this.variables.has(name)) {
-						// the first write access to a variable is the "declaration" and not a "write access"
-						access = 'write';
-					}
-					this.variables.set(name, v);
-				} else {
-					if (this.variables.has(name)) {
-						// variable must exist in order to trigger a read access
-						access = 'read';
-					}
-				}
+		// 			if (this.variables.has(name)) {
+		// 				// the first write access to a variable is the "declaration" and not a "write access"
+		// 				access = 'write';
+		// 			}
+		// 			this.variables.set(name, v);
+		// 		} else {
+		// 			if (this.variables.has(name)) {
+		// 				// variable must exist in order to trigger a read access
+		// 				access = 'read';
+		// 			}
+		// 		}
 
-				const accessType = this.breakAddresses.get(name);
-				if (access && accessType && accessType.indexOf(access) >= 0) {
-					this.sendEvent('stopOnDataBreakpoint', access);
-					return true;
-				}
-			}
-		}
+		// 		const accessType = this.breakAddresses.get(name);
+		// 		if (access && accessType && accessType.indexOf(access) >= 0) {
+		// 			this.sendEvent('stopOnDataBreakpoint', access);
+		// 			return true;
+		// 		}
+		// 	}
+		// }
 
 		// if 'log(...)' found in source -> send argument to debug console
-		const reg1 = /(log|prio|out|err)\(([^\)]*)\)/g;
-		let matches1: RegExpExecArray | null;
-		while (matches1 = reg1.exec(line)) {
-			if (matches1.length === 3) {
-				this.sendEvent('output', matches1[1], matches1[2], this._sourceFile, ln, matches1.index);
-			}
-		}
+		// const reg1 = /(log|prio|out|err)\(([^\)]*)\)/g;
+		// let matches1: RegExpExecArray | null;
+		// while (matches1 = reg1.exec(line)) {
+		// 	if (matches1.length === 3) {
+		// 		this.sendEvent('output', matches1[1], matches1[2], this._sourceFile, ln, matches1.index);
+		// 	}
+		// }
 
-		// if pattern 'exception(...)' found in source -> throw named exception
-		const matches2 = /exception\((.*)\)/.exec(line);
-		if (matches2 && matches2.length === 2) {
-			const exception = matches2[1].trim();
-			if (this.namedException === exception) {
-				this.sendEvent('stopOnException', exception);
-				return true;
-			} else {
-				if (this.otherExceptions) {
-					this.sendEvent('stopOnException', undefined);
-					return true;
-				}
-			}
-		} else {
-			// if word 'exception' found in source -> throw exception
-			if (line.indexOf('exception') >= 0) {
-				if (this.otherExceptions) {
-					this.sendEvent('stopOnException', undefined);
-					return true;
-				}
-			}
-		}
+		// // if pattern 'exception(...)' found in source -> throw named exception
+		// const matches2 = /exception\((.*)\)/.exec(line);
+		// if (matches2 && matches2.length === 2) {
+		// 	const exception = matches2[1].trim();
+		// 	if (this.namedException === exception) {
+		// 		this.sendEvent('stopOnException', exception);
+		// 		return true;
+		// 	} else {
+		// 		if (this.otherExceptions) {
+		// 			this.sendEvent('stopOnException', undefined);
+		// 			return true;
+		// 		}
+		// 	}
+		// } else {
+		// 	// if word 'exception' found in source -> throw exception
+		// 	if (line.indexOf('exception') >= 0) {
+		// 		if (this.otherExceptions) {
+		// 			this.sendEvent('stopOnException', undefined);
+		// 			return true;
+		// 		}
+		// 	}
+		// }
 
 		// nothing interesting found -> continue
 		return false;

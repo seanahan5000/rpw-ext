@@ -114,34 +114,21 @@
 				}
 			],
 
+
 			"editor/title/run": [
 				{
-					"command": "extension.rpw65.runEditorContents",
-					"when": "resourceLangId == markdown",
-					"group": "navigation@1"
-				},
-				{
 					"command": "extension.rpw65.debugEditorContents",
-					"when": "resourceLangId == markdown",
+					"when": "resourceLangId == rpw65",
 					"group": "navigation@2"
 				}
 			],
 			"commandPalette": [
 				{
 					"command": "extension.rpw65.debugEditorContents",
-					"when": "resourceLangId == markdown"
-				},
-				{
-					"command": "extension.rpw65.runEditorContents",
-					"when": "resourceLangId == markdown"
-				}
-			],
-			"debug/variables/context": [
-				{
-					"command": "extension.rpw65.toggleFormatting",
-					"when": "debugType == 'rpw65' && debugProtocolVariableMenuContext == 'simple'"
+					"when": "resourceLangId == rpw65"
 				}
 			]
+
 
 		},
 		"commands": [
@@ -176,17 +163,6 @@
         "category": "Mock Debug",
         "enablement": "!inDebugMode",
         "icon": "$(debug-alt)"
-      },
-      {
-        "command": "extension.rpw65.runEditorContents",
-        "title": "Run File",
-        "category": "Mock Debug",
-        "enablement": "!inDebugMode",
-        "icon": "$(play)"
-      },
-      {
-        "command": "extension.rpw65.toggleFormatting",
-        "title": "Toggle between decimal and hex formatting"
       }
 
 		],
@@ -288,13 +264,10 @@
         "languages": [
           "rpw65"
         ],
-        "label": "Mock Debug",
+        "label": "RPW Debug",
         "runtime": "node",
         "configurationAttributes": {
           "launch": {
-            "required": [
-              "program"
-            ],
             "properties": {
               "program": {
                 "type": "string",
@@ -326,69 +299,16 @@
                 ]
               }
             }
-          },
-          "attach": {
-            "required": [
-              "program"
-            ],
-            "properties": {
-              "program": {
-                "type": "string",
-                "description": "Absolute path to a text file.",
-                "default": "${workspaceFolder}/${command:AskForProgramName}"
-              },
-              "stopOnEntry": {
-                "type": "boolean",
-                "description": "Automatically stop after attach.",
-                "default": true
-              },
-              "trace": {
-                "type": "boolean",
-                "description": "Enable logging of the Debug Adapter Protocol.",
-                "default": true
-              },
-              "compileError": {
-                "type": "string",
-                "description": "Simulates a compile error in 'attach' request.",
-                "enum": [
-                  "default",
-                  "show",
-                  "hide"
-                ],
-                "enumDescriptions": [
-                  "default: show fake compile error to user",
-                  "show fake compile error to user",
-                  "do not show fake compile error to user"
-                ]
-              }
-            }
           }
         },
         "initialConfigurations": [
           {
             "type": "rpw65",
             "request": "launch",
-            "name": "Ask for file name",
-            "program": "${workspaceFolder}/${command:AskForProgramName}",
+            "name": "Launch RPW Debug",
             "stopOnEntry": true
           }
-        ],
-        "configurationSnippets": [
-          {
-            "label": "Mock Debug: Launch",
-            "description": "A new configuration for 'debugging' a user selected markdown file.",
-            "body": {
-              "type": "rpw65",
-              "request": "launch",
-              "name": "Ask for file name",
-              "program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
-              "stopOnEntry": true
-            }
-          }
-        ],
-        "variables": {
-          "AskForProgramName": "extension.rpw65.getProgramName"
-        }
+        ]
       }
 		]
 	},
