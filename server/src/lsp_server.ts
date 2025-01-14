@@ -16,6 +16,8 @@ import { Completions, getCommentHeader } from "./lsp_utils"
 import { SyntaxNames } from "./asm/syntaxes/syntax_types"
 import { OpcodeDef, OpMode, isaSet65xx } from "./isa65xx"
 
+import { LspDebugger } from "./lsp_debugger"
+
 //------------------------------------------------------------------------------
 
 // indexes used to map from TokenTypes to semantic tokens
@@ -68,7 +70,7 @@ function uriFromPath(path: string) {
 
 //------------------------------------------------------------------------------
 
-class LspProject extends Project {
+export class LspProject extends Project {
 
   private server: LspServer
 
@@ -120,10 +122,11 @@ export class LspServer {
   private isInitialized: Promise<boolean>
   private isInitialized_resolve: any
 
-  private projects: LspProject[] = []
-
   public workspaceFolderPath = ""
   private rpwProject?: RpwProject
+
+  private projects: LspProject[] = []
+  private mainProject?: LspProject
 
   private updateId?: NodeJS.Timeout
   private updateFile?: SourceFile
@@ -131,6 +134,8 @@ export class LspServer {
   private defaultSettings?: Promise<RpwSettings>
   private showErrors = true
   private showWarnings = true
+
+  private debugger: LspDebugger
 
   constructor(connection: lsp.Connection) {
     this.connection = connection
@@ -169,6 +174,8 @@ export class LspServer {
     this.connection.onRenameRequest(this.onRename.bind(this))
     this.connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
     this.connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
+
+    this.debugger = new LspDebugger(this, connection)
   }
 
   private getSourceFile(uri: string): SourceFile | undefined {
@@ -329,6 +336,7 @@ export class LspServer {
         throw new Error("Failed to load project")
       }
       this.projects.push(project)
+      this.mainProject = project
     }
 
     // if no project, scan for ASM.* files
@@ -355,7 +363,7 @@ export class LspServer {
     // })
 
     // send this so client will ask for initial syntax
-    this.connection.sendNotification("rpw.syntaxChanged")
+    this.connection.sendNotification("rpw65.syntaxChanged")
 
     this.scheduleUpdate()
   }
@@ -370,7 +378,7 @@ export class LspServer {
     this.scheduleUpdate()
 
     // send this so client will ask for syntax
-    this.connection.sendNotification("rpw.syntaxChanged")
+    this.connection.sendNotification("rpw65.syntaxChanged")
   }
 
   // TODO: need fallback if vscode client not present
@@ -412,7 +420,7 @@ export class LspServer {
       }
 
       // *** okay to always to this? or only on actual change? ***
-      this.connection.sendNotification("rpw.syntaxChanged")
+      this.connection.sendNotification("rpw65.syntaxChanged")
 
       this.scheduleDiagnostics(this.updateFile)
       delete this.updateFile
@@ -520,7 +528,7 @@ export class LspServer {
         }
         this.scheduleUpdate(sourceFile)
       }
-      this.connection.sendNotification("rpw.syntaxChanged")
+      this.connection.sendNotification("rpw65.syntaxChanged")
     }
   }
 
@@ -586,6 +594,14 @@ export class LspServer {
   }
 
   async onExecuteCommand(params: lsp.ExecuteCommandParams, token?: lsp.CancellationToken, workDoneProgress?: lsp.WorkDoneProgressReporter): Promise<any> {
+
+    if (params.command == "rpw65.debugger") {
+      if (this.mainProject) {
+        return this.debugger.onExecuteCommand(this.mainProject, params)
+      } else {
+        return
+      }
+    }
 
     if (params.arguments === undefined || params.arguments.length == 0) {
       return
