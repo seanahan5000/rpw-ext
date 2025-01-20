@@ -5,7 +5,7 @@ import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
 
-import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
+import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./shared/rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"

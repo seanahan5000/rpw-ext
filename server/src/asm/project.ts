@@ -1,6 +1,6 @@
 
 import * as fs from 'fs'
-import { RpwProject, RpwSettings } from "../rpw_types"
+import { RpwProject, RpwSettings } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
