@@ -1,6 +1,19 @@
 
 import * as lsp from 'vscode-languageserver'
 import { LspServer, LspProject } from "./lsp_server"
+import { ObjectDoc } from "./code/lst_parser"
+import { StackEntry } from "./shared/types"
+import { Statement } from "./asm/statements"
+
+// TODO:
+//  - allow breakpoints
+//  - set/clear/trigger breakpoints
+//  - register locals
+//  - read/write memory
+//  - loaded status
+//  - run to cursor
+//  - step forward
+//  ? split stack update
 
 //------------------------------------------------------------------------------
 
@@ -25,6 +38,17 @@ export type RpwStackResponse = {
 
 //------------------------------------------------------------------------------
 
+type RequestHeader = {
+  id: number
+  type: string
+}
+
+type StackResponse = RequestHeader & {
+  entries: StackEntry[]
+}
+
+//------------------------------------------------------------------------------
+
 import { WebSocket, Server } from "ws"
 
 export class LspDebugger {
@@ -41,7 +65,6 @@ export class LspDebugger {
     this.connection = connection
 
     this.socketServer = new Server({ port: 6502 }, () => {
-      console.log("WS server is live on port 6502") // ***
     })
 
     // *** close socket?
@@ -53,15 +76,11 @@ export class LspDebugger {
 
     this.socketServer.on("connection", (socket: WebSocket) => {
 
-      // console.log("connecting")
-
       if (this.socket) {
-        // console.log("closed previous socket")
         this.socket.close()
         this.socket = undefined
       }
 
-      // console.log("socket connected")
       this.socket = socket
 
       this.socket.on("message", (data) => {
@@ -73,7 +92,6 @@ export class LspDebugger {
       this.socket.on("close", () => {
         this.socket = undefined
         this.responseProc = undefined
-        // console.log("socket closed")
       })
     })
   }
@@ -102,6 +120,7 @@ export class LspDebugger {
     }
 
     const debugCmd = params.arguments[0] ?? ""
+
     if (debugCmd == "getStack") {
 
       // *** make sure !this.responseProc ***
@@ -113,30 +132,81 @@ export class LspDebugger {
       })
 
       this.socket?.send('{"id":99,"type":"getStack"}')  // *** id
-      const msgResponse = await promise
-
-      // *** request stack from socket talking to emulator ***
-        // *** convert address to name/file ***
-
-      const sourceFile = project.modules[0]?.sourceFiles[0] // *** fake
-      if (sourceFile === undefined) {
-        return
-      }
+      const msgResponse = <StackResponse>await promise
 
       const cmdResponse: RpwStackResponse = {
         frames: [],
-        totalFrames: 1
+        totalFrames: msgResponse.entries.length
       }
 
-      // *** show actual address too?
-      // *** use msgResponse
+      for (let entry of msgResponse.entries) {
 
-      cmdResponse.frames.push({ index: 0, name: "FUNCTION_NAME+$0000", path: sourceFile.fullPath, line: 20 })
+        let objectDoc: ObjectDoc | undefined
+        let objectLineNum: number = -1
+
+        for (let module of project.modules) {
+          if (module.objectDocs) {
+            for (let doc of module.objectDocs) {
+              // TODO: need to look at loaded percentage
+              objectLineNum = doc.findLineByAddress(entry.pc)
+              if (objectLineNum != -1) {
+                objectDoc = doc
+                break
+              }
+            }
+          }
+          if (objectDoc) {
+            break
+          }
+        }
+
+        if (objectDoc) {
+
+          let funcName: string = "$" + entry.pc.toString(16).toUpperCase().padStart(4, "0")
+
+          const statement = this.findNearestLabel(objectDoc, entry.proc)
+          if (statement && statement.labelExp) {
+            funcName += ": " + statement.labelExp.getString()
+            if (entry.proc != entry.pc) {
+              funcName += "+$" + (entry.pc - entry.proc).toString(16).toUpperCase().padStart(4, "0")
+            }
+          }
+
+          cmdResponse.frames.push({
+            index: 0,
+            name: funcName,
+            path: objectDoc.name,
+            line: objectLineNum })
+        }
+      }
       return cmdResponse
     }
 
     // all commands that don't send response
     this.socket?.send(`{"id":99,"type":"${debugCmd}"}`)  // *** id
+  }
+
+  findNearestLabel(objectDoc: ObjectDoc, address: number): Statement | undefined {
+    let funcLine = objectDoc.findLineByAddress(address)
+    if (funcLine >= 0) {
+      const sourceFile = this.lspServer.findSourceFile(objectDoc.name)
+      if (sourceFile) {
+        while (true) {
+          const objLine = objectDoc.objectLines[funcLine]
+          if (objLine.address != -1 && objLine.address != address) {
+            break
+          }
+          const statement = sourceFile.statements[funcLine]
+          if (statement.labelExp) {
+            return statement
+          }
+          funcLine -= 1
+          if (funcLine < 0) {
+            break
+          }
+        }
+      }
+    }
   }
 }
 

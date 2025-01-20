@@ -48,8 +48,8 @@ export class RpwDebugSession extends DebugSession {
     BreakpointEvent
 
     client.onNotification("rpw65.debuggerStarted", () => {
-      // *** TODO: maybe not required?
-      this.sendEvent(new ContinuedEvent(1))
+      // TODO: probably not required
+      // this.sendEvent(new ContinuedEvent(1))
     })
 
     client.onNotification("rpw65.debuggerStopped", () => {
@@ -65,7 +65,13 @@ export class RpwDebugSession extends DebugSession {
       // BreakpointEvent
       //  "changed"
 
-      this.sendEvent(new StoppedEvent('step', 1))
+      // NOTE: Without this delay, the VSCode debugger gets in a state
+      //  where it knows the target has stopped but the UI doesn't reflect that.
+      //  Only clicking on the Pause button would get it out of that state.
+      setTimeout(() => {
+        const stoppedEvent = new StoppedEvent('step', 1)
+        this.sendEvent(stoppedEvent)
+      }, 100)
     })
   }
 
@@ -126,12 +132,12 @@ export class RpwDebugSession extends DebugSession {
   }
 
   protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
-    this.sendCommand("stepCpuIn")
+    this.sendCommand("stepCpuInto")
     this.sendResponse(response)
   }
 
   protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments): void {
-    this.sendCommand("stepCpuOut")
+    this.sendCommand("stepCpuOutOf")
     this.sendResponse(response)
   }
 
@@ -172,20 +178,25 @@ export class RpwDebugSession extends DebugSession {
     })
 
     const stackFrames: StackFrame[] = []
-    for (let frame of result.frames) {
+    for (let i = 0; i < result.frames.length; i += 1) {
+      const frame = result.frames[i]
       const source = new Source(
         path.posix.basename(frame.path),
         this.convertDebuggerPathToClient(frame.path),
         frame.index)
+      const frameId = 0x80 + i      // ***
       const line = frame.line + 1
       const column = 0
-      stackFrames.push(new StackFrame(0, frame.name, source, line, column))
+      stackFrames.push(new StackFrame(frameId, frame.name, source, line, column))
     }
     response.body = { stackFrames, totalFrames: result.totalFrames }
     this.sendResponse(response)
   }
 
   protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments, request?: DebugProtocol.Request): void {
+
+    // TODO: look at args.frameId
+
     response.body = {
       scopes: [
         new Scope("Locals", 1, false),
