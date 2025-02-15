@@ -1,5 +1,6 @@
 
 import * as fs from 'fs'
+import * as base64 from 'base64-js'
 import { RpwProject, RpwSettings, RpwSettingsDefaults } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
@@ -13,6 +14,56 @@ import { ObjectDocBuilder, ObjectDoc } from "../code/lst_parser"
 
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
+}
+
+//------------------------------------------------------------------------------
+
+// Convert encode data buffers coming in from breakpoints
+//  and stack traces into a utility class object.
+
+export class DataRange {
+  public address: number
+  public bytes: Uint8Array
+
+  public static create(obj: any): DataRange | undefined {
+    if (obj.dataAddress && obj.dataBytes) {
+      return new DataRange(obj.dataAddress, obj.dataBytes)
+    }
+  }
+
+  constructor(dataAddress: number, dataBytes: string) {
+    this.address = dataAddress
+    this.bytes = base64.toByteArray(dataBytes)
+  }
+
+  public compare(inAddress: number, inBytes: number[] | Uint8Array, inOffset = 0, inCount?: number): number {
+    if (inCount === undefined) {
+      inCount = inBytes.length
+    }
+    if (inAddress < this.address) {
+      inOffset = this.address - inAddress
+      inCount -= inOffset
+      inAddress = this.address
+    }
+
+    let thisOffset = 0
+    if (inAddress > this.address) {
+      thisOffset = inAddress - this.address
+    }
+
+    const overhang = thisOffset + inCount - this.bytes.length
+    if (overhang > 0) {
+      inCount -= overhang
+    }
+
+    let matches = 0
+    for (let i = 0; i < inCount; i += 1) {
+      if (inBytes[inOffset + i] == this.bytes[thisOffset + i]) {
+        matches += 1
+      }
+    }
+    return matches
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -328,6 +379,40 @@ export class Project {
           return sourceFile
         }
       }
+    }
+  }
+
+  // given an address, find best object file that contains the address
+  public findSourceByAddress(address: number, dataRange?: DataRange): { objectDoc: ObjectDoc, line: number } | undefined {
+    const matchList = []
+    for (let module of this.modules) {
+      if (module.objectDocs) {
+        for (let objectDoc of module.objectDocs) {
+          const line = objectDoc.findLineByAddress(address, dataRange)
+          if (line >= 0) {
+            matchList.push({ objectDoc, line})
+          }
+        }
+      }
+    }
+
+    if (matchList.length > 0) {
+      let objectDoc = matchList[0].objectDoc
+      let objectLine = matchList[0].line
+
+      if (matchList.length > 1 && dataRange) {
+        let matchPercent = -1
+        for (let match of matchList) {
+          const percent = match.objectDoc.calcLoadedPercent(dataRange)
+          if (percent > matchPercent) {
+            matchPercent = percent
+            objectDoc = match.objectDoc
+            objectLine = match.line
+          }
+        }
+      }
+
+      return { objectDoc, line: objectLine }
     }
   }
 }

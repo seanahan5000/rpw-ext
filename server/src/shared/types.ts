@@ -75,17 +75,24 @@ export interface IMachineMemory {
   write(address: number, value: number): void
 }
 
+export type StackRegister = {
+  name: string
+  value: number
+  bitSize?: number
+  flagNames?: string
+}
+
 export type StackEntry = {
   proc: number
-  pc: number
-  sp: number
-  regs: number[]
-  status: number
+  regs: StackRegister[]
+  cycles: number
+  dataAddress?: number
+  dataBytes?: string
 }
 
 //------------------------------------------------------------------------------
 
-// NOTE: named just "Bus" so it works with MOS6502.ts code
+// TODO: rename this MemoryBus?
 export interface Bus {
   read(address: number, cycleCount: number): number
   write(address: number, value: number): void

@@ -1,10 +1,9 @@
 
-import { DebugProtocol } from "vscode-debugprotocol"
-import { DebugSession, InitializedEvent, StoppedEvent, BreakpointEvent, ContinuedEvent } from "vscode-debugadapter"
-import { Thread, StackFrame, Scope, Source } from "vscode-debugadapter"
+import { DebugProtocol } from "@vscode/debugprotocol"
+import { DebugSession, InitializedEvent, StoppedEvent, BreakpointEvent, ContinuedEvent } from "@vscode/debugadapter"
+import { Thread, StackFrame, Scope, Source } from "@vscode/debugadapter"
 import { client } from "./extension"
 import * as vsclnt from 'vscode-languageclient'
-import * as path from 'path'
 
 // TODO: is this really needed?
 import { Subject } from 'await-notify'
@@ -13,26 +12,7 @@ import { Subject } from 'await-notify'
 
 //------------------------------------------------------------------------------
 
-// also in lsp_debugger.ts
-
-export type RpwStackRequest = {
-  startFrame?: number
-  endFrame?: number
-}
-
-export type RpwStackFrame = {
-  index: number   // 0-based?
-  name: string
-  path: string
-  line: number    // 0-based?
-}
-
-export type RpwStackResponse = {
-  frames: RpwStackFrame[]
-  totalFrames: number
-}
-
-//------------------------------------------------------------------------------
+// forward commands to language server
 
 export class RpwDebugSession extends DebugSession {
 
@@ -52,7 +32,10 @@ export class RpwDebugSession extends DebugSession {
       // this.sendEvent(new ContinuedEvent(1))
     })
 
-    client.onNotification("rpw65.debuggerStopped", () => {
+    client.onNotification("rpw65.debuggerStopped", (params) => {
+
+      const reason = params?.reason ?? "step"
+      // *** filter known vs unknow reason types ***
 
       // *** more information for stopped reason (human-readable)
 
@@ -65,6 +48,8 @@ export class RpwDebugSession extends DebugSession {
       // BreakpointEvent
       //  "changed"
 
+      // *** reset variable ref counter here? ***
+
       // NOTE: Without this delay, the VSCode debugger gets in a state
       //  where it knows the target has stopped but the UI doesn't reflect that.
       //  Only clicking on the Pause button would get it out of that state.
@@ -76,8 +61,17 @@ export class RpwDebugSession extends DebugSession {
   }
 
   protected initializeRequest(response: DebugProtocol.InitializeResponse, args: DebugProtocol.InitializeRequestArguments): void {
+
     response.body = response.body || {}
     response.body.supportsConfigurationDoneRequest = true
+    response.body.supportsGotoTargetsRequest = true
+    response.body.supportsSetVariable = true
+    // response.body.supportsDelayedStackTraceLoading = true
+    // response.body.supportsBreakpointLocationsRequest = true
+
+    // TODO: enable/support this if stack trace loading is slow
+    // response.body.supportsDelayedStackTraceLoading = true
+
     this.sendResponse(response)
     this.sendEvent(new InitializedEvent())
   }
@@ -91,7 +85,10 @@ export class RpwDebugSession extends DebugSession {
     this.sendEvent(new StoppedEvent('entry', 1))  // ***
   }
 
-  protected async launchRequest(response: DebugProtocol.LaunchResponse, args: DebugProtocol.LaunchRequestArguments, request?: DebugProtocol.Request) {
+  protected async launchRequest(
+    response: DebugProtocol.LaunchResponse,
+    args: DebugProtocol.LaunchRequestArguments,
+    request?: DebugProtocol.Request) {
 
     // TODO: is this really needed?
     await this.configurationDone.wait(1000)
@@ -100,110 +97,126 @@ export class RpwDebugSession extends DebugSession {
 
     // *** send resetCpu? attach?
 
-    // verify breakpoints
+    this.sendResponse(response)
+  }
+
+  // protected breakpointLocationsRequest(
+  //   response: DebugProtocol.BreakpointLocationsResponse,
+  //   args: DebugProtocol.BreakpointLocationsArguments,
+  //   request?: DebugProtocol.Request): void
+  // {
+  //   // TODO: enable/implement
+  //   this.sendResponse(response) // TODO: fill in details
+  // }
+
+  protected async setBreakPointsRequest(
+    response: DebugProtocol.SetBreakpointsResponse,
+    args: DebugProtocol.SetBreakpointsArguments,
+    request?: DebugProtocol.Request): Promise<void>
+  {
+    this.forwardCommand(response, args)
+  }
+
+  protected threadsRequest(
+    response: DebugProtocol.ThreadsResponse,
+    request?: DebugProtocol.Request): void
+  {
+    response.body = {
+      threads: [ new Thread(1, "Thread") ]
+    }
+    this.sendResponse(response)
+  }
+
+  protected stackTraceRequest(
+    response: DebugProtocol.StackTraceResponse,
+    args: DebugProtocol.StackTraceArguments,
+    request?: DebugProtocol.Request): void
+  {
+    this.forwardCommand(response, args)
+  }
+
+  protected scopesRequest(
+    response: DebugProtocol.ScopesResponse,
+    args: DebugProtocol.ScopesArguments,
+    request?: DebugProtocol.Request): void
+  {
+    this.forwardCommand(response, args)
+  }
+
+  protected variablesRequest(
+    response: DebugProtocol.VariablesResponse,
+    args: DebugProtocol.VariablesArguments,
+    request?: DebugProtocol.Request): void
+  {
+    this.forwardCommand(response, args)
+  }
+
+  protected setVariableRequest(
+    response: DebugProtocol.SetVariableResponse,
+    args: DebugProtocol.SetVariableArguments): void
+  {
+    this.forwardCommand(response, args)
+  }
 
     this.sendResponse(response)
   }
 
-  protected breakpointLocationsRequest(response: DebugProtocol.BreakpointLocationsResponse, args: DebugProtocol.BreakpointLocationsArguments, request?: DebugProtocol.Request): void {
-    // TODO: enable/implement
-    this.sendResponse(response) // TODO: fill in details
-  }
-
-  protected setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments, request?: DebugProtocol.Request): void {
-    // TODO: enable/implement
-    this.sendResponse(response)
-  }
-
-  protected pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments, request?: DebugProtocol.Request): void {
-    this.sendCommand("stopCpu")
-    this.sendResponse(response)
-  }
-
-  protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
-    this.sendCommand("startCpu")
-    // TODO: should response.body be filled in?
-    this.sendResponse(response)
-  }
-
-  protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
-    this.sendCommand("stepCpuOver")
-    this.sendResponse(response)
-  }
-
-  protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
-    this.sendCommand("stepCpuInto")
-    this.sendResponse(response)
-  }
-
-  protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments): void {
-    this.sendCommand("stepCpuOutOf")
-    this.sendResponse(response)
-  }
-
-  private sendCommand(type: string) {
-    client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
-      command: "rpw65.debugger",
-      arguments: [ type ]
-    })
-  }
-
+  // *** set new PC?
   protected gotoTargetsRequest(response: DebugProtocol.GotoTargetsResponse, args: DebugProtocol.GotoTargetsArguments, request?: DebugProtocol.Request): void {
     // TODO: enable/implement
     this.sendResponse(response) // TODO: fill in details
   }
 
+  // *** what does this do? ***
   protected gotoRequest(response: DebugProtocol.GotoResponse, args: DebugProtocol.GotoArguments, request?: DebugProtocol.Request): void {
     // TODO: enable/implement
     this.sendResponse(response)
   }
 
-  protected threadsRequest(response: DebugProtocol.ThreadsResponse, request?: DebugProtocol.Request): void {
-    response.body = {
-      threads: [
-        new Thread(1, "Thread")
-      ]
-    }
-    this.sendResponse(response)
+  protected pauseRequest(
+    response: DebugProtocol.PauseResponse,
+    args: DebugProtocol.PauseArguments,
+    request?: DebugProtocol.Request): void
+  {
+    this.forwardCommand(response, args)
   }
 
-  protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments, request?: DebugProtocol.Request) {
+  protected continueRequest(
+    response: DebugProtocol.ContinueResponse,
+    args: DebugProtocol.ContinueArguments): void
+  {
+    this.forwardCommand(response, args)
+  }
 
-    const result: RpwStackResponse = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
+  protected nextRequest(
+    response: DebugProtocol.NextResponse,
+    args: DebugProtocol.NextArguments): void
+  {
+    this.forwardCommand(response, args)
+  }
+
+  protected stepInRequest(
+    response: DebugProtocol.StepInResponse,
+    args: DebugProtocol.StepInArguments): void
+  {
+    this.forwardCommand(response, args)
+  }
+
+  protected stepOutRequest(
+    response: DebugProtocol.StepOutResponse,
+    args: DebugProtocol.StepOutArguments): void
+  {
+    this.forwardCommand(response, args)
+  }
+
+  private async forwardCommand(response: DebugProtocol.Response, args: any) {
+    const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
       command: "rpw65.debugger",
-      arguments: [
-        "getStack",
-        { startFrame: args.startFrame, levels: args.levels }
-      ]
+      arguments: [ response.command, args ]
     })
-
-    const stackFrames: StackFrame[] = []
-    for (let i = 0; i < result.frames.length; i += 1) {
-      const frame = result.frames[i]
-      const source = new Source(
-        path.posix.basename(frame.path),
-        this.convertDebuggerPathToClient(frame.path),
-        frame.index)
-      const frameId = 0x80 + i      // ***
-      const line = frame.line + 1
-      const column = 0
-      stackFrames.push(new StackFrame(frameId, frame.name, source, line, column))
-    }
-    response.body = { stackFrames, totalFrames: result.totalFrames }
-    this.sendResponse(response)
-  }
-
-  protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments, request?: DebugProtocol.Request): void {
-
-    // TODO: look at args.frameId
-
-    response.body = {
-      scopes: [
-        new Scope("Locals", 1, false),
-        new Scope("Globals", 2, false),
-          // *** vars are A,X,Y,SP and CCs
-      ]
-    }
+    response.body = result
     this.sendResponse(response)
   }
 }
+
+//------------------------------------------------------------------------------

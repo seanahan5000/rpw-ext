@@ -1,5 +1,5 @@
 
-import { Module, SourceFile } from "../asm/project"
+import { Module, SourceFile, DataRange } from "../asm/project"
 
 //------------------------------------------------------------------------------
 
@@ -10,7 +10,7 @@ class ObjectLine {
   public objBuffer?: Uint8Array
   public objOffset: number = 0
   public objLength: number = 0
-  public srcLineNumber: number = -1
+  // public srcLineNumber: number = -1
 
   // NOTE: only valid during build and deleted afterwards
   fileLine?: number
@@ -27,7 +27,7 @@ export class ObjectDoc {
 
   // *** rename to be more descriptive ***
   public name: string             // full path name
-  public sourceFile?: SourceFile
+  // public sourceFile?: SourceFile  // *** link this up ***
   public objBuffer?: Uint8Array       // *** or dummy array?
   public objectLines: ObjectLine[] = []
 
@@ -43,7 +43,7 @@ export class ObjectDoc {
     let results = []
     // TODO: change this to a binary search by group for better perf
     for (let i = 0; i < this.objectLines.length; i += 1) {
-      let objectLine = this.objectLines[i]
+      const objectLine = this.objectLines[i]
       if (address >= objectLine.address && address < objectLine.address + objectLine.objLength) {
         results.push(i)
       }
@@ -51,32 +51,50 @@ export class ObjectDoc {
     return results
   }
 
-  findLineByAddress(address: number): number {
+  public findLineByAddress(address: number, dataRange?: DataRange): number {
     const results = this.findLinesByAddress(address)
     let result = -1
     if (results.length > 0) {
-      // if (results.length > 1) {
-      //   // if more than one match is found, return the one that most matches memory
-      //   let bestCount = -1
-      //   for (let value of results) {
-      //     let objectLine = this.objectLines[value]
-      //     let matchCount = 0
-      //     for (let i = 0; i < objectLine.objLength; i += 1) {
-      //       if (this.memory?.readConst(objectLine.address + i) == objectLine.objBuffer![objectLine.objOffset + i]) {
-      //         matchCount += 1
-      //       }
-      //     }
-      //     matchCount /= objectLine.objLength
-      //     if (bestCount < matchCount) {
-      //       bestCount = matchCount
-      //       result = value
-      //     }
-      //   }
-      // } else {
+      if (results.length > 1 && dataRange) {
+        // if more than one match is found, return the one that most matches memory
+        let bestCount = -1
+        for (let value of results) {
+          const objectLine = this.objectLines[value]
+          let matchCount = 0
+          for (let i = 0; i < objectLine.objLength; i += 1) {
+            matchCount += dataRange.compare(objectLine.address, objectLine.objBuffer!, objectLine.objOffset, objectLine.objLength)
+          }
+          matchCount /= objectLine.objLength
+          if (bestCount < matchCount) {
+            bestCount = matchCount
+            result = value
+          }
+        }
+      } else {
         result = results[0]
-      // }
+      }
     }
     return result
+  }
+
+  public calcLoadedPercent(dataRange: DataRange): number {
+    let matchCount = 0
+    let byteCount = 0
+    for (let objectLine of this.objectLines) {
+      if (objectLine.address + objectLine.objLength <= dataRange.address) {
+        continue
+      }
+      if (objectLine.address >= dataRange.address + dataRange.bytes.length) {
+        continue
+      }
+      // NOTE: not exactly right because line may straddle bounds of dataRange
+      byteCount += objectLine.objLength
+      matchCount += dataRange.compare(objectLine.address, objectLine.objBuffer!, objectLine.objOffset, objectLine.objLength)
+    }
+    if (byteCount == 0) {
+      return 0
+    }
+    return matchCount / byteCount
   }
 }
 

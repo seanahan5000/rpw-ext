@@ -4,10 +4,11 @@
 		"vscode": "^1.75.0"
 	},
 	"dependencies": {
-		"vscode-languageclient": "^8.1.0",
-		"vscode-debugadapter": "^1.51.0"
+		"vscode-languageclient": "^8.1.0"
 	},
 	"devDependencies": {
-		"@types/vscode": "^1.75.1"
+		"@types/vscode": "^1.75.1",
+		"@vscode/debugadapter": "^1.56.0",
+		"@vscode/debugprotocol": "^1.68.0"
 	}
 }

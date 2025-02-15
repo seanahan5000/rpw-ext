@@ -337,6 +337,7 @@ export class LspServer {
       }
       this.projects.push(project)
       this.mainProject = project
+      this.debugger.mainProject = project
     }
 
     // if no project, scan for ASM.* files
@@ -597,7 +598,7 @@ export class LspServer {
 
     if (params.command == "rpw65.debugger") {
       if (this.mainProject) {
-        return this.debugger.onExecuteCommand(this.mainProject, params)
+        return this.debugger.onExecuteCommand(params)
       } else {
         return
       }
