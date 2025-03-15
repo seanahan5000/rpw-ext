@@ -17,7 +17,6 @@ class ObjectLine {
   objData?: number[]
 
   constructor() {
-    // ***
   }
 }
 
@@ -117,16 +116,16 @@ export class ObjectDocBuilder {
 
   private _buildDocs(lines: string[]) {
 
-    // if (lines[0].startsWith("ca65")) {
-    //   const parser = new Ca65LstParser(this)
-    //   parser.parse(lines)
+    if (lines[0].startsWith("ca65")) {
+      const parser = new Ca65LstParser(this)
+      parser.parse(lines)
     // } else if (lines[0].indexOf("------- FILE ") == 0) {
     //   const parser = new DasmLstParser(this)
     //   parser.parse(lines)
-    // } else {
+    } else {
       const parser = new MerlinLstParser(this)
       parser.parse(lines)
-    // }
+    }
 
     // trim documents that don't have any actual code in them
     // TODO: should this be optional?
@@ -306,6 +305,208 @@ class MerlinLstParser {
       this.prevLine = outLine.fileLine!
       this.builder.currentDoc!.objectLines.push(outLine)
     }
+  }
+}
+
+//------------------------------------------------------------------------------
+
+// parse ca65 assembler list file and build SourceLine records
+
+class Ca65LstParser {
+
+  private builder: ObjectDocBuilder
+  private lastDepth = -1
+  private nextDepth = 1
+  private docStack: string[] = []
+  private incFileName = ""
+
+  constructor(builder: ObjectDocBuilder) {
+    this.builder = builder
+  }
+
+  parse(lines: string[]) {
+    this.lastDepth = -1
+    this.nextDepth = 1
+
+    this.docStack = []
+
+    // TODO: better scanning of header?
+
+    //  ca65 V2.18 - N/A
+    //  Main file   : <filename>
+    //  Current file: <filename>
+    //
+
+    let index = 0
+    for (let lineStr of lines) {
+      if (index < 4) {
+        if (lineStr.startsWith("Current file: ")) {
+          const fileName = lineStr.substring(14).trim()
+          this.docStack.push(fileName)
+          this.builder.changeFile(fileName)
+        }
+        index += 1
+        continue
+      }
+      // if last line ends in '\n', blank line gets added to lines array, so skip it
+      if (index < lines.length - 1 || lineStr != "") {
+        this.parseLine(lineStr)
+      }
+      index += 1
+    }
+  }
+
+  private parseLine(inStr: string) {
+
+    // TODO: is the conversion to spaces really needed?
+    // TODO: should tab size come from settings somewhere?
+
+    // replace tabs with 4 spaces
+    let lineStr = ""
+    for (let i = 0; i < inStr.length; ++i) {
+      if (inStr[i] == '\t') {
+        let tabSize = 4 - (lineStr.length & 3)
+        lineStr = lineStr.padEnd(lineStr.length + tabSize)
+      } else {
+        lineStr += inStr[i]
+      }
+    }
+
+    const outLine = new ObjectLine()
+    outLine.objData = this.builder.currentDoc!.objData
+    outLine.objLength = 0
+    outLine.objOffset = outLine.objData!.length
+    let objBytes = []
+
+    // 6 digits of hex address
+    const hexAddrStr = lineStr.substring(0, 6)
+    lineStr = lineStr.substring(6)
+    outLine.address = parseInt(hexAddrStr, 16)
+
+    // either " " or "r"
+    const flagChar = lineStr.substring(0, 1)
+    lineStr = lineStr.substring(1+1)  // eat 1 trailing space too
+
+    // include nesting depth
+    const depthStr = lineStr.substring(0, 1)
+    lineStr = lineStr.substring(1+2)  // eat 2 trailing spaces too
+    this.nextDepth = parseInt(depthStr)
+
+    if (this.nextDepth > this.lastDepth) {
+      if (this.incFileName) {
+        this.docStack.push(this.incFileName)
+        this.builder.changeFile(this.incFileName)
+      }
+    } else if (this.nextDepth < this.lastDepth) {
+      this.docStack.pop()
+      const fileName = this.docStack[this.docStack.length - 1]
+      this.builder.changeFile(fileName)
+    }
+    this.lastDepth = this.nextDepth
+    this.incFileName = ""
+
+    // up to 4 bytes of hex object data
+    let hexDataStr = lineStr.substring(0, 13)
+    lineStr = lineStr.substring(13)
+    let sawAlignData = false
+    for (let i = 0; i < 12; i += 3) {
+      const byteStr = hexDataStr.substring(i, i + 2)
+      if (byteStr == "xx") {
+        sawAlignData = true
+        break
+      }
+      if (byteStr == "  ") {
+        break
+      }
+      const byteValue = parseInt(byteStr, 16)
+      objBytes.push(byteValue)
+    }
+
+    // process actual source line
+    if (lineStr != "") {
+
+      let label = ""
+      let opcode = ""
+      let args = ""
+
+      // look for label
+      if (lineStr != "" && lineStr[0] != " " && lineStr[0] != ";") {
+        let labelLength = lineStr.length
+        for (let i = 0; i < lineStr.length; ++i) {
+          if (lineStr[i] == " " || lineStr[i] == ";") {
+            labelLength = i
+            break
+          }
+        }
+
+        if (labelLength != 0) {
+          label = lineStr.substring(0, labelLength)
+          lineStr = lineStr.substring(labelLength)
+        }
+      }
+
+      // after label, no longer care about leading/trailing spaces
+      lineStr = lineStr.trim()
+
+      // look for opcode mnemonic
+      if (lineStr != "" && lineStr[0] != ";") {
+        let opLength = lineStr.length
+        for (let i = 0; i < lineStr.length; ++i) {
+          if (lineStr[i] == " " || lineStr[i] == ";") {
+            opLength = i
+            break
+          }
+        }
+        if (opLength != 0) {
+          opcode = lineStr.substring(0, opLength)
+          lineStr = lineStr.substring(opLength)
+        }
+        lineStr = lineStr.trim()
+      }
+
+      // look for arguments
+      if (lineStr != "" && lineStr[0] != ";") {
+        let argLength = lineStr.length
+        for (let i = 0; i < lineStr.length; ++i) {
+          if (lineStr[i] == ";") {
+            argLength = i
+            break
+          }
+        }
+        if (argLength != 0) {
+          args = lineStr.substring(0, argLength).trim()
+          lineStr = lineStr.substring(argLength)
+        }
+        lineStr = lineStr.trim()
+      }
+
+      this.incFileName = ""
+      if (label == ".include") {
+        this.incFileName = opcode
+      } else if (opcode == ".include") {
+        this.incFileName = args
+      }
+      if (this.incFileName) {
+        // strip quotes
+        this.incFileName = this.incFileName.substring(1, 1 + this.incFileName.length - 2)
+      }
+
+    } else {
+      if (sawAlignData) {
+        // throw away empty lines that just have "xx" alignment placeholders
+        return
+      }
+      if (objBytes.length > 0) {
+        // throw away bytes that are overflow from a previous line
+        // TODO: capture them all but reuse line number?
+        return
+      }
+    }
+
+    outLine.objData!.push(...objBytes)
+    outLine.objLength = objBytes.length
+
+    this.builder.currentDoc!.objectLines.push(outLine)
   }
 }
 
