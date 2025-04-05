@@ -5,7 +5,7 @@ import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
 
-import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./rpw_types"
+import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./shared/rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
@@ -205,7 +205,7 @@ export class LspServer {
     }
   }
 
-  // *** just use a map lookup directly? ***
+  // TODO: just use a map lookup directly?
   findSourceFile(filePath: string): SourceFile | undefined {
     for (let project of this.projects) {
       const sourceFile = project.findSourceFile(filePath)
@@ -539,6 +539,12 @@ export class LspServer {
     }
   }
 
+  // NOTE: This gets called by VSCode in cases where the actual
+  //  contents of a file have not changed -- when it's first opened,
+  //  or when clicking through the files of a project where they
+  //  are shown in the same italicized/quick file tab.
+  // For performance purposes, it may be worth scanning the file
+  //  contents against known to contents to check for differences.
   onDidChangeTextDocument(uri: string): void {
     const filePath = pathFromUriString(uri)
     if (filePath) {
@@ -699,7 +705,7 @@ export class LspServer {
                 if (hoverExp.symbol.isConstant) {
                   const value = hoverExp.resolve()
                   if (value != undefined) {
-                    hoverStr += hoverExp.symbol.getSimpleNameToken(hoverExp).getString()
+                    hoverStr += hoverExp.getSimpleName()
                       + " = " + value.toString(10)
                       + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
                       + ", %" + value.toString(2).padStart(8, "0")
@@ -707,7 +713,7 @@ export class LspServer {
                 } else if (hoverExp.symbol.isZPage) {
                   const value = hoverExp.resolve()
                   if (value != undefined) {
-                    hoverStr += hoverExp.symbol.getSimpleNameToken(hoverExp).getString()
+                    hoverStr += hoverExp.getSimpleName()
                       + " = $" + value.toString(16).padStart(2, "0").toUpperCase()
                   }
                 }
@@ -953,12 +959,14 @@ export class LspServer {
         const symExp = res.expression
         let symbol = symExp.symbol
         if (symbol) {
-          const token = symbol.getSimpleNameToken(symExp)
-          let range: lsp.Range = {
-            start: { line: symExp.lineNumber, character: token.start },
-            end: { line: symExp.lineNumber, character: token.end }
+          const simpleName = symExp.getSimpleName()
+          if (simpleName.asToken) {
+            let range: lsp.Range = {
+              start: { line: symExp.lineNumber, character: simpleName.asToken.start },
+              end: { line: symExp.lineNumber, character: simpleName.asToken.end }
+            }
+            return { range, placeholder: simpleName.asString }
           }
-          return { range, placeholder: token.getString() }
         }
       }
     }
@@ -1221,11 +1229,14 @@ export class LspServer {
           if (token.type == TokenType.Label || token.type == TokenType.Symbol) {
             let index = SemanticToken.invalid
             let bits = 0
-            if (symExp.isLocalType()) {
+            // check for variable before local because some locals are mutable
+            if (symExp.isVariableType() ||
+                symExp.symbolType == SymbolType.NamedParam ||
+                symExp.symbol?.isMutable) {
+              index = SemanticToken.var
+            } else if (symExp.isLocalType()) {
               index = SemanticToken.label
               bits |= (1 << SemanticModifier.local)
-            } else if (symExp.isVariableType()) {
-              index = SemanticToken.var
             } else if (symExp.symbol) {
               if (symExp.symbol.type == SymbolType.TypeName) {
                 index = SemanticToken.macro

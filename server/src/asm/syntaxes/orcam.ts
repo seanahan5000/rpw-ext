@@ -11,12 +11,13 @@ import * as stm from "../statements"
 
 export class OrcaMSyntax extends SyntaxDef {
 
-  public symbolTokenPrefixes = ".~"
+  public caseSensitiveSymbols = true
+  public symbolTokenPrefixes = ".~&"
   public symbolTokenContents = ""
   public cheapLocalPrefixes = ""
   public zoneLocalPrefixes = ""
   public anonLocalChars = ""
-  public namedParamPrefixes = ""
+  public namedParamPrefixes = "&"
   public keywordPrefixes = ""
   public keywordsInColumn1 = false
   public macroInvokePrefixes = ""
@@ -194,9 +195,6 @@ export class OrcaMSyntax extends SyntaxDef {
                         label:  "<symbol>",
                         params: "[<name>]",
                         desc:   "Define data segment" } ],
-      [ "using",      { // TODO
-                        params: "[<name>]",
-                        desc:   "Using data segment" } ],
       [ "kind",       { // TODO
                         params: "<number>",
                         desc:   "Specify object segment type and attributes" } ],

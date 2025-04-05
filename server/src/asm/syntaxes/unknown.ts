@@ -1,15 +1,18 @@
 
 import { SyntaxDef, KeywordDef, OpDef, Op } from "./syntax_types"
+import * as stm from "../statements"
 
 //------------------------------------------------------------------------------
 
 export class UnknownSyntax extends SyntaxDef {
 
+  public caseSensitiveSymbols = false
   public symbolTokenPrefixes = "!@:.]_"
   public symbolTokenContents = "."
   public cheapLocalPrefixes = "@:"
   public zoneLocalPrefixes = "."
   public anonLocalChars = "+-"
+  public namedParamPrefixes = ""
   public keywordPrefixes = ".!"
   public keywordsInColumn1 = true
   public macroInvokePrefixes = ""

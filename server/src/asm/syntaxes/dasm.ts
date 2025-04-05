@@ -13,16 +13,24 @@ import * as stm from "../statements"
 //  a dot "." or a crosshatch "#" for compatibility with other assemblers. So,
 //  ".IF" is the same as "IF" and "#IF".
 //
+// NOTES:
+//  - directives CANNOT be in first column
+//  - directives are NOT case sensitive
+//  - directives can optionally start with "." or "#"
+//  - label values are set before the directive, except for SEG, ORG, RORG, REND, ALIGN
+//    ! the value of a label on an ALIGN is set AFTER the ALIGN !
+//
 //------------------------------------------------------------------------------
 
 export class DasmSyntax extends SyntaxDef {
 
-  public symbolTokenPrefixes = "."
+  public caseSensitiveSymbols = true
+  public symbolTokenPrefixes = ".{"
   public symbolTokenContents = "."
   public cheapLocalPrefixes = ""
   public zoneLocalPrefixes = "."
   public anonLocalChars = ""
-  public namedParamPrefixes = ""
+  public namedParamPrefixes = "{"
   public keywordPrefixes = ".#"
   public keywordsInColumn1 = true
   public macroInvokePrefixes = ""
@@ -32,7 +40,7 @@ export class DasmSyntax extends SyntaxDef {
   public allowLineContinuation = false
   public stringEscapeChars = ""
   public scopeSeparator = ""
-  public defaultOrg = 0x0800        // TODO: choose correct value
+  public defaultOrg = undefined
 
   constructor() {
     super()
@@ -78,6 +86,7 @@ export class DasmSyntax extends SyntaxDef {
                         desc:   "Deactivate the relocatable origin" } ],
 
       // disk
+      // TODO: file names can be optionally quoted but are not required to be
       [ "include",    { create: () => { return new stm.IncludeStatement() },
                         params: "<filename>",
                         desc:   "Insert source file" } ],
@@ -103,15 +112,17 @@ export class DasmSyntax extends SyntaxDef {
 
       // segments
       [ "seg",        { create: () => { return new stm.SegmentStatement() },
-                        params: "[<name>]",
+                        params: "[<seg-name>]",
                         desc:   "Switch to new segment, creating if necessary" } ],
       [ "seg.u",      { alias:   "seg" } ],
 
+      // output
       [ "echo",       { // TODO
                         params: "<expression>[, <expression> ...]",
                         desc:   "" } ],
 
       // data storage
+      // TODO: do these need to allow leading "#"? Do all numbers?
       [ "ds",         { create: () => { return new stm.StorageStatement(1) },
                         params: "<count>[, <fill>]",
                         desc:   "Declare space and fill with value or 0" } ],
@@ -125,20 +136,21 @@ export class DasmSyntax extends SyntaxDef {
                         params: "<count>[, <fill>]",
                         desc:   "Declare space and fill with value or 0" } ],
 
+      // NOTE: expressions are always optional, even if not inside a dummy segment
       [ "dc",         { create: () => { return new stm.DataStatement_X8() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[[#]<expression>[, [#]<expression> ...]]",
                         desc:   "Declare byte data in the current segment" } ],
       [ "dc.b",       { create: () => { return new stm.DataStatement_X8() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[[#]<expression>[, [#]<expression> ...]]",
                         desc:   "Declare byte data in the current segment" } ],
       [ "dc.w",       { create: () => { return new stm.DataStatement_X16() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[[#]<expression>[, [#]<expression> ...]]",
                         desc:   "Declare word data in the current segment (little endian)" } ],
       [ "dc.l",       { create: () => { return new stm.DataStatement_U32() },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[[#]<expression>[, [#]<expression> ...]]",
                         desc:   "Declare long data in the current segment" } ],
       [ "dc.s",       { create: () => { return new stm.DataStatement_X16(true) },
-                        params: "<expression>[, <expression> ...]",
+                        params: "[[#]<expression>[, [#]<expression> ...]]",
                         desc:   "Declare word data in the current segment (big endian)" } ],
 
       [ "dv",         { // TODO
@@ -192,7 +204,7 @@ export class DasmSyntax extends SyntaxDef {
 
       // looping
       [ "repeat",     { create: () => { return new stm.RepeatStatement() },
-                        params: "<expression>",
+                        params: "<loop-count>",
                         desc:   "Start of repeated block" } ],
       [ "repend",     { create: () => { return new stm.EndRepStatement() },
                         params: "",

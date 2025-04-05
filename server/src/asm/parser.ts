@@ -7,6 +7,7 @@ import { SymbolType, SymbolFrom } from "./symbols"
 import { ParamsParser } from "./syntaxes/params"
 import * as exp from "./expressions"
 import * as stm from "./statements"
+import { FunctionExpression } from "./functions"
 
 // TODO: don't call this directly -- get from something else
 import { isaSet65xx } from "../isa65xx"
@@ -186,7 +187,7 @@ export class Parser extends Tokenizer {
     const offsets: number[] = []
 
     let moreLines = true
-    while (moreLines) {
+    while (moreLines && n < lines.length) {
       moreLines = lines[n].endsWith("\\")
       combinedLine += lines[n].substring(0, lines[n].length - (moreLines ? 1 : 0))
       offsets.push(combinedLine.length)
@@ -220,6 +221,15 @@ export class Parser extends Tokenizer {
     if (token) {
       return this.parseMacroInvoke(token)
     }
+  }
+
+  public reparseStatement(sourceLine: string, syntax: Syntax): stm.Statement {
+    this.sourceFile = undefined
+    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.lineNumber = 0
+    this.syntax = syntax
+    this.setSourceLine(sourceLine)
+    return this.parseStatement()
   }
 
   private parseStatement(): stm.Statement {
@@ -262,37 +272,85 @@ export class Parser extends Tokenizer {
     }
 
     if (!statement) {
-      const symExp = this.parseSymbol(true)
-      if (symExp) {
-        this.addExpression(symExp)
-        if (symExp instanceof exp.SymbolExpression) {
-          this.labelExp = symExp
-          if (symExp.isVariableType()) {
-            // *** this is merlin-only ***
-            const token = this.peekNextToken()
-            if (token?.getString() == "=") {
-              statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+
+      // NOTE: All of this retry logic is here to enable the ability
+      //  to detect and indented label ending with a ":".
+      // TODO: Consider splitting out statement parsing by syntax type
+      //  in oreder to simplify/remove a lot of this convoluted logic.
+
+      let retryToken: Token | undefined
+      let retryPos = 0
+      let token: Token | undefined
+      while (true) {
+
+        const symExp = this.parseSymbol(true, token)
+        if (symExp) {
+
+          // second attempt at finding a label is indented and needs end with a :
+          if (retryToken) {
+            if (!symExp.getString().endsWith(":")) {
+              this.setPosition(retryPos)
+              token = retryToken
+              break
             }
+          }
+
+          this.addExpression(symExp)
+          if (symExp instanceof exp.SymbolExpression) {
+            this.labelExp = symExp
+            if (symExp.isVariableType() && !retryToken) {
+              // *** this is merlin-only ***
+              const token = this.peekNextToken()
+              if (token?.getString() == "=") {
+                statement = this.initStatement(new stm.VarAssignStatement(), this.getNextToken())
+                break
+              }
+            }
+          }
+        } else if (retryToken) {
+          this.setPosition(retryPos)
+          token = retryToken
+          break
+        }
+
+        token = this.getNextToken()
+        if (!token) {
+          break
+        }
+        statement = this.parseKeyword(token)
+        if (statement) {
+          break
+        }
+        statement = this.parseOpcode(token)
+        if (statement) {
+          break
+        }
+        if (!this.syntaxDef.allowLabelTrailingColon) {
+          break
+        }
+        if (retryToken) {
+          this.setPosition(retryPos)
+          token = retryToken
+          break
+        }
+
+        retryToken = token
+        retryPos = this.position
+      }
+
+      if (!statement) {
+        if (!token) {
+          token = this.getNextToken()
+        }
+        if (token) {
+          statement = this.parseMacroInvoke(token)
+          if (!statement) {
+            token.setError("Unexpected token")
+            statement = this.initStatement(new stm.GenericStatement(), token)
           }
         }
       }
-    }
-
-    if (!statement) {
-      const token = this.getNextToken()
-      if (token) {
-        statement = this.parseKeyword(token)
-        if (!statement) {
-          statement = this.parseOpcode(token)
-          if (!statement) {
-            statement = this.parseMacroInvoke(token)
-            if (!statement) {
-              token.setError("Unexpected token")
-              statement = this.initStatement(new stm.GenericStatement(), token)
-            }
-          }
-        }
-      } else {
+      if (!statement) {
         statement = this.initStatement(new stm.GenericStatement())
       }
     }
@@ -323,7 +381,9 @@ export class Parser extends Tokenizer {
                           // *** just use generic Expression?
       // *** just push the tokens directly? ***
         // *** BadExpression ***
-      this.addExpression(new exp.BadExpression(extraTokens))
+      if (!silent) {
+        this.addExpression(new exp.BadExpression(extraTokens))
+      }
     }
 
     // handle possible comment at end of statement
@@ -573,6 +633,7 @@ export class Parser extends Tokenizer {
         }
       }
 
+      // TODO: this might be needed to identify CA65 files without a project
       // if (nextChar == ".") {
       //
       //   // look for possible keywords in the first column and
@@ -661,33 +722,53 @@ export class Parser extends Tokenizer {
 
     let str = token.getString()
 
+    // *** this interferes with namedParamPrefixes handling below ***
     // handle Merlin vars before everything else
-    if (str[0] == "]") {
-      if (!this.syntax || this.syntax == Syntax.MERLIN) {
-        this.syntaxStats[Syntax.MERLIN] += 1
-        // *** enforce/handle var assignment
-          // peekNextToken == "=" ?
-        return this.parseVarExpression(token, isDefinition)
-      }
-    }
+    // if (str[0] == "]") {
+    //   if (!this.syntax || this.syntax == Syntax.MERLIN) {
+    //     this.syntaxStats[Syntax.MERLIN] += 1
+    //     // *** enforce/handle var assignment
+    //       // peekNextToken == "=" ?
+    //     return this.parseVarExpression(token, isDefinition)
+    //   }
+    // }
 
     // *** clean this up -- splitting here and then reparsing locals ***
     if (token.type == TokenType.Symbol) {
+
+      // CA65 allows label definitions that start with "." only if they are followed by ":",
+      //  else it treats them as keywords.
+      if (this.syntax == Syntax.CA65) {
+        if (isDefinition) {
+          if (str[0] == ".") {
+            const c = this.peekVeryNextChar()
+            if (c == ":") {
+              token.type = TokenType.Label
+              const nextToken = this.getVeryNextToken()
+              if (nextToken) {
+                return this.newSymbolExpression([token, nextToken], SymbolType.Simple, isDefinition)
+              }
+            }
+            // this.ungetToken(token)
+          }
+        }
+      }
 
       let split = false
 
       // a token that starts with a "." could be a local or a keyword
       //  depending on the syntax
-      if (str[0] == ".") {
-        // *** fix parseLocal instead? ***
-      //   // *** maybe duplicate in parseValueExpression?
-      //   // if (isDefinition) {
-      //     // *** TODO: add logic to decide when to do this ***
-          split = true
-      //   // }
-      } else if (this.syntaxDef.cheapLocalPrefixes.includes(str[0]) ||
+      // if (str[0] == ".") {
+      //   // *** fix parseLocal instead? ***
+      // //   // *** maybe duplicate in parseValueExpression?
+      // //   // if (isDefinition) {
+      // //     // *** TODO: add logic to decide when to do this ***
+      //     split = true
+      // //   // }
+      // } else
+      if (this.syntaxDef.cheapLocalPrefixes.includes(str[0]) ||
+          this.syntaxDef.zoneLocalPrefixes.includes(str[0]) ||
           this.syntaxDef.namedParamPrefixes.includes(str[0])) {
-        // NOTE: currently used to handle leading "_" prefix
         split = true
       }
 
@@ -721,21 +802,21 @@ export class Parser extends Tokenizer {
           if (this.syntax == Syntax.CA65) {
             return this.parseCA65Local(token, isDefinition)
           }
-        } else if (str == ".") {
-          // CA65 allows labels that start with "." if they are followed by ":"
-          if (this.syntax == Syntax.CA65) {
-            const c = this.peekVeryNextChar()
-            if (c == ":") {
-              token.type = TokenType.Label
-              const result = this.newSymbolExpression([token], SymbolType.Simple, isDefinition)
-              token = this.getVeryNextToken()
-              if (token) {
-                this.addToken(token)
-              }
-              return result
-            }
-            this.ungetToken(token)
-          }
+        // } else if (str == ".") {
+        //   // CA65 allows labels that start with "." if they are followed by ":"
+        //   if (this.syntax == Syntax.CA65) {
+        //     const c = this.peekVeryNextChar()
+        //     if (c == ":") {
+        //       token.type = TokenType.Label
+        //       const result = this.newSymbolExpression([token], SymbolType.Simple, isDefinition)
+        //       token = this.getVeryNextToken()
+        //       if (token) {
+        //         this.addToken(token)
+        //       }
+        //       return result
+        //     }
+        //     this.ungetToken(token)
+        //   }
         }
       }
 
@@ -886,21 +967,44 @@ export class Parser extends Tokenizer {
     }
   }
 
-  parseLocal(token: Token, symbolType: SymbolType, isDefinition: boolean): exp.Expression {
+  parseLocal(token: Token, symbolType: SymbolType, isDefinition: boolean): exp.SymbolExpression {
     this.startExpression(token)
-    token.type = TokenType.Label
+    token.type = symbolType == SymbolType.NamedParam ? TokenType.Variable : TokenType.Label
 
+    let isNumeric = false
     let nextToken = this.addVeryNextToken()
     if (nextToken) {
-      if (nextToken.type != TokenType.Symbol &&
-          nextToken.type != TokenType.HexNumber &&
-          nextToken.type != TokenType.DecNumber) {
-        nextToken.setError("Invalid label name")
+      isNumeric = nextToken.type == TokenType.DecNumber
+      if (isNumeric
+          || nextToken.type == TokenType.HexNumber
+          || nextToken.type == TokenType.Symbol) {
+        nextToken.type = token.type
       } else {
-        nextToken.type = TokenType.Label
+        nextToken.setError("Invalid label name")
       }
     } else {
       nextToken = this.addMissingToken("Missing local name")
+    }
+
+    if (symbolType == SymbolType.NamedParam) {
+      const tokenStr = token.getString()
+      // special case DASM named param of the form "{#}"
+      if (tokenStr == "{") {
+        let finalToken = this.addVeryNextToken()
+        if (finalToken) {
+          if (finalToken.getString() == "}") {
+            finalToken.type = token.type
+          } else {
+            finalToken.setError("Expecting closing brace")
+          }
+        } else {
+          finalToken = this.addMissingToken("Missing close brace")
+        }
+      } else if (tokenStr == "]" && !isNumeric) {
+        // leave ]0 to ]9 as NamedParam but turn anything else into variable
+        // TODO: could they just be one or the other?
+        symbolType = SymbolType.Variable
+      }
     }
 
     // look for trailing ':'
@@ -911,7 +1015,7 @@ export class Parser extends Tokenizer {
     return this.newSymbolExpression(this.endExpression(), symbolType, isDefinition)
   }
 
-  public parseLisaLocal(token: Token, isDefinition: boolean): exp.Expression {
+  public parseLisaLocal(token: Token, isDefinition: boolean): exp.SymbolExpression {
     this.startExpression(token)
     token.type = TokenType.Label
 
@@ -933,7 +1037,7 @@ export class Parser extends Tokenizer {
     return this.newSymbolExpression(this.endExpression(), SymbolType.LisaLocal, isDefinition)
   }
 
-  public parseCA65Local(token: Token, isDefinition: boolean): exp.Expression {
+  public parseCA65Local(token: Token, isDefinition: boolean): exp.SymbolExpression {
     this.startExpression(token)
     token.type = TokenType.Label
 
@@ -979,13 +1083,19 @@ export class Parser extends Tokenizer {
   //  Need to check if the command is a known built-in function
   //  or declared by a previously .define.
   public parseFunctionExpression(token: Token): exp.Expression | undefined {
-    this.startExpression(token)
 
-    // TODO: is this the right type? -- keyword or macro instead?
-    token.type = TokenType.TypeName
+    const functionExp = this.buildFunction(token)
+    if (functionExp) {
+      return functionExp
+    }
 
     let nextToken = this.peekNextToken()
     if (nextToken && nextToken.getString() == "(") {
+
+      // TODO: is this the right type? -- keyword or macro instead?
+      token.type = TokenType.TypeName
+      this.startExpression(token)
+
       // define invoke/built-in call with optional parameters
       this.commitAddToken(nextToken)
       while (true) {
@@ -1004,11 +1114,60 @@ export class Parser extends Tokenizer {
           break
         }
       }
-    } else {
-      // built-in call without parens or parameters
-      // TODO: return undefined if no match
+      return new exp.Expression(this.endExpression())
     }
-    return new exp.Expression(this.endExpression())
+
+    // built-in call without parens or parameters
+    return
+  }
+
+  // *** rename this ***
+  // *** maybe move to functions? ***
+  private buildFunction(token: Token): exp.Expression | undefined {
+
+    if (!this.syntaxDef.functionMap) {
+      return
+    }
+
+    let functionDef = this.syntaxDef.functionMap.get(token.getString())
+    if (!functionDef) {
+      return
+    }
+
+    if (functionDef.alias) {
+      const aliasDef = this.syntaxDef.functionMap.get(functionDef.alias)
+      if (aliasDef === undefined) {
+        throw(`ASSERT: Function alias "${functionDef.alias}" doesn't point to definition`)
+      }
+      if (aliasDef.alias) {
+        throw(`ASSERT: Function alias "${functionDef.alias}" points to another alias`)
+      }
+    }
+
+    this.startExpression(token)
+
+    token.type = TokenType.Keyword    // TODO: different type?
+
+    if (functionDef.params !== undefined) {
+      if (!functionDef.paramsList) {
+        const paramsDef = this.syntaxDef.paramDefMap
+        functionDef.paramsList = this.paramsParser.parseString(functionDef.params, paramsDef)
+      }
+    }
+
+    this.paramsParser.parseExpressions(functionDef.paramsList, this)
+    const children = this.endExpression()
+
+    let funcExp: FunctionExpression
+    if (functionDef.create) {
+      funcExp = functionDef.create()
+      funcExp.children = children
+    } else {
+      funcExp = new FunctionExpression(children)
+    }
+
+    funcExp.postParse(this)
+    return funcExp
   }
 
   // *** what happens to token if not used?
@@ -1020,12 +1179,18 @@ export class Parser extends Tokenizer {
     if (token.type == TokenType.Symbol) {
       // TODO: this needs to be generalized
       if (str[0] == ".") {
+
         // For CA65, symbol tokens starting with "." are almost never symbols.
         //  They're either .define invocations or built-in functions,
         //  unless a label was defined in the form ".label:"
         if (this.syntax == Syntax.CA65) {
-          // TODO: skip this when the token is not a function name
-          return this.parseFunctionExpression(token)
+          // TODO: Skip this when the token is not a function or define name
+          // TODO: A later resolve that can't find a function/define should
+          //  then go look in the symbol table for a symbol match.
+          const result = this.parseFunctionExpression(token)
+          if (result) {
+            return result
+          }
         }
 
         return this.parseSymbol(false, token)
@@ -1071,12 +1236,17 @@ export class Parser extends Tokenizer {
         // *** possible cheap locals
         return this.parseSymbol(false, token)
       }
-      if (str == "#") {
-        if (this.syntax == Syntax.DASM) {
-          this.addToken(token)
-          return this.mustAddNextExpression()
-        }
-      }
+
+      // TODO: Figure out where "#" is allowed, beyond dc.b,w,l opcodes
+      //  and maybe make "#" its own unary operator.
+      // NOTE: this is currently handled by adding [#] into syntax defs.
+      // if (str == "#") {
+      //   if (this.syntax == Syntax.DASM) {
+      //     // this.addToken(token)
+      //     const nextToken = this.mustGetNextToken("Expected value")
+      //     return this.parseValueExpression(nextToken)
+      //   }
+      // }
 
       // ACME/64TASS anonymous locals
       // TODO: It's currently not possible to arrive here with str == "-" because
@@ -1335,11 +1505,6 @@ export class Parser extends Tokenizer {
   // caller has already checked for Merlin and that token starts with "]"
   parseVarExpression(varToken: Token, isDefinition: boolean): exp.SymbolExpression {
     varToken.type = TokenType.Variable
-
-    // TODO: for now, treat all variables as definitions
-    //  until reference tracking and macro usage is resolved
-    isDefinition = true
-
     return new exp.SymbolExpression([varToken], SymbolType.Variable, isDefinition)
   }
 
@@ -1573,10 +1738,19 @@ class ExpressionBuilder {
 
   private parseOperator(token: Token, isUnary: boolean): OpEntry | undefined {
     const syntax: SyntaxDef = SyntaxDefs[this.parser.syntax]
-    const opName = token.getString().toUpperCase()
+    let opName = token.getString().toUpperCase()
     let opDef: OpDef | undefined
     if (isUnary) {
       opDef = syntax.unaryOpMap?.get(opName)
+      // chop up "--" and "++" into individual sign operators
+      if (!opDef && token.type == TokenType.Operator) {
+        if (opName[0] == "-" || opName[0] == "+") {
+          token.end = token.start + 1
+          this.parser.setPosition(token.end)
+          opName = token.getString().toUpperCase()
+          opDef = syntax.unaryOpMap?.get(opName)
+        }
+      }
     } else {
       opDef = syntax.binaryOpMap?.get(opName)
     }

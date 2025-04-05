@@ -5,6 +5,9 @@ import { SymbolType } from "../symbols"
 import { Syntax, ParamDef } from "../syntaxes/syntax_types"
 import * as exp from "../expressions"
 
+// TODO: add ability to reparse with inMacroDef enabled,
+//  and be forgiving of errors and recover
+
 enum ParamType {
   List     = 0,
   Constant = 1,
@@ -70,7 +73,7 @@ class ConstantParam extends Param {
       if (token.getString() == '"') {
         const expression = parser.parseStringExpression(token, parser.syntaxDef.stringEscapeChars)
         parser.addExpression(expression)
-        if (expression.getString() == this.contents) {
+        if (expression.getString().toLowerCase() == this.contents) {
           expression.name = parentName
           return true
         }
@@ -199,13 +202,18 @@ class TermParam extends Param {
       return true
     }
 
+    // TODO: lots of cleanup needed here
+
+    // *** <const-expression> type that must resolve in the first pass ***
     // *** <address-expression> type that does range check ***
 
     if (this.termType == "feature-name") {
       return this.addNameExpression(parser, "feature name", TokenType.Keyword)
     }
+    if (this.termType == "seg-name") {
+      return this.addNameExpression(parser, "segment name", TokenType.Keyword)
+    }
 
-    // ***
     if (this.termType == "type-name") {
       return this.addSymbolExpression(parser, "type name", true, SymbolType.TypeName)
     }
@@ -213,12 +221,15 @@ class TermParam extends Param {
       return this.addSymbolExpression(parser, "named param", true, SymbolType.NamedParam)
     }
     if (this.termType == "define-name") {
-      return this.addSymbolExpression(parser, "define name", true, SymbolType.Simple)
+      return this.addSymbolExpression(parser, "define name", true, SymbolType.TypeName)
     }
     if (this.termType == "define-param") {
-      return this.addSymbolExpression(parser, "define param", true, SymbolType.ZoneLocal)
+      return this.addSymbolExpression(parser, "define param", true, SymbolType.NamedParam)
     }
-    // ***
+
+    if (this.termType == "loop-var") {
+      return this.addSymbolExpression(parser, "symbol name", true, SymbolType.Variable)
+    }
 
     if (this.termType == "symbol") {
       return this.addSymbolExpression(parser, "symbol name", false, SymbolType.Simple)
@@ -256,7 +267,6 @@ class TermParam extends Param {
       return true
     }
 
-    // *** pass in delimiters ( ",)" for example ) ***
     const expression = parser.mustAddNextExpression()
     expression.name = this.termName
     return !(expression instanceof exp.BadExpression)

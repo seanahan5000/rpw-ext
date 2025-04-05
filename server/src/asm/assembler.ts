@@ -1,7 +1,8 @@
 
+import * as fs from 'fs'
 import { Module, SourceFile, LineRecord } from "./project"
-import { Statement, ConditionalStatement, TypeDefBeginStatement, DefineDefStatement } from "./statements"
-import { GenericStatement, ClosingBraceStatement, EquStatement, ContinuedStatement } from "./statements"
+import { Statement, ConditionalStatement, TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
+import { ClosingBraceStatement } from "./statements"
 import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
@@ -10,30 +11,14 @@ import { SymbolType, SymbolFrom } from "./symbols"
 // just for the CA65 macro invoke work-around
 import { Parser } from "./parser"
 
-// - update while typing
-
-// - DS \,$EE
-
-// - "DENIBBLE_TABLE  =   *-$96" not resolving
-
-// - ignore macro body
-// - org $00/ds 1 not treated as zpage
-// - Dummy and SEG.U not working
-// - DASM: "SEG" without name gives error
-// - line with errors should give ??
-// - restore PC after dummy
-
-// - macro invoke
-// - compare against .lst data
-
 //------------------------------------------------------------------------------
+// MARK: FileReader
 
 type FileStateEntry = {
   file: SourceFile | undefined
   startLineIndex: number
   curLineIndex: number
   endLineIndex: number      // exclusive
-  loopCount: number         // includes first pass
   isMacro: boolean
 }
 
@@ -47,7 +32,6 @@ class FileReader {
       startLineIndex: 0,
       curLineIndex: 0,
       endLineIndex: 0,
-      loopCount: 1,
       isMacro: false
     }
   }
@@ -59,9 +43,18 @@ class FileReader {
       startLineIndex: 0,
       curLineIndex: 0,
       endLineIndex: file.lines.length,
-      loopCount: 1,
       isMacro: false
     }
+  }
+
+  // push copy of current state (used for looping)
+  repush() {
+    this.stateStack.push(this.state)
+    this.state = {...this.state}
+    // NOTE: curLineIndex has already been incremented,
+    //  so startLineIndex points to the first line of the
+    //  repeated lines.
+    this.state.startLineIndex = this.state.curLineIndex
   }
 
   pop() {
@@ -73,6 +66,7 @@ class FileReader {
 }
 
 //------------------------------------------------------------------------------
+// MARK: Conditional
 
 type ConditionalState = {
   enableCount: number,
@@ -151,6 +145,7 @@ export class Conditional {
 }
 
 //------------------------------------------------------------------------------
+// MARK: Nesting
 
 export enum NestingType {
   Conditional = 0,
@@ -178,84 +173,122 @@ type NestingEntry = {
 }
 
 //------------------------------------------------------------------------------
+// MARK: TypeDef
 
 export class TypeDef {
 
-  public name: string
-  private paramMap?: Map<string, Symbol>
-  private startStatement: TypeDefBeginStatement | DefineDefStatement
-  private endStatement?: Statement
+  public endLineIndex: number
+  private size?: number
 
-  constructor(nestingType: NestingType, startStatement: TypeDefBeginStatement | DefineDefStatement) {
-    this.startStatement = startStatement
-    this.name = startStatement.typeName?.getString() ?? ""
+  constructor(
+      public nestingType: NestingType,
+      public fileIndex: number,
+      public startLineIndex: number,
+      public params: string[]) {
+    this.endLineIndex = startLineIndex
   }
 
-  public endDefinition(endStatement: Statement) {
-    this.endStatement = endStatement
+  public endDefinition(endLineIndex: number, size: number) {
+    this.endLineIndex = endLineIndex
+    this.size = size
   }
 
-  public getParamMap(): Map<string, Symbol> {
-    // NOTE: Must build this on-demand because symbol
-    //  information is not available at construction time.
-    if (!this.paramMap) {
-      this.paramMap = new Map<string, Symbol>()
-      for (let arg of this.startStatement.args) {
-        if (arg.name == "type-param" || arg.name == "define-param") {
-          if (arg instanceof SymbolExpression) {
-            if (arg.symbol) {
-              this.paramMap.set(arg.getString(), arg.symbol)
-            }
-          }
-        }
-      }
-    }
-    return this.paramMap
+  public getSize(): number | undefined {
+    return this.size
   }
 }
 
 //------------------------------------------------------------------------------
+// MARK: LoopState
+
+export type LoopVar = {
+  symExp: exp.SymbolExpression
+  numExp: exp.NumberExpression
+  shared: boolean
+}
+
+type LoopState = {
+  curVal: number
+  endVal: number
+  deltaVal: number
+  loopVar?: LoopVar
+}
+
+//------------------------------------------------------------------------------
+
+type MacroInvokeState = {
+  line: LineRecord
+  varMap: Map<string, string>
+}
+
+//------------------------------------------------------------------------------
+// MARK: Segment
+
+export class Segment {
+
+  public name: string
+  public addressing: string
+  public isInitialized: boolean
+  public startPC?: number
+  public curPC?: number
+  public nextPC?: number
+  public fileBytes: (number | undefined)[] = []
+
+  constructor(name: string, addressing: string, isInitialized: boolean, startPC?: number) {
+    this.name = name
+    this.addressing = addressing
+    this.isInitialized = isInitialized
+    this.startPC = startPC
+    if (startPC !== undefined) {
+      this.curPC = startPC
+    }
+  }
+}
+
+//------------------------------------------------------------------------------
+// MARK: Assembler
 
 export class Assembler {
 
   public module: Module
 
-  // TODO: protected -> private once Preprocessor consumed
-
-  protected fileReader = new FileReader()
+  private fileReader = new FileReader()
   public conditional = new Conditional()
   public scopeState: ScopeState
-  protected syntaxStats: number[] = []
+  private syntaxStats: number[] = []
   public symUtils = new SymbolUtils()
 
-  protected nestingStack: NestingEntry[] = []
-  protected nestingCounts: number[] = new Array(NestingType.Count).fill(0)
+  private nestingStack: NestingEntry[] = []
+  private nestingCounts: number[] = new Array(NestingType.Count).fill(0)
 
-  protected typeDef?: TypeDef
+  private typeDef?: TypeDef
   private typeStart?: Statement
 
+  private macroInvokeStack: MacroInvokeState[] = []
+  public macroInvokeState?: MacroInvokeState
+
+  private loopStateStack: LoopState[] = []
+  private loopState?: LoopState
+
+  private parser = new Parser()
+
+  private segStateStack: (Segment | undefined)[] = []
+  private segMap = new Map<string, Segment>()
+  private curSeg?: Segment
+
+  private curLine?: LineRecord
+
+  private statementBytes: (number | undefined)[] = []
+
+  private pass: number = -1
+
   //---------------------------------------------------
-
-  // TODO: during preprocess only?
-
-  protected currentPC: number = -1
-  protected nextPC?: number
-
-  public getCurrentPC(): number {
-    return this.currentPC
-  }
-
-  public setNextPC(nextPC: number) {
-    this.nextPC = nextPC
-  }
-
-  //---------------------------------------------------
-
-  protected currentLine?: LineRecord
 
   constructor(module: Module) {
     this.module = module
-    this.scopeState = new ScopeState(this.syntaxDef.scopeSeparator)
+    this.scopeState = new ScopeState(
+      module.project.caseSensitive ?? this.syntaxDef.caseSensitiveSymbols,
+      this.syntaxDef.scopeSeparator)
   }
 
   public get syntax(): Syntax {
@@ -266,321 +299,194 @@ export class Assembler {
     return this.module.project.syntaxDef
   }
 
-  public assemble(lineRecords: LineRecord[]) {
-
-    // pass 1
-
-    for (let line of lineRecords) {
-      const statement = line.statement
-      if (!statement || !statement.enabled) {
-        continue
-      }
-
-      if (statement.hasAnyError()) {
-        // *** mark org as not valid?
-        continue
-      }
-
-      // *** skip macro body lines ***
-
-      this.currentLine = line
-      line.size = statement.pass1(this)
-      if (line.size === undefined) {
-        // *** mark org as not valid?
-      } else if (line.size == 0) {
-        line.address = undefined
-      }
-    }
-
-    // pass 2
-
-    for (let line of lineRecords) {
-
-      const statement = line.statement
-      if (!statement || !statement.enabled || statement.hasAnyError()) {
-        continue
-      }
-
-      // *** skip macro body lines ***
-
-      this.currentLine = line
-      // this.currentPCX = line.address ?? -1
-      // always create an array so statement doesn't have to check for undefined
-      // *** maybe statement.pass2 shouldn't be called if line.size undefined???
-      line.bytes = new Array(line.size ?? 0).fill(undefined)
-      statement.pass2(this, line.bytes)
-      // throw away array if size was undefined
-      if (line.size === undefined) {
-        line.bytes = undefined
-      }
-      // *** maybe remove line.size once line.bytes is present ***
+  private checkPass(pass: number) {
+    if (pass != this.pass) {
+      throw "ASSERT: Pass check failed"
     }
   }
 
-  //------------------------------------
-  // File management
-  // *** TODO: comment/enforce which pass these are called in ***
-  //------------------------------------
+  //---------------------------------------------------
+  // #region Pass 01
+  //---------------------------------------------------
 
-  includeFile(fileName: string): boolean {
-    const currentFile = this.fileReader.state.file
-    const sourceFile = this.module.openSourceFile(fileName, currentFile)
-    if (!sourceFile) {
-      return false
-    }
-    sourceFile.parseStatements(this.syntaxStats)
-    this.fileReader.push(sourceFile)
-    return true
-  }
+  public assemble_pass01(fileName: string, syntaxStats: number[]): LineRecord[] {
 
-  //------------------------------------
-  // Nesting management
-  // *** TODO: comment/enforce which pass these are called in ***
-  //------------------------------------
-
-  public topNestingType(): NestingType | undefined {
-    const length = this.nestingStack.length
-    return length > 0 ? this.nestingStack[length - 1].type : undefined
-  }
-
-  public isNested(type: NestingType): boolean {
-    return this.nestingCounts[type] != 0
-  }
-
-  public pushNesting(type: NestingType, bracePopProc?: () => void) {
-    if (this.currentLine!.statement) {
-      this.nestingStack.push({ type, statement: this.currentLine!.statement, bracePopProc})
-      this.nestingCounts[type] += 1
-    }
-  }
-
-  // NOTE: Caller will have already verified there's an entry
-  //  to pop and that it's the correct one.
-  // *** why is bracePop param here? ***
-  public popNesting(bracePop = false): boolean {
-    const entry = this.nestingStack.pop()
-    if (entry) {
-      if (this.nestingCounts[entry.type]) {
-        this.nestingCounts[entry.type] -= 1
-        // *** always call proc for now, until need for check is proven ***
-        if (bracePop && entry.bracePopProc) {
-          entry.bracePopProc()
-        }
-        entry.statement.foldEnd = this.currentLine!.statement
-        return true
-      } else {
-        this.nestingStack.push(entry)
-      }
-    }
-    return false
-  }
-
-  //------------------------------------
-  // Macro management
-  // *** TODO: comment/enforce which pass these are called in ***
-  //  *** preprocess-only ***
-  //------------------------------------
-
-  public inTypeDef(): boolean {
-    return this.typeDef != undefined
-  }
-
-  public startTypeDef(nestingType: NestingType) {
-
-    // NOTE: caller should have checked this and flagged an error
-    if (!this.typeDef) {
-
-      const statement = this.currentLine!.statement
-      if (statement instanceof TypeDefBeginStatement || statement instanceof DefineDefStatement) {
-
-        // *** used fully scoped name
-        // const typeName = statement.typeName?.getString() ?? ""
-        // if (this.module.macroMap.get(typeName) !== undefined) {
-        //   statement.typeName?.setError("Duplicate macro name (use Go To Definition)")
-        //   return
-        // }
-
-        this.typeStart = statement
-        this.typeDef = new TypeDef(nestingType, statement)
-
-        // NOTE: Scope state management handled in the statement
-        //  so it can be done differently based on syntax.
-      }
-    }
-  }
-
-  public endTypeDef() {
-    // NOTE: caller should have checked this and flagged an error
-    if (this.typeDef) {
-
-      const statement = this.currentLine!.statement!
-
-      if (this.typeStart) {
-        this.typeStart.foldEnd = statement
-        this.typeStart = undefined
-      }
-
-      this.typeDef.endDefinition(statement)
-      // *** split by type ***
-      // this.module.macroMap.set(this.typeDef.name, this.typeDef)
-      this.typeDef = undefined
-
-      // NOTE: Scope state management handled in the statement
-      //  so it can be done differently based on syntax.
-    }
-  }
-}
-
-//------------------------------------------------------------------------------
-
-export class Preprocessor extends Assembler {
-
-  // (pass 1)
-    // parse all statements in all connected source files (no symbol linkage)
-  // (pass 2)
-    // walk each line, tracking conditional state
-      // enable/disable line
-      // Statement.preprocess(enabled)
-        // handle file includes and state push/pop
-      // Preprocessor.processSymbols(firstPass = true)
-        // symbol scope tracking
-        // create symbol definitions
-        // some symbol reference linking
-    // rewalk each line
-      // Preprocessor.processSymbols(firstPass = false)
-        // remaining symbol reference linking
-      // statement.postProcessSymbols()
-        // mark symbols as constants/code/etc.
-
-  preprocess(fileName: string, syntaxStats: number[]): LineRecord[] | undefined {
     const lineRecords: LineRecord[] = []
     this.syntaxStats = syntaxStats
 
-    // *** might be undefined for some syntaxes?
-    this.currentPC = this.module.project.syntaxDef.defaultOrg
-    this.nextPC = undefined
+    this.segMap = new Map<string, Segment>()
+    this.segStateStack = []
+    this.curSeg = undefined
 
-    // NOTE: this causes each source line of each source file to be parsed first
+    this.curLine = undefined
+
+    this.macroInvokeStack = []
+    this.macroInvokeState = undefined
+
+    this.loopStateStack = []
+    this.loopState = undefined
+
+    this.pass = 0
+
+    this.setSegment("code", "absolute", true, this.module.project.syntaxDef.defaultOrg)
+    this.curSeg = this.curSeg!
+
+    // parse all the statements of the initial file and set fileReader state
     if (!this.includeFile(fileName)) {
       // *** error messaging?
-      return
+      return lineRecords
     }
 
+    // NOTE: All vars/params must be resolved/set by end of preprocess (pass 0).
+    //  At assembly pass 1 time, each statement must have all the
+    //  all the information it needs from vars/params.
+
     while (this.fileReader.state.file) {
-      do {
-        while (this.fileReader.state.curLineIndex < this.fileReader.state.endLineIndex) {
 
-          const line: LineRecord = {
-            sourceFile: this.fileReader.state.file,
-            lineNumber: this.fileReader.state.curLineIndex,
-            statement: undefined
+      while (this.fileReader.state.curLineIndex < this.fileReader.state.endLineIndex) {
+
+        this.pass = 0
+
+        const line: LineRecord = {
+          sourceFile: this.fileReader.state.file,
+          lineNumber: this.fileReader.state.curLineIndex,
+          statement: undefined
+        }
+
+        this.curLine = line
+        line.statement = this.fileReader.state.file.statements[line.lineNumber]
+
+        // must advance before parsing statement that may include a different file
+        this.fileReader.state.curLineIndex += 1
+
+        // TODO: skip statements that have errors?
+        if (this.inMacroExpand()) {
+          const sourceLine = line.statement ? this.expandStatement(line.statement) : ""
+          line.statement = this.parser.reparseStatement(sourceLine, this.syntax)
+          // TODO: expand line again? (macros and defines)
+          line.isHidden = true
+
+        } else if (this.inLoop()) {
+          if (line.statement.repeated) {
+            line.statement = this.parser.reparseStatement(line.statement.sourceLine, this.syntax)
+            line.isHidden = true
+          } else {
+            line.statement.repeated = true
           }
+        }
 
-          this.currentLine = line
-          line.statement = this.fileReader.state.file.statements[line.lineNumber]
+        line.statement.segment = this.curSeg
+        // TODO: size of PC could be determined by curSeg addressing
+        line.statement.PC = this.curSeg?.curPC
 
-          // must advance before parsing that may include a different file
-          this.fileReader.state.curLineIndex += 1
+        let isConditional = false
+        if (line.statement instanceof ConditionalStatement) {
+          isConditional = true
 
-          // assign PC to "*" expressions now that it's known
-          if (!(line.statement instanceof ContinuedStatement)) {
-            line.statement.forEachExpression((expression) => {
-              if (expression instanceof exp.PcExpression) {
-                expression.setValue(this.currentPC)
-              }
-            })
-          }
-
-          let conditional = false
-          if (line.statement instanceof ConditionalStatement) {
-            conditional = true
-
-            // determine if ClosingBraceStatement actually a conditional operation
-            if (line.statement instanceof ClosingBraceStatement) {
-              if (this.nestingStack.length > 0) {
-                conditional = (this.nestingStack[this.nestingStack.length - 1].type == NestingType.Conditional)
-              }
+          // determine if ClosingBraceStatement actually a conditional operation
+          if (line.statement instanceof ClosingBraceStatement) {
+            if (this.nestingStack.length > 0) {
+              isConditional = (this.nestingStack[this.nestingStack.length - 1].type == NestingType.Conditional)
             }
-
-            if (conditional) {
-
-              // *** maybe call processSymbolRefs instead ***?
-
-              // need symbol references hooked up before resolving conditional expression
-              this.processSymbols(line.statement, true)
-              // *** TODO: consider folding applyConditional into preprocess
-              line.statement.applyConditional(this)
-            }
           }
 
-          if (!conditional) {
-            const enabled = this.conditional.isEnabled()
-            if (enabled) {
+          if (isConditional) {
+            line.statement.applyConditional(this, this.conditional)
+          }
+        }
+
+        if (!isConditional) {
+          const enabled = this.conditional.isEnabled()
+          if (enabled) {
+
+            // TODO: Find a better location for this and
+            //  a less-brittle solution for the problem.
+            if (this.module.project.syntax == Syntax.CA65) {
+
               // CA65 allows macro invokes in the first column,
               //  so if the label of this statement matches a
               //  known macro name, convert it to a macro invoke
               //  statement and reparse.
-              //
-              // TODO: Find a better location for this and
-              //  a less-brittle solution for the problem.
-              if (this.module.project.syntax == Syntax.CA65) {
-                if (line.statement.labelExp) {
-                  const labelName = line.statement.labelExp.getString()
-                  const foundSym = this.module.symbolMap.get(labelName)
-                  if (foundSym && foundSym.type == SymbolType.TypeName) {
-                    const parser = new Parser()
-                    const newStatement = parser.reparseAsMacroInvoke(line.statement, this.module.project.syntax)
-                    if (newStatement) {
-                      line.statement = newStatement
-                      this.fileReader.state.file.statements[line.lineNumber] = newStatement
-                    }
+              if (line.statement.labelExp) {
+                const labelName = line.statement.labelExp.getString()
+                const foundSym = this.module.symbolMap.get(labelName)
+                if (foundSym && foundSym.type == SymbolType.TypeName) {
+                  const newStatement = this.parser.reparseAsMacroInvoke(line.statement, this.module.project.syntax)
+                  if (newStatement) {
+                    line.statement = newStatement
+                    this.fileReader.state.file.statements[line.lineNumber] = newStatement
                   }
                 }
               }
-
-              // NOTE: need to push zone before processing named params
-              line.statement.preprocess(this, enabled)
-              this.processSymbols(line.statement, true)
-
-              // force a popScope after a DefineDefStatement because its scope
-              //  only last for that line until its symbols have been processed
-              if (line.statement instanceof DefineDefStatement) {
-                line.statement.endPreprocess(this, enabled)
-              }
-            } else {
-              // NOTE: no need to process symbols here because line is disabled
-              line.statement.preprocess(this, enabled)
-              // TODO: reconcile lineRecord and statement use on disabled lines
-              line.statement.enabled = false
-              line.statement = new GenericStatement()
             }
-          }
 
-          line.statement.PC = this.currentPC
-          if (this.nextPC !== undefined) {
-            this.currentPC = this.nextPC
-            this.nextPC = undefined
+            // NOTE: need to push zone before processing named params
+            line.statement.preprocess(this)
+
+            // force a popScope after a DefineDefStatement because its scope
+            //  only last for that line until its symbols have been processed
+            if (line.statement instanceof DefineDefStatement) {
+              line.statement.endPreprocess(this)
+            }
+
           } else {
-            const deltaPC = line.statement.getSize() ?? 0
-            // *** TODO: if size undefined, mark error? ***
-            this.currentPC += deltaPC
+            line.statement.enabled = false
           }
-
-          // don't add new statement if shared file already has one
-          if (line.sourceFile.statements.length == line.lineNumber) {
-            if (line.statement) {
-              line.sourceFile.statements.push(line.statement)
-            }
-          }
-
-          lineRecords.push(line)
         }
-        this.fileReader.state.curLineIndex = this.fileReader.state.startLineIndex;
-      } while (--this.fileReader.state.loopCount > 0)
+
+        if (line.statement.enabled) {
+          this.pass = 1
+
+          const advancePC = line.statement.pass1(this) ?? 0
+
+          if (this.curSeg) {
+            if (this.curSeg.nextPC !== undefined) {
+              this.curSeg.curPC = this.curSeg.nextPC
+              this.curSeg.nextPC = undefined
+            } else {
+              // Once statements start trying to use the current PC
+              //  default to 0 and advance that.  (This shows up when
+              //  a new segment is created and then immediately used.)
+              if (this.curSeg.curPC === undefined) {
+                this.curSeg.curPC = 0
+                line.statement.PC = 0
+              }
+              this.curSeg.curPC += advancePC
+            }
+          } else {
+            // TODO: error if advancePC != 0 but no segment?
+          }
+        }
+
+        // // don't add new statement if shared file already has one
+        // if (line.sourceFile.statements.length == line.lineNumber) {
+        //   if (line.statement) {
+        //     line.sourceFile.statements.push(line.statement)
+        //   }
+        // }
+
+        lineRecords.push(this.curLine)
+
+        // if macroInvoke active, also attach new lines to invoker
+        if (this.macroInvokeState?.line) {
+          if (this.macroInvokeState.line.children) {
+            this.macroInvokeState.line.children.push(line)
+          } else {
+            this.macroInvokeState.line.children = []
+          }
+        }
+      }
+
+      this.fileReader.state.curLineIndex = this.fileReader.state.startLineIndex
+
+      if (this.fileReader.state.isMacro) {
+        this.macroInvokeState = this.macroInvokeStack.pop()
+      }
+
       this.fileReader.pop()
     }
 
-    this.currentLine = undefined
+    this.curLine = undefined
 
     while (true) {
       const entry = this.nestingStack.pop()
@@ -591,199 +497,852 @@ export class Preprocessor extends Assembler {
       entry.statement.setError("Dangling " + entry.statement.opNameLC)
     }
 
-    // process all remaining symbols
-    const symUtils = new SymbolUtils()
-    for (let line of lineRecords) {
-      const statement = line.statement
-      if (statement) {
-        this.processSymbols(statement, false)
-        statement.postProcessSymbols(symUtils)
-      }
+    if (this.segStateStack.length > 0) {
+      // TODO: report dangling segment stack error?
     }
 
+    if (this.macroInvokeStack.length > 0) {
+      // TODO: report dangling macro invoke state error?
+    }
+
+    // process all remaining symbols
+    // const symUtils = new SymbolUtils()
+    // for (let line of lineRecords) {
+    //   const statement = line.statement
+    //   if (statement) {
+    //     this.finalizeSymbols_new(statement)
+    // //     statement.postProcessSymbols(symUtils)
+    //   }
+    // }
+
+    this.pass = -1
     return lineRecords
   }
 
-  // assign symbol's full name, possibly before scope changes
-  public preprocessSymbol(symExp: SymbolExpression) {
-    if (!symExp.fullName) {
-      symExp.fullName = this.scopeState.setSymbolExpression(symExp)
-    }
-  }
+  // #endregion
+  //---------------------------------------------------
+  // #region Pass 2
+  //---------------------------------------------------
 
-  // TODO: get rid of this after switch to real assembly
-  // *** maybe pass in expression instead?
-  public processSymbolRefs(statement: Statement) {
-    statement.forEachExpression((expression) => {
-      if (expression instanceof SymbolExpression) {
+  public assemble_pass2(lineRecords: LineRecord[]) {
+    this.pass = 2
+
+    this.statementBytes = []
+
+    for (let line of lineRecords) {
+
+      if (!line.statement) {
+        continue
+      }
+
+      // *** would linking of forward references still be needed?
+      // *** maybe still process symbol references (not definitions)
+      if (!line.statement.enabled) {
+        continue
+      }
+
+      // resolve remaining references -- no definitions
+      line.statement.forEachExpression((expression) => {
         const symExp = expression
-        if (!symExp.isDefinition && !symExp.isLocalType() && !symExp.isVariableType()) {
-          if (!symExp.fullName) {
-            // assume caller is in first pass so scope is valid here
-            symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+        if (symExp instanceof exp.SymbolExpression) {
+
+          if (symExp.hasError()) {
+            return
           }
-          if (symExp.fullName && !symExp.symbol) {
-            const foundSym = this.module.symbolMap.get(symExp.fullName)
-            if (foundSym) {
-                symExp.symbol = foundSym
-                symExp.symbolType = foundSym.type
-                symExp.fullName = foundSym.fullName
-                foundSym.addReference(symExp)
+
+          // skip definitions and resolved references
+          if (symExp.symbol) {
+            return
+          }
+          // should never happen at this point
+          if (!symExp.fullName) {
+            return
+          }
+
+          const foundSym = this.findSymbol_pass2(symExp)
+          if (foundSym) {
+            symExp.symbol = foundSym
+            symExp.symbolType = foundSym.type
+            symExp.fullName = foundSym.fullName
+            foundSym.addReference(symExp)
+          } else {
+
+            if (line.statement?.segment?.name == "_macro_" ||
+                line.statement instanceof DefineDefStatement) {
+              symExp.isWeak = true
+            }
+
+            // TODO: make temporary project check a setting
+            if (!symExp.isWeak && !this.module.project.isTemporary) {
+              symExp.setError("Symbol not found")
             }
           }
         }
-      } else if (expression instanceof exp.PcExpression) {
-        expression.setValue(this.currentPC)
+      })
+
+      // *** error on final resolve failure ***
+
+      // only call write pass if current segment is initialized (has data)
+      if (line.statement?.segment?.isInitialized) {
+
+        line.statement.pass2(this)
+
+        if (this.statementBytes.length) {
+          line.bytes = this.statementBytes
+          this.statementBytes = []
+        }
       }
-    })
+    }
+
+    // walk each macro invoke statement and collect errors from their children
+    for (let line of lineRecords) {
+      if (!line.isHidden && line.statement?.enabled) {
+        if (line.statement instanceof MacroInvokeStatement) {
+          this.collectErrors(line)
+        }
+      }
+    }
+
+    if (this.module.saveName) {
+      this.writeFile(this.module.saveName)
+    }
+
+    this.pass = -1
   }
 
-  // *** put in module instead? ***
-  // *** split out first pass code?
-  // *** later, when scanning disabled lines, still process references ***
-  private processSymbols(statement: Statement, firstPass: boolean) {
-    // *** maybe just stop on error while walking instead of walking twice
-    if (!statement.hasAnyError() && !(statement instanceof ContinuedStatement)) {
-      statement.forEachExpression((expression) => {
-        if (expression instanceof SymbolExpression) {
+  // #endregion
+  //--------------------------------------------------------
+  // #region Writing
+  // write callbacks for pass 2
+  //--------------------------------------------------------
 
-          const symExp = expression
+  public writeByte(value: number | undefined) {
+    if (!this.curSeg?.fileBytes) {
+      throw "ASSERT: writeByte called without a segment"
+    }
+    this.checkPass(2)
+    this.curSeg.fileBytes.push(value)
+    this.statementBytes.push(value)
+  }
 
-          if (firstPass && !symExp.isDefinition) {
+  public writeBytes(values: (number | undefined)[]) {
+    if (!this.curSeg?.fileBytes) {
+      throw "ASSERT: writeBytes called without a segment"
+    }
+    this.checkPass(2)
+    this.curSeg.fileBytes.push(...values)
+    this.statementBytes.push(...values)
+  }
 
-            const symName = symExp.getString()
+  public writeBytePattern(value: number | undefined, count: number) {
+    if (!this.curSeg?.fileBytes) {
+      throw "ASSERT: writeBytePattern called without a segment"
+    }
+    this.checkPass(2)
+    const bytes = new Array(count).fill(value)
+    this.curSeg.fileBytes.push(...bytes)
+    this.statementBytes.push(...bytes)
+  }
 
-            // look for symbol references that are macro parameters
-            // *** or struct or union ***
-            // *** look at nesting? ***
-            if (this.typeDef && !symExp.symbol) {
-              let paramName = symName
-              if (this.syntaxDef.namedParamPrefixes.includes(symName[0])) {
-                paramName = symName.substring(1)
-              }
-              const foundParam = this.typeDef.getParamMap().get(paramName)
-              if (foundParam) {
-                symExp.symbol = foundParam
-                symExp.symbolType = foundParam.type
-                symExp.fullName = foundParam.fullName
-                foundParam.addReference(symExp)
-              }
-            }
+  //--------------------------------------------------------
 
-            // look for symbol references that should be converted to variables
-            // NOTE: if this changes, also change setSymbolExpression
-            const foundVar = this.module.variableMap.get(symName)
-            if (foundVar) {
-              symExp.symbol = foundVar
-              symExp.symbolType = foundVar.type
-              symExp.fullName = foundVar.fullName
-            }
-          }
+  // replace named parameters with their current values
+  private expandStatement(statement: Statement): string {
+    this.checkPass(0)
 
-          // must do this in the first pass while scope is being tracked
-          if (!symExp.fullName) {
-            symExp.fullName = this.scopeState.setSymbolExpression(symExp)
-          }
-          if (symExp.fullName) {
-            if (symExp.isDefinition) {
-              if (firstPass) {
-                if (!symExp.isVariableType()) {
-                  const foundSym = this.module.symbolMap.get(symExp.fullName)
-                  if (foundSym) {
-                    if (symExp.symbolFrom != SymbolFrom.Import && !symExp.isWeak) {
-                      symExp.setError("Duplicate symbol (use Go To Definition)")
-                    }
-                    // turn symExp into a reference to the original symbol
-                    symExp.symbol = foundSym
-                    symExp.isDefinition = false
-                    foundSym.addReference(symExp)
-                    return
-                  }
-                }
-                if (symExp.symbol) {
-                  if (symExp.isVariableType()) {
-                    // only add the first reference to a variable
-                    const foundVar = this.module.variableMap.get(symExp.fullName)
-                    if (!foundVar) {
-                      this.module.variableMap.set(symExp.fullName, symExp.symbol)
-                    }
-                    return
-                  }
-
-                  const sharedSym = this.module.project.sharedSymbols.get(symExp.fullName)
-                  if (symExp.symbol.isEntryPoint) {
-                    if (sharedSym) {
-                      symExp.setError("Duplicate entrypoint (use Go To Definition)")
-                      // turn symExp into a reference to the original symbol
-                      symExp.symbol = sharedSym
-                      symExp.isDefinition = false
-                      sharedSym.addReference(symExp)
-                      return
-                    }
-                    symExp.symbol.fullName = symExp.fullName
-                    this.module.project.sharedSymbols.set(symExp.fullName, symExp.symbol)
-                    this.module.symbolMap.set(symExp.fullName, symExp.symbol)
-                  } else {
-                    if (sharedSym) {
-                      // this definition matches a shared symbol, so it's probably from an EXT file
-                      if (symExp.symbol.from != SymbolFrom.Equate) {
-                        symExp.setError("Symbol conflict with entrypoint (use Go To Definition)")
-                        // turn symExp into a reference to the original symbol
-                        symExp.symbol = sharedSym
-                        symExp.isDefinition = false
-                        sharedSym.addReference(symExp)
-                        return
-                      }
-                      if (sharedSym.fullName) {
-                        this.module.symbolMap.set(sharedSym.fullName, sharedSym)
-                      }
-                    } else {
-                      symExp.symbol.fullName = symExp.fullName
-                      this.module.symbolMap.set(symExp.fullName, symExp.symbol)
-                    }
-                  }
-                }
-              }
-            } else if (!symExp.symbol) {
-              const foundSym = this.module.symbolMap.get(symExp.fullName)
-              if (foundSym) {
-                if (foundSym == statement.labelExp?.symbol && statement instanceof EquStatement) {
-                  symExp.setError("Circular symbol reference")
-                } else {
-                  symExp.symbol = foundSym
-                  symExp.symbolType = foundSym.type
-                  symExp.fullName = foundSym.fullName
-                  foundSym.addReference(symExp)
-                }
-              } else {
-                // TODO: For now, don't report any missing symbols within
-                //  a macro definition.  This should eventually look at
-                //  named macro parameters and match against those. (ca65-only?)
-                if (firstPass && this.inTypeDef()) {
-                  // TODO: be smarter about scoping locals
-                  if (!symExp.isLocalType()) {
-                    symExp.isWeak = true
-                  }
-                }
-                if (!symExp.isWeak) {
-                  // TODO: make temporary project check a setting
-                  if (symExp.isLocalType() || !this.module.project.isTemporary) {
-                    if (symExp.symbolType == SymbolType.TypeName) {
-                      symExp.setError("Unknown macro or opcode")
-                    } else if (!firstPass) {
-                      symExp.setError("Symbol not found")
-                    }
-                  }
-                }
+    let result = statement.sourceLine
+    if (this.macroInvokeState) {
+      statement.forEachExpressionBack((expression: exp.Expression) => {
+        if (expression instanceof exp.SymbolExpression) {
+          if (expression.symbolType == SymbolType.NamedParam) {
+            const range = expression.getRange()
+            if (range) {
+              const newStr = this.macroInvokeState!.varMap.get(expression.getSimpleName().asString)
+              if (newStr !== undefined) {
+                result = result.slice(0, range.start) + newStr + result.slice(range.end)
               }
             }
           }
         }
       })
     }
+    return result
   }
+
+  //--------------------------------------------------------
+  // #endregion
+  //--------------------------------------------------------
+  // #region Symbols
+  //--------------------------------------------------------
+
+  public processSymbol_pass0(symExp: SymbolExpression) {
+    this.checkPass(0)
+
+    if (symExp.hasError()) {
+      return
+    }
+
+    // exit if symbol has already been processed
+    if (symExp.fullName) {
+      return
+    }
+
+    symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+    if (!symExp.fullName) {
+      symExp.setError("Unable to resolve symbol")
+      return
+    }
+
+    if (symExp.isDefinition) {
+
+      // definitions always have symbol created
+      symExp.symbol = symExp.symbol!
+
+      const foundSym = this.module.symbolMap.get(symExp.fullName)
+      if (foundSym) {
+
+        // On a duplicate variable definition, change the owner of the
+        //  symbol to the newer expression.  This is desirable in macro
+        //  definitions too.
+        if (symExp.isVariableType()) {
+          this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+          if (!this.inMacroDef()) {
+            if (this.curSeg?.curPC !== undefined) {
+              symExp.setPCValue(this.curSeg.curPC)
+            }
+            symExp.captureValue()
+          }
+          return
+        }
+
+        let reportError = true
+
+        if (this.inMacroDef()) {
+
+          // If symbol exists and it's a namedParam and a macro is being
+          //  defined, demote the expression to a reference, from the
+          //  definition it will become when the macro is expanded.
+          //
+          // All other symbols will be scoped to the macro definition,
+          //  so report duplicates as normal.
+          if (foundSym.type == SymbolType.NamedParam) {
+            reportError = false
+            symExp.symbolType = foundSym.type
+          }
+          // If symbol exists and it's mutable and it's inside a macroDef,
+          //  link it back to the first definition
+          else if (foundSym.isMutable) {
+            reportError = false
+          }
+
+        } else { // !this.inMacroDef()
+
+          // On a duplicate mutable definition, change the owner of the
+          //  symbol to the newer expression.
+          if (foundSym.isMutable) {
+            this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+            symExp.captureValue()
+            return
+          }
+        }
+
+        if (/*symExp.symbolFrom == SymbolFrom.Import ||*/ symExp.isWeak) {
+         reportError = false
+        }
+
+        if (reportError) {
+          symExp.setError("Duplicate symbol (use Go To Definition)")
+        }
+
+        // turn symExp into a reference to the original symbol
+        symExp.symbol = foundSym
+        symExp.isDefinition = false
+        // *** if in macro expansion, still add references?
+        foundSym.addReference(symExp)
+      } else {
+
+        const sharedSym = this.module.project.sharedSymbols.get(symExp.fullName)
+        if (symExp.symbol.isEntryPoint) {
+          if (sharedSym) {
+            symExp.setError("Duplicate entrypoint (use Go To Definition)")
+            // turn symExp into a reference to the original symbol
+            symExp.symbol = sharedSym
+            symExp.isDefinition = false
+            sharedSym.addReference(symExp)
+            return
+          }
+          symExp.symbol.fullName = symExp.fullName
+          this.module.project.sharedSymbols.set(symExp.fullName, symExp.symbol)
+          this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+        } else {
+          if (sharedSym) {
+            // this definition matches a shared symbol, so it's probably from an EXT file
+            if (symExp.symbol.from != SymbolFrom.Equate) {
+              symExp.setError("Symbol conflict with entrypoint (use Go To Definition)")
+              // turn symExp into a reference to the original symbol
+              symExp.symbol = sharedSym
+              symExp.isDefinition = false
+              sharedSym.addReference(symExp)
+              return
+            }
+            if (sharedSym.fullName) {
+              this.module.symbolMap.set(sharedSym.fullName, sharedSym)
+            }
+          } else {
+            symExp.symbol.fullName = symExp.fullName
+            this.module.symbolMap.set(symExp.fullName, symExp.symbol)
+          }
+        }
+
+        if (!this.inMacroDef()) {
+          if (this.curSeg?.curPC !== undefined) {
+            symExp.setPCValue(this.curSeg.curPC)
+          }
+          if (symExp.isVariableType() || symExp.symbol?.isMutable) {
+            symExp.captureValue()
+          }
+        }
+      }
+    } else { // references
+
+      const foundSym = this.findSymbol_pass0(symExp)
+      if (foundSym) {
+        symExp.symbol = foundSym
+        symExp.symbolType = foundSym.type
+        symExp.fullName = foundSym.fullName
+        foundSym.addReference(symExp)
+
+        if (!this.inMacroDef()) {
+          if (symExp.isVariableType() || symExp.symbol?.isMutable) {
+            symExp.captureValue()
+          }
+        }
+      } else {
+        // TODO: For now, don't report any missing symbols within
+        //  a macro definition.  This should eventually look at
+        //  named macro parameters and match against those. (ca65-only?)
+        if (this.inTypeDef()) {
+          symExp.isWeak = true
+        }
+        if (!symExp.isWeak) {
+          // TODO: make temporary project check a setting
+          if (!this.module.project.isTemporary) {
+            if (symExp.symbolType == SymbolType.TypeName) {
+              symExp.setError("Unknown macro or opcode")
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private findSymbol_pass0(symExp: SymbolExpression): Symbol | undefined {
+    // only pass 0 because scope state won't be valid in other passes
+    this.checkPass(0)
+
+    let firstPass = true
+    let changedScope = false
+    for (let i = this.scopeState.getScopeDepth(symExp); --i >= 0; ) {
+      if (!firstPass) {
+        symExp.fullName = this.scopeState.setSymbolExpression(symExp, i)
+        changedScope = true
+      }
+      const foundSym = this.module.symbolMap.get(symExp.fullName!)
+      if (foundSym) {
+        return foundSym
+      }
+      firstPass = false
+    }
+    if (changedScope) {
+      // if no match found, revert to full scope name
+      symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+    }
+  }
+
+  private findSymbol_pass2(symExp: SymbolExpression): Symbol | undefined {
+    this.checkPass(2)
+
+    let foundSym = this.module.symbolMap.get(symExp.fullName!)
+    if (!foundSym) {
+      // If a scoped forward reference to the symbol was not found,
+      //  try looking in the global scope.  The scope stack cannot
+      //  be searched because it is no longer valid in pass 2.
+      // NOTE: This is mainly used to resolve forward references inside
+      //  a .define or .macro.  If this causes problems elsewhere,
+      //  restrict it to just .define/.macro.
+      symExp.fullName = this.scopeState.setSymbolExpression(symExp, 0)
+      foundSym = this.module.symbolMap.get(symExp.fullName!)
+    }
+    return foundSym
+  }
+
+  // #endregion
+  //--------------------------------------------------------
+  // #region Segments
+  //--------------------------------------------------------
+
+  public setSegment(name: string, addressing: string, isInitialized: boolean, startPC?: number) {
+    this.checkPass(0)
+
+    const segNameLC = name.toLowerCase()
+    let nextSeg = this.segMap.get(segNameLC)
+    if (!nextSeg) {
+      nextSeg = new Segment(name, addressing, isInitialized, startPC)
+      this.segMap.set(segNameLC, nextSeg)
+    } else {
+      // TODO: check addressing and initialized against existing segment
+    }
+
+    this.curSeg = nextSeg
+  }
+
+  public pushAndSetMacroSegment() {
+    this.checkPass(0)
+
+    this.pushSegment()
+    // NOTE: This is temporary and not added to segMap
+    this.curSeg = new Segment("_macro_", "absolute", false, 0)
+  }
+
+  public pushAndSetStructSegment(startPC: number) {
+    this.checkPass(0)
+
+    this.pushSegment()
+    // NOTE: This is temporary and not added to segMap
+    this.curSeg = new Segment("_struct_", "implicit", false, startPC)
+  }
+
+  public pushAndSetDummySegment(startPC: number) {
+    this.checkPass(0)
+
+    this.pushSegment()
+    // NOTE: This is temporary and not added to segMap
+    this.curSeg = new Segment("_dummy_", "implicit", false, startPC)
+  }
+
+  public pushSegment() {
+    this.checkPass(0)
+
+    this.segStateStack.push(this.curSeg)
+  }
+
+  public popSegment(): number {
+    this.checkPass(0)
+
+    if (!this.curSeg) {
+      return 0
+    }
+    const size = (this.curSeg.curPC ?? 0) - (this.curSeg.startPC ?? 0)
+    this.curSeg = this.segStateStack.pop()
+
+    // handle nested struct segments
+    if (this.curSeg?.name == "_struct_") {
+      if (this.curSeg.curPC !== undefined) {
+        this.curSeg.curPC += size
+      }
+    }
+    return size
+  }
+
+  public setNextOrg(nextOrg: number, isVirtual: boolean): number {
+    this.checkPass(0)
+
+    let fillAmount = 0
+    if (!this.curSeg) {
+      // TODO: is it correct to create default segment here?
+      this.curSeg = new Segment("code", "absolute", true, nextOrg)
+    } else {
+      if (!isVirtual && this.curSeg.curPC !== undefined) {
+        fillAmount = Math.max(nextOrg - this.curSeg.curPC, 0)
+      }
+      this.curSeg.nextPC = nextOrg
+    }
+    return fillAmount
+  }
+
+  // #endregion
+  //--------------------------------------------------------
+  // #region Macro Invoke
+  //--------------------------------------------------------
+
+  public invokeMacro(macroDef: TypeDef) {
+    this.checkPass(0)
+
+    if (!(this.curLine?.statement instanceof MacroInvokeStatement)) {
+      throw "ASSERT: invokeMacro called on wrong statement type"
+    }
+
+    this.fileReader.push(this.module.getFileByIndex(macroDef.fileIndex))
+    this.fileReader.state.startLineIndex = macroDef.startLineIndex
+    this.fileReader.state.curLineIndex = macroDef.startLineIndex
+    this.fileReader.state.endLineIndex = macroDef.endLineIndex
+    this.fileReader.state.isMacro = true
+
+    // handle macro var nesting
+    if (this.macroInvokeState) {
+      this.macroInvokeStack.push(this.macroInvokeState)
+    }
+    this.macroInvokeState = {
+      line: this.curLine,
+      varMap: new Map<string, string>()
+    }
+  }
+
+  // Collect all errors into the invoked macro line from the
+  //  children of that line.
+  private collectErrors(invokeLine: LineRecord) {
+    if (invokeLine.children) {
+      let errorMsg = ""
+      for (let child of invokeLine.children) {
+        if (child.statement && child.statement.enabled) {
+          // recurse depth first to handle nested macro invokes
+          if (child.statement instanceof MacroInvokeStatement) {
+            // recurse depth first
+            this.collectErrors(child)
+          }
+          child.statement.forEachExpression((expression) => {
+            if (!errorMsg) {
+              if (expression.hasError()) {
+                const trimmedSource = child.statement!.sourceLine.trimStart()
+                errorMsg = trimmedSource
+                const range = expression.getRange()
+                if (range) {
+                  const delta = child.statement!.sourceLine.length - trimmedSource.length
+                  range.start -= delta
+                  range.end -= delta
+                  errorMsg += "\n" + "".padStart(range.start, " ").padEnd(range.end, "^")
+                }
+                if (expression.errorMessage) {
+                  errorMsg += "\n" + expression.errorMessage
+                }
+              }
+            }
+          })
+          if (!errorMsg) {
+            if (child.statement.hasError()) {
+              errorMsg = child.statement.errorMessage ?? "ERROR"
+            }
+          }
+          if (errorMsg) {
+            invokeLine.statement?.setError(errorMsg)
+          }
+        }
+      }
+    }
+  }
+
+  // #endregion
+  //--------------------------------------------------------
+  // #region Looping
+  //--------------------------------------------------------
+
+  public inLoop(): boolean {
+    return this.loopState !== undefined
+  }
+
+  public initLoopVar(loopExp: exp.SymbolExpression): LoopVar | undefined {
+    this.checkPass(0)
+
+    let shared: boolean
+    let numExp: exp.NumberExpression
+
+    const varName = loopExp.getSimpleName().asString
+    let loopSym = this.module.symbolMap.get(varName)
+    if (loopSym) {
+      if (loopSym.type != SymbolType.Variable) {
+        loopExp.setError("Duplicate conflicting symbol")
+        return
+      }
+      loopExp.symbol = loopSym
+      loopExp.isDefinition = false
+      loopExp.fullName = this.scopeState.setSymbolExpression(loopExp)
+      loopSym.addReference(loopExp)
+      numExp = <exp.NumberExpression>loopSym.getValue()
+      shared = true
+    } else {
+      numExp = new exp.NumberExpression([], 0, false)
+      loopExp.symbol!.setValue(numExp, SymbolFrom.Unknown)
+      loopExp.fullName = this.scopeState.setSymbolExpression(loopExp)
+      this.module.symbolMap.set(varName, loopExp.symbol!)
+      shared = false
+    }
+
+    return { symExp: loopExp, numExp, shared }
+  }
+
+  public startLoop(startVal: number, endVal: number, loopVar?: LoopVar) {
+    this.checkPass(0)
+
+    // TODO: skip if inMacroDef?
+
+    this.fileReader.repush()
+
+    if (this.loopState) {
+      this.loopStateStack.push(this.loopState)
+    }
+
+    if (startVal <= endVal) {
+      this.loopState = {
+        curVal: startVal,
+        endVal: endVal,
+        deltaVal: 1
+      }
+    } else {
+      this.loopState = {
+        curVal: endVal,
+        endVal: startVal,
+        deltaVal: -1
+      }
+    }
+
+    if (loopVar) {
+      this.loopState.loopVar = loopVar
+      this.loopState.loopVar.numExp.setNumber(this.loopState.curVal)
+    }
+  }
+
+  public endLoop(): boolean {
+    this.checkPass(0)
+
+    // TODO: skip if inMacroDef?
+
+    if (!this.loopState) {
+      return true
+    }
+
+    this.loopState.curVal += this.loopState.deltaVal
+    this.loopState.loopVar?.numExp.setNumber(this.loopState.curVal)
+    if (this.loopState.deltaVal > 0) {
+      if (this.loopState.curVal <= this.loopState.endVal) {
+        this.fileReader.state.curLineIndex = this.fileReader.state.startLineIndex
+        return false
+      }
+    } else {
+      if (this.loopState.curVal >= this.loopState.endVal) {
+        this.fileReader.state.curLineIndex = this.fileReader.state.startLineIndex
+        return false
+      }
+    }
+
+    const nextIndex = this.fileReader.state.curLineIndex
+    this.fileReader.pop()
+    this.fileReader.state.curLineIndex = nextIndex
+
+    const loopVar = this.loopState.loopVar
+    if (loopVar && !loopVar.shared) {
+      this.module.symbolMap.delete(loopVar.symExp.getSimpleName().asString)
+    }
+
+    this.loopState = this.loopStateStack.pop()
+    return true
+  }
+
+  // TODO: breakLoop, continueLoop, gotoLoop, etc.
+
+  // #endregion
+  //------------------------------------
+  // #region Files
+  //------------------------------------
+
+  public includeFile(fileName: string): boolean {
+    this.checkPass(0)
+
+    const currentFile = this.fileReader.state.file
+    const sourceFile = this.module.openSourceFile(fileName, currentFile)
+    if (!sourceFile) {
+      return false
+    }
+    sourceFile.parseStatements(this.syntaxStats)
+    this.fileReader.push(sourceFile)
+    return true
+  }
+
+  static verifyOnWrite: boolean = false
+
+  public writeFile(fileName: string): boolean {
+    this.checkPass(2)
+
+    // unlikely but remotely possible to attempt write with no segment
+    if (!this.curSeg) {
+      return false
+    }
+
+    const binFileName = this.module.getBinFilePath(fileName)
+
+    if (Assembler.verifyOnWrite) {
+      console.log(`Checking ${binFileName}`)
+
+      for (let i = 0; i < this.curSeg.fileBytes.length; i += 1) {
+        if (this.curSeg.fileBytes[i] === undefined) {
+          const addrStr = i.toString(16).padStart(4, "0").toUpperCase()
+          this.curSeg.fileBytes[i] = 0xEE
+          console.log(`Undefined data at ${addrStr}`)
+        }
+      }
+    }
+
+    const buffer = new Uint8Array(<number[]>this.curSeg.fileBytes)
+
+    // TODO: eventually write out final data
+    // fs.writeFileSync(binFileName + "_new", buffer, { encoding: null, flag: "w" })
+
+    // TODO: debug code, to be removed
+    if (Assembler.verifyOnWrite) {
+      if (fs.existsSync(binFileName)) {
+        // compare file results with previously written data
+        const refData = fs.readFileSync(binFileName)
+        if (refData) {
+          if (refData.length != buffer.length) {
+            console.log(`size mismatch (${refData.length} vs ${buffer.length}`)
+          }
+          const size = Math.min(refData.length, buffer.length)
+          for (let i = 0; i < size; i += 1) {
+            if (refData[i] != buffer[i]) {
+              const addrStr = i.toString(16).padStart(4, "0").toUpperCase()
+              const refStr = refData[i].toString(16).padStart(2, "0").toUpperCase()
+              const fileStr = buffer[i]?.toString(16).padStart(2, "0").toUpperCase()
+              console.log(`${addrStr}: ref: ${refStr} != file: ${fileStr}`)
+            }
+          }
+        }
+      } else {
+        console.log("File missing: " + binFileName)
+      }
+    }
+
+    this.curSeg.fileBytes = []
+    return true
+  }
+
+  // #endregion
+  //------------------------------------
+  // #region Nesting
+  //------------------------------------
+
+  public topNestingType(): NestingType | undefined {
+    this.checkPass(0)
+
+    const length = this.nestingStack.length
+    return length > 0 ? this.nestingStack[length - 1].type : undefined
+  }
+
+  public isNested(type: NestingType): boolean {
+    this.checkPass(0)
+
+    return this.nestingCounts[type] != 0
+  }
+
+  public pushNesting(type: NestingType, bracePopProc?: () => void) {
+    this.checkPass(0)
+
+    if (this.curLine!.statement) {
+      this.nestingStack.push({ type, statement: this.curLine!.statement, bracePopProc})
+      this.nestingCounts[type] += 1
+    }
+  }
+
+  // NOTE: Caller will have already verified there's an entry
+  //  to pop and that it's the correct one.
+  // *** why is bracePop param here? ***
+  public popNesting(bracePop = false): boolean {
+    this.checkPass(0)
+
+    const entry = this.nestingStack.pop()
+    if (entry) {
+      if (this.nestingCounts[entry.type]) {
+        this.nestingCounts[entry.type] -= 1
+        // *** always call proc for now, until need for check is proven ***
+        if (bracePop && entry.bracePopProc) {
+          entry.bracePopProc()
+        }
+        entry.statement.foldEnd = this.curLine!.statement
+        return true
+      } else {
+        this.nestingStack.push(entry)
+      }
+    }
+    return false
+  }
+
+  // #endregion
+  //------------------------------------
+  // #region TypeDef
+  //------------------------------------
+
+  public inTypeDef(): boolean {
+    this.checkPass(0)
+
+    return this.typeDef != undefined
+  }
+
+  public inMacroDef(): boolean {
+    this.checkPass(0)
+
+    return this.inTypeDef() && this.isNested(NestingType.Macro)
+  }
+
+  public inMacroExpand(): boolean {
+    this.checkPass(0)
+
+    return this.fileReader.state.isMacro
+  }
+
+  // *** what about nesting these? .define instead .macro, for example ***
+    // *** are structs within macros allowed?
+
+  public startTypeDef(nestingType: NestingType, typeName: SymbolExpression, typeParams?: string[]) {
+    this.checkPass(0)
+
+    // NOTE: caller should have checked this and flagged an error
+    if (!this.typeDef) {
+
+      const statement = this.curLine!.statement
+      if (statement instanceof TypeDefBeginStatement || statement instanceof DefineDefStatement) {
+
+        this.typeStart = statement
+        const fileIndex = this.module.getCurrentFileIndex()
+        const startLineIndex = this.curLine!.lineNumber + 1
+        this.typeDef = new TypeDef(nestingType, fileIndex, startLineIndex, typeParams ?? [])
+
+        // attach typeDef to typeName symbol
+        if (typeName?.symbol) {
+          const anySym = (typeName.symbol as any)
+          anySym.typeDef = this.typeDef
+        }
+
+        // NOTE: Scope state management handled in the statement
+        //  so it can be done differently based on syntax.
+      }
+    }
+  }
+
+  public endTypeDef(size: number) {
+    this.checkPass(0)
+
+    // NOTE: caller should have checked this and flagged an error
+    if (this.typeDef) {
+
+      const statement = this.curLine!.statement!
+
+      if (this.typeStart) {
+        this.typeStart.foldEnd = statement
+        this.typeStart = undefined
+      }
+
+      const endLineIndex = this.curLine!.lineNumber
+      this.typeDef.endDefinition(endLineIndex, size)
+      this.typeDef = undefined
+
+      // NOTE: Scope state management handled in the statement
+      //  so it can be done differently based on syntax.
+    }
+  }
+  // #endregion
+  //------------------------------------
 }
 
+//------------------------------------------------------------------------------
+// #region SymbolUtils
 //------------------------------------------------------------------------------
 
 import * as exp from "./expressions"
@@ -844,7 +1403,7 @@ export class SymbolUtils {
         const size = symbol.getSize() ?? 0
         if (size == 1) {
           if (symbol.isConstant) {
-            symExps[0].setWarning("Symbol used as both ZPAGE and constant")
+            symExps[0].setWarning("Symbol used as both ZP and constant")
           } else {
             symbol.isZPage = true
           }
@@ -909,4 +1468,5 @@ export class SymbolUtils {
   }
 }
 
+// #endregion
 //------------------------------------------------------------------------------

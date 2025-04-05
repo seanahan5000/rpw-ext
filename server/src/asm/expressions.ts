@@ -34,6 +34,9 @@ export class Expression extends Node {
           if (end < range.end) {
             end = range.end
           }
+          if (range.sourceLine) {
+            sourceLine = range.sourceLine
+          }
         }
       } else if (child instanceof Token) {
         sourceLine = child.sourceLine
@@ -61,6 +64,16 @@ export class Expression extends Node {
       if (child instanceof Expression) {
         proc(child)
         child.forEachExpression(proc)
+      }
+    }
+  }
+
+  public forEachExpressionBack(proc: (expression: Expression) => void) {
+    for (let i = this.children.length; --i >= 0; ) {
+      const child = this.children[i]
+      if (child instanceof Expression) {
+        child.forEachExpressionBack(proc)
+        proc(child)
       }
     }
   }
@@ -96,9 +109,13 @@ export class Expression extends Node {
     for (let i = 0; i < this.children.length; i += 1) {
       const child = this.children[i]
       if (child instanceof Expression) {
-        return child.hasAnyError(includingWeak)
+        if (child.hasAnyError(includingWeak)) {
+          return true
+        }
       } else {
-        return child.hasError(includingWeak)
+        if (child.hasError(includingWeak)) {
+          return true
+        }
       }
     }
     return false
@@ -118,7 +135,14 @@ export class Expression extends Node {
 //------------------------------------------------------------------------------
 
 export class BadExpression extends Expression {
-  // ***
+  constructor(children?: Node[]) {
+    super(children)
+
+    // TODO: is this necessary to avoid hiding actual error?
+    // if (!this.hasAnyError(false)) {
+      this.setError("Bad expression")
+    // }
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -145,6 +169,11 @@ export class NumberExpression extends Expression {
     if (this.value !== undefined) {
       return this.force16 || this.value > 255 || this.value < -128 ? 2 : 1
     }
+  }
+
+  // only called when contained by variable symbols
+  public setNumber(value: number) {
+    this.value = value
   }
 }
 
@@ -207,6 +236,8 @@ export class StringExpression extends Expression {
       }
     }
 
+    // TODO: DASM forbids(!) closing single quote on character
+
     let highFlip = 0x00
     if (this.syntax == Syntax.MERLIN) {
       if (str == '"') {
@@ -238,8 +269,11 @@ export class SymbolExpression extends Expression {
   public isDefinition: boolean
   public sourceFile?: SourceFile
   public lineNumber: number
-  public fullName?: string
   public symbol?: Symbol
+  private value?: number
+
+  // NOTE: not needed after assembly pass2 is complete
+  public fullName?: string
 
   // no error when not found (used in !ifdef, for example)
   public isWeak: boolean = false
@@ -257,6 +291,9 @@ export class SymbolExpression extends Expression {
     this.lineNumber = lineNumber ?? 0
     if (isDefinition) {
       this.symbol = new Symbol(this, SymbolFrom.Unknown)
+      if (this.symbolType == SymbolType.Variable) {
+        this.symbol.isMutable = true
+      }
     }
   }
 
@@ -284,11 +321,46 @@ export class SymbolExpression extends Expression {
   }
 
   resolve(): number | undefined {
+    if (this.value !== undefined) {
+      return this.value
+    }
     return this.symbol?.resolve()
+  }
+
+  public setPCValue(pc: number) {
+    const pcExpression = this.symbol?.getValue()
+    if (pcExpression instanceof PcExpression) {
+      pcExpression.setValue(pc)
+    }
+  }
+
+  public captureValue() {
+    if (this.value === undefined) {
+      if (this.isVariableType() || this.symbol?.isMutable) {
+        this.value = this.symbol?.resolve()
+      }
+    }
   }
 
   getSize(): number | undefined {
     return this.symbol?.getSize()
+  }
+
+  // Return the name of the symbol, without any
+  //  prefixes, trailing ":", or scoping.
+  public getSimpleName(): { asToken?: Token, asString: string } {
+    for (let i = this.children.length; --i >= 0; ) {
+      const token = this.children[i]
+      if (token instanceof Token) {
+        const str = token.getString()
+        // exclude trailing colon and closing brace
+        //  of DASM named param
+        if (str != ":" && str != "::" && str != "}") {
+          return { asToken: token, asString: str }
+        }
+      }
+    }
+    return { asString: "" }
   }
 }
 
@@ -316,7 +388,7 @@ export class UnaryExpression extends Expression {
           value = value
           break
         case Op.LogNot:
-          value = value ? 1 : 0
+          value = value ? 0 : 1
           break
         case Op.BitNot:
           value = ~value

@@ -13,12 +13,13 @@ import * as stm from "../statements"
 
 export class MerlinSyntax extends SyntaxDef {
 
+  public caseSensitiveSymbols = false
   public symbolTokenPrefixes = ":]"
   public symbolTokenContents = "?"    // TODO: add others (any character > ':')
   public cheapLocalPrefixes = ":"
   public zoneLocalPrefixes = ""
   public anonLocalChars = ""
-  public namedParamPrefixes = ""
+  public namedParamPrefixes = "]"
   public keywordPrefixes = ""
   public keywordsInColumn1 = false
   public macroInvokePrefixes = ""
@@ -98,7 +99,7 @@ export class MerlinSyntax extends SyntaxDef {
                     desc:   "End of macro definition" } ],
       [ "<<<",    { alias:  "eom" }],
       [ "pmc",    { // TODO
-                    params: " <symbol> [<expression>[; <expression> ...]]",
+                    params: "<symbol> [<expression>[; <expression> ...]]",
                     desc:   "Invoke macro" } ],
       [ ">>>",    { alias:  "pmc" }],
 
@@ -166,9 +167,11 @@ export class MerlinSyntax extends SyntaxDef {
                     desc:   "End of a source file" } ],
 
       [ "lup",    { create: () => { return new stm.RepeatStatement() },
-                    params: "<expression>",
+                    label: "",
+                    params: "<loop-count>",
                     desc:   "Start of loop" } ],
       [ "--^",    { create: () => { return new stm.EndRepStatement() },
+                    label: "",
                     params: "",
                     desc:   "End of loop" } ],
 
@@ -218,7 +221,7 @@ export class MerlinSyntax extends SyntaxDef {
       // misc
       [ "err",    { create: () => { return new stm.AssertFalseStatement("error") },
                     params: "<condition>",
-                    desc:   "Force an error" } ],
+                    desc:   "Force an error if condition is not 0" } ],
       [ "chk",    { // TODO
                     params: "",
                     desc:   "Place checksum in object code" } ],
@@ -241,15 +244,15 @@ export class MerlinSyntax extends SyntaxDef {
                     desc:   "User definable opcode" } ],
 
       // text
-      // TODO: eventually treat these as macros
-      [ "txt",    { create: () => { return new stm.TextStatement() },
-                    params: "<string>",
+      // TODO: eventually treat these as macros or use mapping
+      [ "txt",    { create: () => { return new stm.NajaTextStatement(0x8D) },
+                    params: "<expression>",   // *** <string-var> ***
                     desc:   "Define naja-format text, terminated with $8D" } ],
-      [ "txc",    { create: () => { return new stm.TextStatement() },
-                    params: "<string>",
+      [ "txc",    { create: () => { return new stm.NajaTextStatement() },
+                    params: "<expression>",   // *** <string-var> ***
                     desc:   "Define continued naja-format text, without termination" } ],
-      [ "txi",    { create: () => { return new stm.TextStatement() },
-                    params: "<string>",
+      [ "txi",    { create: () => { return new stm.NajaTextStatement(-1) },
+                    params: "<expression>",   // *** <string-var> ***
                     desc:   "Define naja-format text, terminated with inverted high bit" } ],
     ])
 

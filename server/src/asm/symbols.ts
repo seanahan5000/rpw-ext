@@ -28,7 +28,7 @@ export enum SymbolFrom {
   Org        = 1,   // implicit from current org
   Equate     = 2,   // assigned with "="
   Import     = 3,   // .import statement
-  // *** MacroParam = 4    // macro input parameter
+  Define     = 4,   // defined from project
 }
 
 //------------------------------------------------------------------------------
@@ -38,18 +38,27 @@ export enum SymbolFrom {
 export class Symbol {
   public from: SymbolFrom
 
+  // NOTE: all booleans are undefined by default, so effectively false
+
   // NOTE: could pack these into bits
-  public isZPage = false
-  public isConstant = false     // 8-bit only? automatic in DUMMY 0?
-  public isSubroutine = false
-  public isData = false
-  public isCode = false
+  public isZPage?: boolean
+  public isConstant?: boolean   // 8-bit only? automatic in DUMMY 0?
+  public isSubroutine?: boolean
+  public isData?: boolean
+  public isCode?: boolean
 
   // set by ENT command
-  public isEntryPoint = false
+  public isEntryPoint?: boolean
 
   // set by SUBROUTINE and .zone commands
-  public isZoneStart = false
+  public isZoneStart?: boolean
+
+  // set for Variables and for locals that have had their values set
+  // NOTE: This is a way of splitting the overloaded term "variable"
+  //  into its scoping rules and its modifiability.
+  //  For example, in DASM, it is possible to set the value of a local label,
+  //  giving it the scoping of zone local but the modifiability of a variable.
+  public isMutable?: boolean
 
   public definition: SymbolExpression
   public references: SymbolExpression[] = []
@@ -88,27 +97,16 @@ export class Symbol {
   getSize(): number | undefined {
     return this.value?.getSize()
   }
-
-  // get symbol name without scope, local prefix, or trailing ":"
-  //  (mainly used to rename symbols)
-  getSimpleNameToken(symExp: SymbolExpression): Token {
-    let index = symExp.children.length - 1
-    let token = symExp.children[index]
-    // TODO: figure out to use syntaxDef.scopeSeparator here instead of "::"
-    if (index > 0 && token.getString() == "::") {
-      token = symExp.children[index - 1]
-    }
-    return <Token>token
-  }
 }
 
 //------------------------------------------------------------------------------
 
 export class ScopeState {
 
+  private caseSensitive: boolean
+
   private scopeSeparator = "::"
-  private scopePath?: string
-  private scopeStack: string[] = []
+  private scopePathStack: string[] = []
 
   private zoneName?: string
   private zoneStack: string[] = []
@@ -116,47 +114,79 @@ export class ScopeState {
 
   private cheapScope = "__d"
 
-  // private typeName?: string   // *** get rid of
-
   private anonCounts = new Array(20).fill(0)
   private anonIndex = 0     // CA65-only
 
-  constructor(scopeSeparator: string) {
+  constructor(caseSensitive: boolean, scopeSeparator: string) {
+    this.caseSensitive = caseSensitive
     if (scopeSeparator) {
       this.scopeSeparator = scopeSeparator
     }
   }
 
-  setSymbolExpression(symExp: SymbolExpression): string | undefined {
+  // Return the number of scope levels for a given symbol expression.
+  //  Return 1 for types that don't use the scope path.
+  public getScopeDepth(symExp: SymbolExpression): number {
+    switch (symExp.symbolType) {
+      case SymbolType.Variable:
+      case SymbolType.ZoneLocal:
+      case SymbolType.AnonLocal:
+      case SymbolType.LisaLocal:
+      case SymbolType.CA65Local:
+        return 1
 
+      case SymbolType.TypeName:
+      case SymbolType.NamedParam:
+      case SymbolType.Simple:
+      case SymbolType.Scoped:
+      case SymbolType.CheapLocal:
+        return this.scopePathStack.length + 1
+    }
+  }
+
+  private addScopePath(nameStr: string, scopeIndex?: number): string {
+    if (scopeIndex === undefined) {
+      scopeIndex = this.scopePathStack.length
+    }
+    if (this.scopePathStack.length > 0 && scopeIndex > 0) {
+      const subPath = this.scopePathStack[scopeIndex - 1]
+      if (subPath) {
+        return subPath + this.scopeSeparator + nameStr
+      }
+    }
+    return nameStr
+  }
+
+  // *** this should just set fullName directly, if not already present ***
+  // NOTE: if scope path usage changes here, getScopeDepth must also be updated
+  public setSymbolExpression(symExp: SymbolExpression, scopeIndex?: number): string {
+
+    let result = ""
     switch (symExp.symbolType) {
 
       case SymbolType.Variable: {
-        // TODO: just getSimpleNameToken instead?
+        // TODO: just getSimpleName instead?
         // NOTE: if this changes, also change processSymbols in preprocessor.ts
-        return symExp.getString()
+        result = symExp.getString()
+        break
       }
 
       case SymbolType.TypeName: {
         // skip invoke prefix token if present
         const nameToken = symExp.children[symExp.children.length - 1]
-        let nameStr = nameToken?.getString() ?? ""
-        if (this.scopePath) {
-          nameStr = this.scopePath + this.scopeSeparator + nameStr
-        }
-        return nameStr
+        result = nameToken?.getString() ?? ""
+        result = this.addScopePath(result, scopeIndex)
+        break
       }
 
       case SymbolType.NamedParam: {
-        const nameToken = symExp.children[0]
+        const nameToken = symExp.children[symExp.children.length > 1 ? 1 : 0]
         if (!nameToken || !(nameToken instanceof Token)) {
           break
         }
-        let nameStr = nameToken.getString()
-        if (this.scopePath) {
-          nameStr = this.scopePath + this.scopeSeparator + nameStr
-        }
-        return nameStr
+        result = nameToken.getString()
+        result = this.addScopePath(result, scopeIndex)
+        break
       }
 
       case SymbolType.Simple: {
@@ -168,45 +198,43 @@ export class ScopeState {
           break
         }
 
-        let nameStr: string
         if (nameToken) {
-          nameStr = nameToken.getString()
+          result = nameToken.getString()
         } else {
-          nameStr = "__z" + this.zoneIndex.toString()
+          result = "__z" + this.zoneIndex.toString()
           this.zoneIndex += 1
         }
+        result = this.addScopePath(result, scopeIndex)
 
         const symFrom = symExp.symbol?.from ?? SymbolFrom.Unknown
-
-        if (this.scopePath) {
-          nameStr = this.scopePath + this.scopeSeparator + nameStr
-        }
-
         if (symExp.isDefinition && symExp.symbol) {
           // Only implicit symbols should change local scope,
           //  not assignments or imports.
           if (symFrom == SymbolFrom.Org) {
-            this.cheapScope = nameStr
+            this.cheapScope = result
             if (symExp.symbol.isZoneStart) {
-              this.zoneName = nameStr
+              this.zoneName = result
             }
           }
         }
 
-        return nameStr
+        break
       }
 
       // NOTE: This currently only supports explicit scoping.
-      // TODO: support scope searching used by CA65?
       case SymbolType.Scoped: {
-        let result = ""
+        result = ""
         if (!symExp.isDefinition) {
+
+          let relativeScope = true
           for (let i = 0; i < symExp.children.length; i += 1) {
             const child = symExp.children[i]
             if (child instanceof Token) {
               const str = child.getString()
               if (str == this.scopeSeparator) {
-                if (result != "") {
+                if (result == "") {
+                  relativeScope = false
+                } else {
                   result = result + this.scopeSeparator
                 }
               } else {
@@ -214,18 +242,20 @@ export class ScopeState {
               }
             }
           }
+
+          if (relativeScope) {
+            result = this.addScopePath(result, scopeIndex)
+          }
         }
-        return result
+        break
       }
 
+      // TODO: should this be adding scope path?
       case SymbolType.CheapLocal: {
         const nameToken = symExp.children[1]
         if (nameToken instanceof Token) {
-          let result = this.cheapScope + this.scopeSeparator + nameToken.getString()
-          if (this.scopePath) {
-            result = this.scopePath + this.scopeSeparator + result
-          }
-          return result
+          result = this.cheapScope + this.scopeSeparator + nameToken.getString()
+          result = this.addScopePath(result, scopeIndex)
         }
         break
       }
@@ -236,7 +266,7 @@ export class ScopeState {
         const nameToken = symExp.children[Math.min(1, symExp.children.length - 1)]
         if (nameToken instanceof Token) {
           // TODO: this.zoneName could be undefined if no label seen yet
-          return this.zoneName + this.scopeSeparator + nameToken.getString()
+          result = (this.zoneName + this.scopeSeparator + nameToken.getString())
         }
         break
       }
@@ -256,7 +286,7 @@ export class ScopeState {
           if (symExp.isDefinition) {
             this.anonCounts[index] += 1
           }
-          return `__a${index}_${outIndex}`
+          result = `__a${index}_${outIndex}`
         }
         break
       }
@@ -274,7 +304,7 @@ export class ScopeState {
             } else if (prefix == "<") {
               outIndex -= 1
             }
-            return `__a${index}_${outIndex}`
+            result = `__a${index}_${outIndex}`
           }
         }
         break
@@ -296,26 +326,30 @@ export class ScopeState {
               }
             }
           }
-          return `__a${this.anonIndex + offset}`
+          result = `__a${this.anonIndex + offset}`
         }
         break
       }
     }
 
-    return ""
+    if (!this.caseSensitive) {
+      result = result.toLowerCase()
+    }
+    return result
   }
 
   public pushScope(scopeName: string) {
-    if (this.scopePath) {
-      this.scopeStack.push(this.scopePath)
-      this.scopePath = this.scopePath + this.scopeSeparator + scopeName
+    if (this.scopePathStack.length) {
+      const parentScope = this.scopePathStack.pop()
+      this.scopePathStack.push(parentScope!)
+      this.scopePathStack.push(parentScope + this.scopeSeparator + scopeName)
     } else {
-      this.scopePath = scopeName
+      this.scopePathStack.push(scopeName)
     }
   }
 
   public popScope() {
-    this.scopePath = this.scopeStack.pop()
+    this.scopePathStack.pop()
   }
 
   public pushZone(zoneName?: string) {
@@ -335,18 +369,6 @@ export class ScopeState {
 
   public popZone() {
     this.zoneName = this.zoneStack.pop()
-  }
-
-  // TODO: should these just be folded into scope?
-  // TODO: will macro names need scoping information?
-
-  // *** nesting instead (structure and union also use this) ***
-  public startType(typeName: string) {
-    // this.typeName = typeName
-  }
-
-  public endType() {
-    // this.typeName = undefined
   }
 }
 

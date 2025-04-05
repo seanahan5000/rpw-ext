@@ -12,6 +12,7 @@ import * as stm from "../statements"
 
 export class AcmeSyntax extends SyntaxDef {
 
+  public caseSensitiveSymbols = true
   public symbolTokenPrefixes = "!@."
   public symbolTokenContents = "."
   public cheapLocalPrefixes = "@"
@@ -153,7 +154,7 @@ export class AcmeSyntax extends SyntaxDef {
       [ "!ct",        { alias: "!convtab" }],
 
       // conditionals
-      [ "!if",        { create: () => { return new stm.AcmeIfStatement() },
+      [ "!if",        { create: () => { return new stm.IfStatement() },
                         params: "<condition> \\{ [<block> \\} [else \\{ <block> \\}]]",
                         desc:   "If the given condition is true, parse the first block of statements" } ],
       [ "!ifdef",     { create: () => { return new stm.IfDefStatement(true) },
@@ -170,13 +171,13 @@ export class AcmeSyntax extends SyntaxDef {
 
       // looping
       [ "!for",       { create: () => { return new stm.RepeatStatement() },
-                        params: "<symbol-def>, {<start>, <end> | <end> } \\{ [<block> \\}]",
+                        params: "<loop-var>, {<loop-start>, <loop-end> | <loop-end> } \\{ [<block> \\}]",
                         desc:   "Looping assembly" } ],
       [ "!do",        { // TODO
-                        params: "[<condition>] \\{ [<block> \\} [<condition>]]",
+                        params: "[<loop-condition>] \\{ [<block> \\} [<loop-condition>]]",
                         desc:   "Looping assembly" } ],
       [ "!while",     { // TODO
-                        params: "[<condition>] \\{ [<block> \\} [<condition>]]",
+                        params: "[<loop-condition>] \\{ [<block> \\} [<loop-condition>]]",
                         desc:   "Looping assembly" } ],
 
       // scope

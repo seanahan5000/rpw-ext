@@ -505,8 +505,7 @@ export class Completions {
         if (symExp && symExp instanceof SymbolExpression) {
           const symbol = symExp.symbol
           if (symbol && symbol.type == symbolType) {
-            const token = symbol.getSimpleNameToken(symExp)
-            const localName = token.getString()
+            const localName = symExp.getSimpleName().asString
             const item = lsp.CompletionItem.create(localName)
             item.sortText = `${this.addLocals}_${localName}`
             item.kind = lsp.CompletionItemKind.Function

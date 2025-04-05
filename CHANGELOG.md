@@ -1,5 +1,28 @@
 # RPW 65 Changelog
 
+### [1.5.0] - 2025-04-04
+
+Major rewrite of preprocessor to move it towards an actual multi-pass assembler.
+
+#### Added:
+* All: Support external symbol definition in project file
+* All: Add per-syntax case sensitivity setting and support
+* All: Warn on forward declared zpage variable treated as absolute
+* All: Added support for wildcard in project module src property
+* All: Report errors within macro expansions
+* All: Syntax hilite macro/struct/enum type parameters
+* CA65: Support indented @local: variables
+* DASM: Support "(#expression)" syntax for immediate opcodes
+
+#### Fixed:
+* All: Fix variable scoping on loop/repeat/for
+* All: Fix/limit scoping within macro definitions
+* All: Fix crash with continuation "\" on last line of file
+* All: Improved variable reference tracking in macro definitions and repeats
+* CA65: String constants should be case insensitive (.setcpu "65c02", for example)
+* CA65: Mark "LDA #-1" as a range error to match assembler
+* DASM: Allow dc statements without data expressions
+
 ### [1.4.0] - 2024-11-22
 
 Mainly the addition of 65816 and ORCA/M parsing and hiliting

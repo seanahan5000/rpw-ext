@@ -5,6 +5,7 @@ export type RpwSettings = {
   upperCase: boolean
   tabSize: number
   tabStops: number[]
+  caseSensitive?: boolean
 }
 
 export const RpwSettingsDefaults = {
@@ -18,13 +19,20 @@ export type RpwModule = {
   src?: string
   lst?: string
   dis65?: string
+  enabled?: boolean
+  save?: string
+}
+
+export type RpwDefine = {
+  name: string
+  value?: number
 }
 
 export type RpwImage = {
   name: string
   drive: number
-  enabled?: boolean
   readonly?: boolean
+  enabled?: boolean
 }
 
 export type RpwPatch = {
@@ -51,6 +59,7 @@ export type RpwProject = {
   projectName?: string          // default: <name>.rpw-project
   srcDir?: string
   binDir?: string
+  defines?: RpwDefine[]
   includes?: string[]
   modules?: RpwModule[]
   images?: RpwImage []

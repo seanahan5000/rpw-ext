@@ -1,8 +1,8 @@
 
 import * as exp from "./expressions"
-import { Assembler, NestingType } from "./assembler"
+import { Assembler, NestingType, TypeDef, LoopVar, Conditional, Segment } from "./assembler"
 import { Parser } from "./parser"
-import { Preprocessor, SymbolUtils } from "./assembler"
+import { SymbolUtils } from "./assembler"
 import { SymbolType, SymbolFrom } from "./symbols"
 import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
@@ -20,12 +20,18 @@ export abstract class Statement extends exp.Expression {
   public startOffset?: number
   public endOffset?: number
   public labelExp?: exp.SymbolExpression
-  public opExp?: exp.Expression         // FIXME: easy to confuse with opExpression
+  public opExp?: exp.Expression
   public args: exp.Expression[] = []
   public opNameLC = ""
   public keywordDef?: KeywordDef
-  public enabled = true               // false for inactive conditional clauses
-  public PC?: number
+  public enabled = true             // false for inactive conditional clauses
+  public PC?: number                // set before preprocess call
+  public repeated?: boolean         // true if already used within loop
+
+  // segment this statement will be written to
+  public segment?: Segment
+
+  // TODO: add optional character mapping table for text in this statement
 
   // link between conditional statement groups, used to build code folding ranges
   public foldEnd?: Statement
@@ -49,6 +55,16 @@ export abstract class Statement extends exp.Expression {
         return arg
       }
     }
+  }
+
+  public findArgs(name: string): exp.Expression[] {
+    const args = []
+    for (let arg of this.args) {
+      if (arg.name == name) {
+        args.push(arg)
+      }
+    }
+    return args
   }
 
   public hasTrailingOpenBrace(): boolean {
@@ -111,8 +127,20 @@ export abstract class Statement extends exp.Expression {
   postParse(parser: Parser) {
   }
 
-  // do any conditional preprocessing work but only change state if enabled is true
-  preprocess(prep: Preprocessor, enabled: boolean) {
+  // TODO: rename this pass0 ?
+  public preprocess(asm: Assembler) {
+    // TODO: share with applyConditional?
+    this.forEachExpression((expression) => {
+      if (expression instanceof exp.SymbolExpression) {
+        asm.processSymbol_pass0(expression)
+      } else if (expression instanceof exp.PcExpression) {
+        if (this.PC !== undefined) {
+          expression.setValue(this.PC)
+        } else if (!expression.hasError()) {
+          expression.setError("PC not resolvable")
+        }
+      }
+    })
   }
 
   postProcessSymbols(symUtils: SymbolUtils) {
@@ -120,18 +148,17 @@ export abstract class Statement extends exp.Expression {
 
   // TODO: should any statement need resolve() or getSize()?
 
+  // return number of bytes to advance PC
+  //  (could be different from number of bytes generated,
+  //  in the case of structure definitions, for example)
   // only called if enabled
-  // return size in bytes
-  // *** same as getSize ***
-  pass1(asm: Assembler): number | undefined {
-    // *** layout of instructions, pc tracking
-      // *** think about how this will work with nesting
-    return
+  public pass1(asm: Assembler): number {
+    return 0
   }
 
   // only called if enabled
-  pass2(asm: Assembler, dataBytes: number[]) {
-    // *** generation of bytes
+  public pass2(asm: Assembler) {
+    // calls back to asm.writeBytes, etc. to generate bytes
   }
 
   findExpressionAt(ch: number): { expression: exp.Expression, token: Token } | undefined {
@@ -155,7 +182,16 @@ export class ContinuedStatement extends Statement {
     this.endOffset = end
     this.children = firstStatement.children
   }
+
+  public override preprocess(asm: Assembler) {
+    // don't do any symbol processing here
+  }
 }
+
+// TODO: add this to support multiple statements on a single line
+// export class CompoundStatement extends Statement {
+// }
+
 //#endregion
 //==============================================================================
 //#region Opcodes
@@ -225,8 +261,6 @@ export class OpStatement extends Statement {
 
       } else if (str == "#") {
 
-        // TODO: *** "(#<label+1)" done by DASM, etc ***
-
         parser.addToken(token)
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
@@ -247,13 +281,30 @@ export class OpStatement extends Statement {
 
       } else if (str == "(" || str == "[") {
 
+        token.type = TokenType.Opcode
+        parser.addToken(token)
+
+        // handle "(#<label+1)" supported by DASM
+        // TODO: limit by syntax?
+        if (str == "(") {
+          const nextToken = parser.peekNextToken()
+          if (nextToken) {
+            if (nextToken.getString() == "#") {
+              nextToken.type = TokenType.Opcode
+              parser.commitAddToken(nextToken)
+              this.mode = OpMode.IMM
+              this.expression = parser.mustAddNextExpression()
+              parser.mustAddToken([")"], TokenType.Opcode)
+              return
+            }
+          }
+        }
+
         // TODO: split address mode parsing into a separate function
 
         // default to indirect for any mode starting with ( or [
         this.mode = OpMode.IND
 
-        token.type = TokenType.Opcode
-        parser.addToken(token)
         const closingChar = str == "(" ? ")" : "]"
 
         this.expression = parser.mustAddNextExpression()
@@ -385,6 +436,18 @@ export class OpStatement extends Statement {
         }
 
         token = parser.addNextToken()
+
+        // TODO: hack to stop parsing an ACME multi-statement line
+        if (token) {
+          if (parser.syntax == Syntax.ACME) {
+            if (token.getString() == ":") {
+              parser.ungetToken(token)
+              parser.nodeSet.pop()
+              token = undefined
+            }
+          }
+        }
+
         if (!token) {
           if (this.opcode.get(OpMode.REL)) {
             this.mode = OpMode.REL            // exp
@@ -432,13 +495,23 @@ export class OpStatement extends Statement {
             }
           }
         } else {
+
+          // TODO: fix hack to stop parsing an ACME multi-statement line
+          if (parser.syntax == Syntax.ACME) {
+            if (token.getString() == ":") {
+              parser.ungetToken(token)
+              parser.nodeSet.pop()
+              return
+            }
+          }
+
           token.setError("Unexpected token, expecting ','")
         }
       }
     }
   }
 
-  pass1(asm: Assembler): number | undefined {
+  pass1(asm: Assembler): number {
 
     // opcode promotion/demotion happens here
 
@@ -512,11 +585,11 @@ export class OpStatement extends Statement {
     } else {
       return opDef.bc
     }
+
+    return 0
   }
 
-  pass2(asm: Assembler, dataBytes: number[]): void {
-
-    // *** warning when it's too late to demote to zpage? ***
+  pass2(asm: Assembler): void {
 
     const opDef = this.opcode.get(this.mode)
     if (opDef !== undefined) {
@@ -535,6 +608,13 @@ export class OpStatement extends Statement {
                   this.expression.setError("String expression not valid here")
                 }
               } else {
+                if (immValue < 0) {
+                  // TODO: generalize this setting and check other syntaxes
+                  if (asm.syntax == Syntax.CA65) {
+                    this.expression.setError(`Value ${immValue} out of range`)
+                  }
+                }
+
                 // TODO: skip if 65816
                 // if (immValue > 255) {
                 //   this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
@@ -562,6 +642,24 @@ export class OpStatement extends Statement {
           case OpMode.ABSX:
           case OpMode.ABSY:
             asm.symUtils.markData(this.expression)
+
+            // check for zpage demotion was prevented by a forward reference
+            if (!this.forceLong) {
+              const expSize = this.expression!.getSize() ?? 0
+              if (expSize == 1) {
+                let newMode
+                if (this.mode == OpMode.ABS) {
+                  newMode = OpMode.ZP   // $FF
+                } else if (this.mode == OpMode.ABSX) {
+                  newMode = OpMode.ZPX  // $FF,X
+                } else {
+                  newMode = OpMode.ZPY  // $FF,Y
+                }
+                if (this.opcode.get(newMode)) {
+                  this.expression!.setWarning("ZP variable declared after use treated as ABS")
+                }
+              }
+            }
             break
           case OpMode.IND:
             break
@@ -602,7 +700,7 @@ export class OpStatement extends Statement {
         asm.symUtils.markCode(this.labelExp)
       }
 
-      dataBytes[0] = opDef.val
+      asm.writeByte(opDef.val)
       if (this.expression) {
         let value = this.expression.resolve()
         if (value !== undefined) {
@@ -625,14 +723,19 @@ export class OpStatement extends Statement {
                 // this.expression.setWarning(`Value ${value} will be truncated to 8 bits`)
               }
             }
-            dataBytes[1] = value & 0xff
+            asm.writeByte(value & 0xff)
           } if (opDef.bc == 3) {
             // TODO: check LREL offset
-            dataBytes[1] = (value >> 0) & 0xff
-            dataBytes[2] = (value >> 8) & 0xff
+            asm.writeByte((value >> 0) & 0xff)
+            asm.writeByte((value >> 8) & 0xff)
           }
         } else {
-          value = this.expression.resolve() // ***
+          if (opDef.bc >= 2) {
+            asm.writeByte(undefined)
+            if (opDef.bc >= 3) {
+              asm.writeByte(undefined)
+            }
+          }
         }
       }
     }
@@ -646,10 +749,19 @@ export class OpStatement extends Statement {
 
 export abstract class ConditionalStatement extends Statement {
 
-  abstract applyConditional(preprocessor: Preprocessor): void
-
-  pass1(asm: Assembler): number | undefined {
-    return 0
+  // TODO: share with Statement.preprocess?
+  public applyConditional(asm: Assembler, conditional: Conditional): void {
+    this.forEachExpression((expression) => {
+      if (expression instanceof exp.SymbolExpression) {
+        asm.processSymbol_pass0(expression)
+      } else if (expression instanceof exp.PcExpression) {
+        if (this.PC !== undefined) {
+          expression.setValue(this.PC)
+        } else if (!expression.hasError()) {
+          expression.setError("PC not resolvable")
+        }
+      }
+    })
   }
 }
 
@@ -671,38 +783,51 @@ export class IfStatement extends ConditionalStatement {
     this.op = op
   }
 
-  applyConditional(prep: Preprocessor): void {
+  public override applyConditional(asm: Assembler, conditional: Conditional): void {
 
-    const conditional = prep.conditional
+    super.applyConditional(asm, conditional)
+
+    if (asm.inMacroDef()) {
+      return
+    }
+
+    // TODO: fix this hack for ACME inline code
+    // TODO: Use a subclass instead?
+    if (asm.syntax == Syntax.ACME) {
+      const block = this.findArg("block")
+      if (block) {
+        return
+      }
+    }
 
     if (!conditional.push()) {
       this.setError("Exceeded nested conditionals maximum")
       return
     }
 
-    prep.pushNesting(NestingType.Conditional)
+    asm.pushNesting(NestingType.Conditional)
     conditional.statement = this
 
     const expression = this.findArg("condition")
-    const value = expression?.resolve() ?? 0
-    conditional.setSatisfied(value != 0)
+    if (!expression) {
+      return
+    }
+
+    const condVal = expression.resolve()
+    if (condVal === undefined) {
+      if (!asm.inMacroDef()) {
+        expression.setErrorWeak("Must resolve in first pass")
+        return
+      }
+    }
+
+    conditional.setSatisfied(condVal != 0)
   }
 
   postProcessSymbols(symUtils: SymbolUtils): void {
     const expression = this.findArg("condition")
     if (expression) {
       symUtils.markConstants(expression)
-    }
-  }
-}
-
-export class AcmeIfStatement extends IfStatement {
-
-  applyConditional(prep: Preprocessor): void {
-    // TODO: fix this hack for ACME inline code
-    const block = this.findArg("block")
-    if (!block) {
-      super.applyConditional(prep)
     }
   }
 }
@@ -725,16 +850,20 @@ export class IfDefStatement extends ConditionalStatement {
     this.isTrue = isTrue
   }
 
-  applyConditional(prep: Preprocessor): void {
+  public override applyConditional(asm: Assembler, conditional: Conditional): void {
 
-    const conditional = prep.conditional
+    super.applyConditional(asm, conditional)
+
+    if (asm.inMacroDef()) {
+      return
+    }
 
     if (!conditional.push()) {
       this.setError("Exceeded nested conditionals maximum")
       return
     }
 
-    prep.pushNesting(NestingType.Conditional)
+    asm.pushNesting(NestingType.Conditional)
     conditional.statement = this
 
     const isSatisfied = this.checkCondition()
@@ -771,8 +900,13 @@ export class ElseIfStatement extends ConditionalStatement {
 
   // *** what about folding here? ***
 
-  applyConditional(prep: Preprocessor): void {
-    const conditional = prep.conditional
+  public override applyConditional(asm: Assembler, conditional: Conditional): void {
+
+    super.applyConditional(asm, conditional)
+
+    if (asm.inMacroDef()) {
+      return
+    }
 
     if (conditional.isComplete()) {
       this.setError("Unexpected ELIF without IF")
@@ -782,17 +916,28 @@ export class ElseIfStatement extends ConditionalStatement {
     if (conditional.statement) {
       conditional.statement.foldEnd = this
     } else {
-      this.setError("no matching IF/ELIF statement")
+      this.setError("No matching IF/ELIF statement")
       return
     }
 
-    prep.popNesting()
-    prep.pushNesting(NestingType.Conditional)
+    asm.popNesting()
+    asm.pushNesting(NestingType.Conditional)
     conditional.statement = this
 
     const expression = this.findArg("condition")
-    const value = expression?.resolve() ?? 0
-    conditional.setSatisfied(!conditional.wasSatisfied() && value != 0)
+    if (!expression) {
+      return
+    }
+
+    const condVal = expression.resolve()
+    if (condVal === undefined) {
+      if (!asm.inMacroDef()) {
+        expression.setErrorWeak("Must resolve in first pass")
+        return
+      }
+    }
+
+    conditional.setSatisfied(!conditional.wasSatisfied() && condVal != 0)
   }
 
   postProcessSymbols(symUtils: SymbolUtils): void {
@@ -813,8 +958,13 @@ export class ElseIfStatement extends ConditionalStatement {
 
 export class ElseStatement extends ConditionalStatement {
 
-  applyConditional(prep: Preprocessor): void {
-    const conditional = prep.conditional
+  public override applyConditional(asm: Assembler, conditional: Conditional): void {
+
+    super.applyConditional(asm, conditional)
+
+    if (asm.inMacroDef()) {
+      return
+    }
 
     if (conditional.isComplete()) {
       this.setError("Unexpected ELSE without IF")
@@ -828,8 +978,8 @@ export class ElseStatement extends ConditionalStatement {
       return
     }
 
-    prep.popNesting()
-    prep.pushNesting(NestingType.Conditional)
+    asm.popNesting()
+    asm.pushNesting(NestingType.Conditional)
     conditional.statement = this
 
     conditional.setSatisfied(!conditional.wasSatisfied())
@@ -868,12 +1018,14 @@ export class AcmeElseStatement extends ElseStatement {
 
 export class EndIfStatement extends ConditionalStatement {
 
-  // parse(parser: Parser) {
-  // }
-
   // only called if brace statement is conditional
-  applyConditional(prep: Preprocessor): void {
-    const conditional = prep.conditional
+  public override applyConditional(asm: Assembler, conditional: Conditional): void {
+
+    super.applyConditional(asm, conditional)
+
+    if (asm.inMacroDef()) {
+      return
+    }
 
     if (conditional.statement) {
       conditional.statement.foldEnd = this
@@ -882,17 +1034,17 @@ export class EndIfStatement extends ConditionalStatement {
       return
     }
 
-    if (!prep.isNested(NestingType.Conditional)) {
+    if (!asm.isNested(NestingType.Conditional)) {
       this.setError("no IF/ELIF statement to end")
       return
     }
 
-    if (prep.topNestingType() != NestingType.Conditional) {
+    if (asm.topNestingType() != NestingType.Conditional) {
       this.setError("no matching IF/ELIF statement")
       return
     }
 
-    prep.popNesting()
+    asm.popNesting()
     if (!conditional.pull()) {
       // Merlin ignores unused FIN
       // if (!assembler->SetMerlinWarning("Unexpected FIN/ENDIF")) {
@@ -906,8 +1058,10 @@ export class EndIfStatement extends ConditionalStatement {
 export class ClosingBraceStatement extends EndIfStatement {
 
   // only called if brace statement type is non-conditional
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    prep.popNesting(true)
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    asm.popNesting(true)
   }
 }
 
@@ -918,68 +1072,145 @@ export class ClosingBraceStatement extends EndIfStatement {
 
 // TODO: is label allowed or disallowed?
 
-// MERLIN:  LUP <expression>
-//   DASM:  REPEAT <expression>
-//   ACME:  !for <var>, <start>, <end> { <block> }
-//          !for <var>, <end> { <block> }
+// MERLIN:  LUP <loop-count>
+//   DASM:  REPEAT <loop-count>
+//   ACME:  !for <loop-var>, <loop-start>, <loop-end> { <block> }
+//          !for <loop-var>, <loop-end> { <block> }
 //          !do [<keyword-condition>] { <block> } [<keyword-condition>]
 //          TODO: support !do
-//   CA65:  .repeat <expression> [, var]
+//   CA65:  .repeat <loop-count> [, <loop-var>]
 //   LISA:  n/a
+// 64TASS:  .rept <loop-count>
+//          .for [<assignment>], [<condition>], [<assignment>]
+//          .while <condition>
+
+// MERLIN: ]VAR usage not allowed when LUP is inside macro
+// CA65: nested .repeat using same var causes inner var to always be used
+// ACME: private vars are used that can't be modified with !set
+// ACME: start <= end counts up, start > end counts up
+// 64TASS: "b" prefix on loop commands forces new scope on each iteration
 
 export class RepeatStatement extends Statement {
 
-  // private start?: exp.Expression    // ACME-only (default = 1)
-  // private count?: exp.Expression    // end for ACME
-  // private var?: exp.SymbolExpression
+  public override preprocess(asm: Assembler): void {
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      prep.pushNesting(NestingType.Repeat, () => {
-        // TODO: handle end repeat brace
-      })
+    if (asm.inMacroDef()) {
+      super.preprocess(asm)
+      return
     }
-  }
 
-  // TODO: generalize this -- similar code used by MacroDefStatement, TypeBeginStatement
-  // TODO: move into params.ts
-  private getVarName(parser: Parser): exp.SymbolExpression | undefined {
-    const token = parser.getNextToken()
-    if (token) {
-      if (token.type == TokenType.Symbol || token.type == TokenType.HexNumber) {
-        const isDefinition = true
-        // TODO: should be SymbolType.Variable
-        const varNameExp = new exp.SymbolExpression([token], SymbolType.Simple,
-          isDefinition, parser.sourceFile, parser.lineNumber)
-        parser.addExpression(varNameExp)
-        return varNameExp
-      } else {
-        token.setError("Unexpected token, expecting symbol")
-        parser.addToken(token)
+    if (this.labelExp) {
+      asm.processSymbol_pass0(this.labelExp)
+    }
+
+    // push nesting for the first time
+    this.repushNesting(asm)
+
+    let loopVar: LoopVar | undefined
+    const loopVarArg = this.findArg("loop-var")
+    if (loopVarArg && loopVarArg instanceof exp.SymbolExpression) {
+      loopVar = asm.initLoopVar(loopVarArg)
+      if (!loopVar) {
+        return
       }
     }
+
+    // process all remaining symbols
+    // *** call asm directly here?
+    super.preprocess(asm)
+
+    let startVal: number | undefined
+    const startExp = this.findArg("loop-start")
+    if (startExp) {
+      startVal = startExp.resolve()
+      if (startVal === undefined) {
+        startExp.setErrorWeak("Must resolve in first pass")
+        return
+      }
+    } else {
+      startVal = 1
+    }
+
+    let endVal: number | undefined
+    const endExp = this.findArg("loop-end")
+    if (endExp) {
+      endVal = endExp.resolve()
+      if (endVal === undefined) {
+        endExp.setErrorWeak("Must resolve in first pass")
+        return
+      }
+    } else {
+      endVal = 1
+    }
+
+    const countExp = this.findArg("loop-count")
+    if (countExp) {
+      const countVal = countExp.resolve()
+      if (countVal === undefined) {
+        countExp.setErrorWeak("Must resolve in first pass")
+        return
+      }
+      if (countVal < 0) {
+        countExp.setErrorWeak("Invalid count")
+        return
+      }
+      startVal = 0
+      endVal = countVal - 1
+    }
+
+    // TODO: support loop conditional expressions
+
+    if (startVal === undefined || endVal === undefined) {
+      return
+    }
+
+    asm.startLoop(startVal, endVal, loopVar)
+  }
+
+  private repushNesting(asm: Assembler) {
+    asm.pushNesting(NestingType.Repeat, () => {
+      if (!asm.endLoop()) {
+        // if looping not complete,
+        //  repush nesting for next time through
+        this.repushNesting(asm)
+      }
+    })
   }
 }
 
 // MERLIN:  --^
 //   DASM:  [.]REPEND
-//   ACME:  }
+//   ACME:  } [<keyword-condition>]
 //   CA65:  .endrep[eat]
 //   LISA:  n/a
+// 64TASS:  .endfor
+//          .endrept
+//          .endwhile
+//          .break,.breakif,.continue,.continueif
+//          .next,.lbl,.goto
 
 export class EndRepStatement extends Statement {
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      if (!prep.isNested(NestingType.Repeat)) {
-        this.setError("Ending repeat without a start")
-        return
-      }
-      if (prep.topNestingType() != NestingType.Repeat) {
-        this.setError("Mismatched repeat end")
-        return
-      }
-      prep.popNesting()
+
+  public override preprocess(asm: Assembler): void {
+
+    if (asm.inMacroDef()) {
+      super.preprocess(asm)
+      return
     }
+
+    // TODO: skip this, unless it's a "do {...} while" for ACME
+    super.preprocess(asm)
+
+    if (!asm.isNested(NestingType.Repeat)) {
+      this.setError("Ending repeat without a start")
+      return
+    }
+    if (asm.topNestingType() != NestingType.Repeat) {
+      this.setError("Mismatched repeat end")
+      return
+    }
+
+    asm.popNesting(true)   // pass true so pop proc gets called
   }
 }
 
@@ -1006,6 +1237,8 @@ const DataRanges: number[][] = [
   [   0xffffff,   0x7fffff,   -0x800000 ],
   [ 0xffffffff, 0x7fffffff, -0x80000000 ],
 ]
+
+// TODO: need to think about handling string constants in here
 
 class DataStatement extends Statement {
 
@@ -1054,12 +1287,12 @@ class DataStatement extends Statement {
     }
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      if (prep.module.project.syntax == Syntax.CA65) {
-        if (this.args.length == 0) {
-          // TODO: only allow no dataElements if inside a .struct
-        }
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    if (asm.module.project.syntax == Syntax.CA65) {
+      if (this.args.length == 0) {
+        // TODO: only allow no dataElements if inside a .struct
       }
     }
   }
@@ -1073,16 +1306,22 @@ class DataStatement extends Statement {
     }
   }
 
-  pass1(asm: Assembler): number | undefined {
+  pass1(asm: Assembler): number {
     return Math.max(this.args.length, 1) * this.dataSize
   }
 
-  pass2(asm: Assembler, dataBytes: number[]) {
-    let index = 0
+  pass2(asm: Assembler) {
+
+    // in DASM, empty data statements are just storage statements
+    if (this.args.length == 0) {
+      asm.writeBytePattern(0, this.dataSize)
+      return
+    }
+
     for (let element of this.args) {
       const value = element.resolve()
       if (value === undefined) {
-        index += this.dataSize
+        asm.writeBytePattern(undefined, this.dataSize)
         continue
       }
       if (this.dataSize == 1) {
@@ -1093,16 +1332,16 @@ class DataStatement extends Statement {
         } else if (value > 255 || value < -128) {
           element.setWarning(`Value ${value} overflows 8 bits`)
         }
-        dataBytes[index++] = value & 0xff
+        asm.writeByte(value & 0xff)
       } else if (this.dataSize == 2) {
         const value0 = (value >> 0) & 0xff
         const value8 = (value >> 8) & 0xff
         if (this.bigEndian) {
-          dataBytes[index++] = value8
-          dataBytes[index++] = value0
+          asm.writeByte(value8)
+          asm.writeByte(value0)
         } else {
-          dataBytes[index++] = value0
-          dataBytes[index++] = value8
+          asm.writeByte(value0)
+          asm.writeByte(value8)
         }
       } else {
         // TODO: deal with 24 bit values
@@ -1217,34 +1456,26 @@ export class StorageStatement extends Statement {
     }
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
 
-      // reference any symbols that may be needed to resolve orgValue
-      // TODO: get rid of this after switch to real assembly
-      prep.processSymbolRefs(this)
-
-      const countArg = this.findArg("count")
-      if (countArg) {
-        this.countValue = countArg.resolve()
-        if (this.countValue === undefined) {
-          countArg.setErrorWeak("Must resolve on first pass")
-        }
-      } else {
-        // assume if count isn't found, must be Merlin "\\"
-        this.countValue = -prep.getCurrentPC() & 0xFF
+    const countArg = this.findArg("count")
+    if (countArg) {
+      this.countValue = countArg.resolve()
+      if (this.countValue === undefined) {
+        countArg.setErrorWeak("Must resolve on first pass")
       }
+    } else {
+      // assume if count isn't found, must be Merlin "\\"
+      this.countValue = -(this.PC ?? 0) & 0xFF
     }
   }
 
-  // *** same as getSize() ***
-  pass1(asm: Assembler): number | undefined {
-    if (this.countValue !== undefined) {
-      return this.countValue * this.dataSize
-    }
+  pass1(asm: Assembler): number {
+    return (this.countValue ?? 0) * (this.dataSize ?? 0)
   }
 
-  pass2(asm: Assembler, dataBytes: number[]): void {
+  pass2(asm: Assembler): void {
     let fillValue = 0
     const fillArg = this.findArg("fill")
     if (fillArg) {
@@ -1256,7 +1487,8 @@ export class StorageStatement extends Statement {
       fillValue = value
     }
     // TODO: handle >= 16 bit patterns differently
-    dataBytes.fill(fillValue)
+    const count = (this.countValue ?? 0) * (this.dataSize ?? 0)
+    asm.writeBytePattern(fillValue, count)
   }
 }
 
@@ -1273,64 +1505,62 @@ export class AlignStatement extends Statement {
 
   private padValue?: number
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
+  public override preprocess(asm: Assembler): void {
 
-      // reference any symbols that may be needed to resolve orgValue
-      // TODO: get rid of this after switch to real assembly
-      prep.processSymbolRefs(this)
+    // TODO: DASM assigns label address AFTER the alignment
 
-      const andArg = this.findArg("and")
-      const equalArg = this.findArg("equal")
-      if (andArg && equalArg) {
-        const andValue = andArg.resolve()
-        if (andValue === undefined) {
-          andArg.setErrorWeak("Must resolve on first pass")
-          return
-        }
-        const equalValue = equalArg.resolve()
-        if (equalValue === undefined) {
-          equalArg.setErrorWeak("Must resolve on first pass")
-          return
-        }
-        this.padValue = (equalValue - prep.getCurrentPC()) & andValue
+    super.preprocess(asm)
+
+    const andArg = this.findArg("and")
+    const equalArg = this.findArg("equal")
+    if (andArg && equalArg) {
+      const andValue = andArg.resolve()
+      if (andValue === undefined) {
+        andArg.setErrorWeak("Must resolve on first pass")
         return
       }
-
-      let boundaryValue = 256
-      const boundaryArg = this.findArg("boundary")
-      if (boundaryArg) {
-        const value = boundaryArg.resolve()
-        if (value === undefined) {
-          boundaryArg.setErrorWeak("Must resolve on first pass")
-          return
-        }
-        boundaryValue = value
+      const equalValue = equalArg.resolve()
+      if (equalValue === undefined) {
+        equalArg.setErrorWeak("Must resolve on first pass")
+        return
       }
-
-      let offsetValue = 0
-      const offsetArg = this.findArg("offset")
-      if (offsetArg) {
-        const value = offsetArg.resolve()
-        if (value === undefined) {
-          offsetArg.setErrorWeak("Must resolve on first pass")
-          return
-        }
-        offsetValue = value
-      }
-
-      const misalign = prep.getCurrentPC() % boundaryValue
-      const size = (misalign ? boundaryValue - misalign : 0) + offsetValue
-      // TODO: how are negative offsets handled in 64TASS?
-      this.padValue = Math.max(size, 0)
+      this.padValue = (equalValue - (this.PC ?? 0)) & andValue
+      return
     }
+
+    let boundaryValue = 256
+    const boundaryArg = this.findArg("boundary")
+    if (boundaryArg) {
+      const value = boundaryArg.resolve()
+      if (value === undefined) {
+        boundaryArg.setErrorWeak("Must resolve on first pass")
+        return
+      }
+      boundaryValue = value
+    }
+
+    let offsetValue = 0
+    const offsetArg = this.findArg("offset")
+    if (offsetArg) {
+      const value = offsetArg.resolve()
+      if (value === undefined) {
+        offsetArg.setErrorWeak("Must resolve on first pass")
+        return
+      }
+      offsetValue = value
+    }
+
+    const misalign = (this.PC ?? 0) % boundaryValue
+    const size = (misalign ? boundaryValue - misalign : 0) + offsetValue
+    // TODO: how are negative offsets handled in 64TASS?
+    this.padValue = Math.max(size, 0)
   }
 
-  pass1(asm: Assembler): number | undefined {
-    return this.padValue
+  pass1(asm: Assembler): number {
+    return this.padValue ?? 0
   }
 
-  pass2(asm: Assembler, dataBytes: number[]): void {
+  pass2(asm: Assembler): void {
     let fillValue = asm.syntax == Syntax.ACME ? 0xEA : 0x00
     const fillArg = this.findArg("fill")
     if (fillArg) {
@@ -1341,7 +1571,7 @@ export class AlignStatement extends Statement {
         fillValue = value
       }
     }
-    dataBytes.fill(fillValue)
+    asm.writeBytePattern(fillValue, this.padValue ?? 0)
   }
 }
 
@@ -1368,11 +1598,14 @@ export class HexStatement extends Statement {
         symbol.isData = true
       }
     }
+  }
 
-    // TODO: in pass1 instead?
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
     this.dataBytes = []
     for (let arg of this.args) {
-      if (!arg.hasError) {
+      if (!arg.hasError()) {
         scanHex(arg.getString(), this.dataBytes)
       }
     }
@@ -1383,21 +1616,19 @@ export class HexStatement extends Statement {
     return this.dataBytes.length
   }
 
-  pass1(asm: Assembler): number | undefined {
+  pass1(asm: Assembler): number {
     return this.dataBytes.length
   }
 
-  pass2(asm: Assembler, dataBytes: number[]): void {
-    for (let i = 0; i < this.dataBytes.length; i += 1) {
-      dataBytes[i] = this.dataBytes[i]
-    }
+  pass2(asm: Assembler): void {
+    asm.writeBytes(this.dataBytes)
   }
 }
 
 // NOTE: caller has checked for odd nibbles
 function scanHex(hexString: string, buffer: number[]) {
   while (hexString.length > 0) {
-    let byteStr = hexString.substring(0, 2)
+    const byteStr = hexString.substring(0, 2)
     buffer.push(parseInt(byteStr, 16))
     hexString = hexString.substring(2)
   }
@@ -1418,25 +1649,8 @@ class FileStatement extends Statement {
     this.fileName = this.findArg("filename")
   }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
-  }
-}
-
-// MERLIN:  PUT filename
-//          USE filename
-//   DASM:  [.]INCLUDE "filename"
-//   ACME:  !SOURCE "filename"
-//          !SOURCE <filename>
-//   CA65:  .INCLUDE "filename"
-//   LISA:  ICL "filename"
-// 64TASS:  .include "filename"
-
-export class IncludeStatement extends FileStatement {
-
-  preprocess(preprocessor: Preprocessor, enabled: boolean) {
-    if (enabled && this.fileName) {
-      // TODO: move this to FileStatement class
+  protected cleanFileName(): string | undefined {
+    if (this.fileName) {
       let fileNameStr = this.fileName.getString() || ""
       if (fileNameStr.length > 0) {
         // TODO: only strip quotes for non-Merlin?
@@ -1451,9 +1665,33 @@ export class IncludeStatement extends FileStatement {
             }
           }
         }
+        return fileNameStr
       }
-      if (!preprocessor.includeFile(fileNameStr)) {
-        this.fileName.setError("File not found")
+    }
+  }
+}
+
+// MERLIN:  PUT filename
+//          USE filename
+//   DASM:  [.]INCLUDE "filename"
+//   ACME:  !SOURCE "filename"
+//          !SOURCE <filename>
+//   CA65:  .INCLUDE "filename"
+//   LISA:  ICL "filename"
+// 64TASS:  .include "filename"
+
+export class IncludeStatement extends FileStatement {
+
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    // TODO: share more of this code
+    if (this.fileName) {
+      const fileNameStr = this.cleanFileName()
+      if (fileNameStr) {
+        if (!asm.includeFile(fileNameStr)) {
+          this.fileName.setError("File not found")
+        }
       }
     }
   }
@@ -1466,6 +1704,19 @@ export class IncludeStatement extends FileStatement {
 //   LISA:  SAV "filename"
 
 export class SaveStatement extends FileStatement {
+
+  public pass2(asm: Assembler): void {
+
+    // TODO: share more of this code
+    if (this.fileName) {
+      const fileNameStr = this.cleanFileName()
+      if (fileNameStr) {
+        if (!asm.writeFile(fileNameStr)) {
+          this.fileName.setError("File not found")
+        }
+      }
+    }
+}
 }
 
 
@@ -1497,9 +1748,9 @@ export class IncDirStatement extends FileStatement {
 
 export class IncBinStatement extends FileStatement {
 
-  pass1(asm: Assembler): number | undefined {
+  pass1(asm: Assembler): number {
     // TODO: return actual data size
-    return
+    return 0
   }
 }
 
@@ -1508,14 +1759,18 @@ export class IncBinStatement extends FileStatement {
 //#region Macros, Structures, Unions, Enums
 //==============================================================================
 
-// *** .repeat and !for also use type-params
-
 // DefineDefStatement is a greatly simplified version of
 //  of TypeDefBeginStatement that doesn't follow the
 //  begin/end pattern.
+
+// *** fold-into/derive-from typeDefStatement?
 export class DefineDefStatement extends Statement {
 
   public typeName?: exp.SymbolExpression
+
+  // *** TODO: expressions need be parse manually
+  //  *** like macroDef parameters because they
+  //  *** may not look valid by themselves
 
   postParse(parser: Parser) {
     const name = this.findArg("define-name")
@@ -1524,31 +1779,50 @@ export class DefineDefStatement extends Statement {
     }
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      if (this.typeName) {
-        // assign typeName's full symbol name before scope changes
-        // prep.preprocessSymbol(this.typeName)
-        if (this.typeName.symbol) {
-          this.typeName.symbol.isZoneStart = true
-        }
-        prep.scopeState.pushZone(this.typeName.getString())
-        prep.startTypeDef(NestingType.Define)
+  // *** this is no longer marked as inMacroDef
+  //  *** because of segments -- more reason to fold into typeDef
+
+  public override preprocess(asm: Assembler) {
+
+    if (this.typeName) {
+
+      // assign typeName's full symbol name before scope changes
+      asm.processSymbol_pass0(this.typeName)
+
+      if (this.typeName.symbol) {
+        this.typeName.symbol.isZoneStart = true
       }
+      asm.scopeState.pushScope(this.typeName.getString())
+
+      // TODO: share with macroDef/typeDef
+      // *** move into startTypeDef?
+      const typeParams = this.findArgs("define-param")
+      const typeParamNames: string[] = []
+      for (let typeParam of typeParams) {
+        if (typeParam instanceof exp.SymbolExpression) {
+          asm.processSymbol_pass0(typeParam)
+          typeParamNames.push(typeParam.getString())
+        }
+      }
+
+      // process remaining symbol expressions
+      super.preprocess(asm)
+
+      asm.startTypeDef(NestingType.Define, this.typeName, typeParamNames)
     }
   }
 
   // specific to DefineDefStatement
-  endPreprocess(prep: Preprocessor, enabled: boolean) {
-    prep.scopeState.popZone()
-    prep.endTypeDef()
+  endPreprocess(asm: Assembler) {
+    asm.scopeState.popScope()
+    asm.endTypeDef(0)
   }
 }
 
 export class TypeDefBeginStatement extends Statement {
 
-  private nestingType: NestingType
-  private canRecurse: boolean
+  protected nestingType: NestingType
+  protected canRecurse: boolean
   public typeName?: exp.SymbolExpression
 
   constructor(nestingType: NestingType, canRecurse: boolean) {
@@ -1568,76 +1842,115 @@ export class TypeDefBeginStatement extends Statement {
     }
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
+  public override preprocess(asm: Assembler) {
 
-      if (!this.canRecurse) {
-        if (prep.isNested(this.nestingType)) {
-          this.setError("Cannot be restarted")
-          return
-        }
-      }
+    if (asm.inMacroDef()) {
+      super.preprocess(asm)
+      return
+    }
 
-      const currentPC = prep.getCurrentPC()
-      prep.pushNesting(this.nestingType, () => {
-        if (enabled) {
-          prep.setNextPC(currentPC)
-          // prep.scopeState.popZone()   // TODO: ACME-only?
-          prep.scopeState.popScope()  // *** need scope for struct/enum/union
-          // prep.scopeState.endType()
-          prep.endTypeDef()
-        }
-      })
-
-      if (enabled) {
-
-        // assign typeName's full symbol name before scope changes
-        if (this.typeName) {
-          prep.preprocessSymbol(this.typeName)
-        }
-
-        // *** different for enum?
-        // *** different if anonymous type?
-        prep.setNextPC(0)
-        // prep.scopeState.pushZone()    // TODO: ACME-only?
-        prep.scopeState.pushScope(this.typeName?.getString() ?? "")
-        // prep.scopeState.startType(this.typeName?.getString() ?? "")
-        prep.startTypeDef(this.nestingType)
+    if (!this.canRecurse) {
+      if (asm.isNested(this.nestingType)) {
+        this.setError("Cannot be restarted")
+        return
       }
     }
-  }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+    // check for anonymous struct and enum
+    if (!this.typeName) {
+      // *** anonymous type (structure)?
+      return  // *** handle separately ***
+    }
+
+    // TODO: not needed if scope and proc were split out
+    const isStruct = this.nestingType == NestingType.Struct
+      || this.nestingType == NestingType.Union
+
+    // *** different if anonymous type?
+    if (isStruct) {
+      // *** different if already nested in parent type
+      const startPC = 0
+      asm.pushAndSetStructSegment(startPC)
+    }
+
+    asm.pushNesting(this.nestingType, () => {
+      const size = isStruct ? asm.popSegment() : 0
+      if (asm.syntax == Syntax.ACME) {
+        asm.scopeState.popZone()
+      } else {
+        asm.scopeState.popScope()
+      }
+      asm.endTypeDef(size)
+    })
+
+    // assign typeName's full symbol name before scope changes
+
+    asm.processSymbol_pass0(this.typeName)
+    if (this.typeName.hasError()) {
+      return
+    }
+
+    const typeNameStr = this.typeName!.getString()
+    // NOTE: ACME assumes locals inside macro defs
+    // *** should this also be done for types or just macros?
+    if (asm.syntax == Syntax.ACME) {
+      asm.scopeState.pushZone(typeNameStr)
+    } else {
+      asm.scopeState.pushScope(typeNameStr)
+    }
+
+    // type-params are scoped to the type itself
+    // *** move into startTypeDef?
+    const typeParams = this.findArgs("type-param")
+    const typeParamNames: string[] = []
+    for (let typeParam of typeParams) {
+      if (typeParam instanceof exp.SymbolExpression) {
+        asm.processSymbol_pass0(typeParam)
+        typeParamNames.push(typeParam.getString())
+      }
+      // *** how to find defaults?
+      // *** set default on symbol?
+    }
+
+    asm.startTypeDef(this.nestingType, this.typeName!)
   }
 }
 
 export class TypeDefEndStatement extends Statement {
-  private nestingType: NestingType
+  protected nestingType: NestingType
 
   constructor(nestingType: NestingType) {
     super()
     this.nestingType = nestingType
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      if (!prep.isNested(this.nestingType)) {
-        this.setError("Missing begin for this end")
-        return
-      }
+  public override preprocess(asm: Assembler): void {
 
-      if (prep.topNestingType() != this.nestingType) {
-        this.setError("Dangling scoped type")
+    // don't do any typeDef processing while in a macroDef,
+    //  unless this type is itself a macroDef
+    if (asm.inMacroDef()) {
+      if (this.nestingType != NestingType.Macro) {
+        super.preprocess(asm)
         return
       }
-      prep.popNesting(true)
-      // prep.scopeState.popScope()
     }
-  }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+    // process possible label before scope change
+    if (this.labelExp) {
+      asm.processSymbol_pass0(this.labelExp)
+    }
+
+    if (!asm.isNested(this.nestingType)) {
+      this.setError("Missing begin for this end")
+      return
+    }
+
+    if (asm.topNestingType() != this.nestingType) {
+      this.setError("Dangling scoped type")
+      return
+    }
+
+    asm.popNesting(true)
   }
 }
 
@@ -1647,16 +1960,87 @@ export class TypeDefEndStatement extends Statement {
 //   ACME:         !macro <name> [<param>,...] {
 //   CA65:         .mac <name> [<param>,...]
 //                 .macro <name> [<param>,...]
-// 64TASS:  <name> .macro [<param>,...]
+// 64TASS:  <name> .macro [<param>[=<default>],...]
 //   LISA:  n/a
 
 // ACME: params start with "." and are locals
+// ACME: params starting with "~" are by reference
+// ACME: allows overloading of macro name based on param count
 // CA65: params are simple symbols
+// 64TASS: supports default values for params
+// 64TASS: param references start with "\", but not declarations
+// ORCA/M: param declarations and references start with "&"
+// ORCA/M: macro definition is on line after "macro" opcode
+// DASM: macro generates implicit SUBROUTINE
+// DASM: macros can be redefined
 
 export class MacroDefStatement extends TypeDefBeginStatement {
 
   constructor() {
     super(NestingType.Macro, false)
+  }
+
+  public override preprocess(asm: Assembler): void {
+
+    if (!this.canRecurse) {
+      if (asm.isNested(this.nestingType)) {
+        this.setError("Nested macro definitions not allowed")
+        return
+      }
+    }
+
+    // redundent (but harmless) after recursion check
+    // if (asm.inMacroDef()) {
+    //   return
+    // }
+
+    asm.pushAndSetMacroSegment()
+
+    asm.pushNesting(this.nestingType, () => {
+      const size = asm.popSegment()
+      if (asm.syntax == Syntax.ACME || asm.syntax == Syntax.DASM) {
+        asm.scopeState.popZone()
+      }
+      asm.scopeState.popScope()
+      asm.endTypeDef(size)
+    })
+
+    if (!this.typeName) {
+      return
+    }
+
+    // assign typeName's full symbol name before scope changes
+    // NOTE: isMacroDef is NOT true yet
+    asm.processSymbol_pass0(this.typeName)
+    if (this.typeName.hasError()) {
+      return
+    }
+
+    const typeNameStr = this.typeName!.getString()
+    // NOTE: ACME assumes locals inside macro defs
+    asm.scopeState.pushScope(typeNameStr)
+    if (asm.syntax == Syntax.ACME || asm.syntax == Syntax.DASM) {
+      asm.scopeState.pushZone(typeNameStr)
+    }
+
+    // *** ACME macro params start with "." and are assumed to be locals
+    // *** ACME support "~" prefix meaning "by reference"
+
+    // *** type-params are scoped to the type itself
+    // *** move into startTypeDef?
+    const typeParams = this.findArgs("type-param")
+    const typeParamNames: string[] = []
+    for (let typeParam of typeParams) {
+      if (typeParam instanceof exp.SymbolExpression) {
+        asm.processSymbol_pass0(typeParam)
+        typeParamNames.push(typeParam.getString())
+      }
+      // *** how to find defaults?
+      // *** set default on symbol?
+    }
+
+    // TODO: DASM: macros can be redefined so watch for duplicate symbol
+    asm.startTypeDef(this.nestingType, this.typeName, typeParamNames)
   }
 }
 
@@ -1674,10 +2058,6 @@ export class EndMacroDefStatement extends TypeDefEndStatement {
 
   constructor() {
     super(NestingType.Macro)
-  }
-
-  pass1(asm: Assembler): number | undefined {
-    return 0
   }
 }
 
@@ -1748,9 +2128,183 @@ export class EndScopeStatement extends TypeDefEndStatement {
 //#region Everything else
 //==============================================================================
 
+// MERLIN:  <label> <macro> [<param>;...]
+//   DASM:  <label> <macro> [<param>, ...]
+//   ACME:  <label> +<macro> [<param>, ...]
+//   CA65:  <label> <macro> [<param>, ...]
+// 64TASS:  <label> (#|.)<macro> [<param>, ...]
+//   LISA:  n/a
+export class MacroInvokeStatement extends Statement {
+
+  parse(parser: Parser) {
+    let expressionOpen = false
+    while (true) {
+
+      let token = parser.getNextToken()
+      if (!token) {
+        if (expressionOpen) {
+          this.flushExpression(parser)
+        }
+        break
+      }
+
+      const str = token.getString().toLowerCase()
+
+      // TODO: fix this multi-statement hack to suppress errors
+      // if (parser.syntax == Syntax.ACME) {   // HACK
+      //   if (str == ":") {
+      //     parser.ungetToken(token)
+      //     if (expressionOpen) {
+      //       this.flushExpression(parser)
+      //     }
+      //     break
+      //   }
+      // }
+
+      // TODO: hacks to allow macros to look like opcodes
+      if (parser.syntax == Syntax.CA65) {   // HACK
+        if (str == ":") {
+          const expression = parser.parseCA65Local(token, false)
+          expression.name = "macro-param"
+          parser.addExpression(expression)
+          this.args.push(expression)
+          continue
+        }
+      }
+
+      if (parser.syntaxDef.macroInvokeDelimiters.includes(str)) {
+        if (!expressionOpen) {
+          parser.startExpression()
+        }
+        this.flushExpression(parser)
+
+        // make Merlin delimiter stand out a little bit since
+        //  there can't be any space around it
+        if (str == ";") {
+          token.type = TokenType.Keyword
+        }
+
+        parser.addToken(token)
+        parser.startExpression()
+        expressionOpen = true
+        continue
+      }
+
+      if (!expressionOpen) {
+        parser.startExpression()
+        expressionOpen = true
+      }
+
+      // help make macros look like real opcodes when using addressing modes
+      if (str == "x" || str == "y") {
+        token.type = TokenType.Opcode
+        parser.addToken(token)
+        continue
+      }
+
+      const position = parser.getPosition()
+      const expression = parser.parseExpression(token)
+      if (!expression || expression.hasAnyError()) {
+        parser.setPosition(position)
+        parser.addToken(token)
+        TokenType
+      } else {
+        parser.addExpression(expression)
+      }
+    }
+  }
+
+  private flushExpression(parser: Parser) {
+    const expression = new exp.Expression(parser.endExpression())
+    expression.name = "macro-param"
+    parser.addExpression(expression)
+    this.args.push(expression)
+  }
+
+  public override preprocess(asm: Assembler): void {
+
+    // process possible label before scope change
+    if (this.labelExp) {
+      asm.processSymbol_pass0(this.labelExp)
+    }
+
+    // *** don't invoke if syntax has not been chosen?
+
+    const macroExp = (this.opExp as exp.SymbolExpression)!
+
+    asm.processSymbol_pass0(macroExp)
+    if (macroExp.hasError()) {
+      return
+    }
+
+    const macroSym = asm.module.symbolMap.get(macroExp.fullName!)
+    if (!macroSym) {
+      // *** error, unknown macro ***
+      return
+    }
+
+    if (asm.inMacroDef()) {
+      return
+    }
+
+    const macroDef = <TypeDef>(macroSym as any).typeDef
+    if (!macroDef) {
+      // *** error
+      return
+    }
+
+    asm.invokeMacro(macroDef)
+    const varMap = asm.macroInvokeState!.varMap
+
+    const paramValues = this.findArgs("macro-param")
+
+    // default vars 1 to 9
+    for (let i = 0; i < paramValues.length; i += 1) {
+      const paramName = (i + 1).toString()
+      varMap.set(paramName, paramValues[i].getString())
+    }
+
+    // TODO: make this a setting
+    if (asm.syntax == Syntax.CA65 ||
+        asm.syntax == Syntax.ACME ||
+        asm.syntax == Syntax.TASS64 ||
+        asm.syntax == Syntax.ORCAM) {
+
+      for (let i = 0; i < macroDef.params.length; i += 1) {
+        if (i >= paramValues.length) {
+          // *** missing param error ***
+          continue
+        }
+        // *** watch for undefined params ***
+        // *** convert names based on syntax ***
+        varMap.set(macroDef.params[i], paramValues[i].getString())
+      }
+
+      for (let i = macroDef.params.length; i < paramValues.length; i += 1) {
+        paramValues[i].setError("Unexpected macro parameter")
+      }
+
+      // TODO: 64tass supports default values
+
+    } else if (asm.syntax == Syntax.MERLIN) {
+
+      // In Merlin16, ]0 is count of parameters passed to macro
+      varMap.set("0", paramValues.length.toString())
+
+    } else if (asm.syntax == Syntax.DASM) {
+
+      // TODO: "{0}" is the entire macro instantiation line
+    }
+  }
+}
+
+//------------------------------------------------------------------------------
+
 // *** watch for assigning a value to a local label
 //  *** LISA, for example, doesn't allow that
 // *** mark symbol as being assigned rather than just a label?
+
+// *** check if inside enum and adjust PC ***
 
 // MERLIN: symbol EQU [#]exp
 //         symbol = exp
@@ -1771,6 +2325,7 @@ export class EquStatement extends Statement {
     if (!this.labelExp.isVariableType()) {
       // look for leading "#" for DASM and Merlin
       //  TODO: should this be done for expressions in general?
+      // *** (not working in syntax definitions) ***
       if (!parser.syntax
           || parser.syntax == Syntax.DASM
           || parser.syntax == Syntax.MERLIN) {
@@ -1789,8 +2344,26 @@ export class EquStatement extends Statement {
     }
   }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+  public override preprocess(asm: Assembler): void {
+    this.forEachExpression((expression) => {
+      if (expression instanceof exp.SymbolExpression) {
+        asm.processSymbol_pass0(expression)
+
+        // watch out for an equate referencing itself
+        if (expression != this.labelExp) {
+          if (expression.symbol == this.labelExp?.symbol) {
+            expression.setError("Circular symbol reference")
+            expression.symbol = undefined
+          }
+        }
+      } else if (expression instanceof exp.PcExpression) {
+        if (this.PC !== undefined) {
+          expression.setValue(this.PC)
+        } else if (!expression.hasError()) {
+          expression.setError("PC not resolvable (no org?)")
+        }
+      }
+    })
   }
 }
 
@@ -1805,26 +2378,52 @@ export class VarAssignStatement extends Statement {
 
   parse(parser: Parser) {
 
-    if (this.opNameLC != "!set") {
+    const varExp = this.labelExp
+    if (this.opNameLC == "!set") {
+      // TODO: fix this
+      parser.getNextToken()   // var symbol
+      parser.getNextToken()   // "="
+    } else {
       if (!this.labelExp) {
         parser.insertMissingLabel()
         return
       }
-    }
-
-    if (this.opNameLC == "set" || this.opNameLC == ".set") {
-      this.labelExp?.setSymbolType(SymbolType.Variable)
-
-    } else if (this.opNameLC == "!set") {
-      // TODO: fix this
-      parser.getNextToken()   // var symbol
-      parser.getNextToken()   // "="
-    } else if (this.opNameLC != "=") {
-      this.opExp?.setError("Expecting '='")
-      return
+      if (this.opNameLC == "set" || this.opNameLC == ".set") {
+        // NOTE: In DASM, for example, symbol could be a zoneLocal
+      } else if (this.opNameLC != "=") {
+        this.opExp?.setError("Expecting '='")
+        return
+      }
     }
 
     this.value = parser.mustAddNextExpression()
+    const varSym = varExp?.symbol
+    if (varSym) {
+      varSym.setValue(this.value, SymbolFrom.Equate)
+      varSym.isMutable = true
+    }
+  }
+
+  public override preprocess(asm: Assembler) {
+
+    // process all symbols except label
+    this.forEachExpression((expression) => {
+      if (expression instanceof exp.SymbolExpression) {
+        if (expression != this.labelExp) {
+          asm.processSymbol_pass0(expression)
+        }
+      } else if (expression instanceof exp.PcExpression) {
+        if (this.PC !== undefined) {
+          expression.setValue(this.PC)
+        } else if (!expression.hasError()) {
+          expression.setError("PC not resolvable")
+        }
+      }
+    })
+
+    if (this.labelExp) {
+      asm.processSymbol_pass0(this.labelExp)
+    }
   }
 }
 
@@ -1845,48 +2444,53 @@ export class CpuStatement extends Statement {
     this.pushState = this.hasTrailingOpenBrace()
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      if (this.pushState) {
-        prep.pushNesting(NestingType.Cpu, () => {
-          if (enabled) {
-            // TODO: update cpu state
-          }
-        })
-      }
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
+    if (this.pushState) {
+      asm.pushNesting(NestingType.Cpu, () => {
+        // TODO: update cpu state
+      })
     }
   }
 }
 
 
+// *** VirtualOrgStatement?  Switch merlin to virtual? ***
 export class OrgStatement extends Statement {
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
+  private fillAmount = 0
 
-      // reference any symbols that may be needed to resolve orgValue
-      // TODO: get rid of this after switch to real assembly
-      prep.processSymbolRefs(this)
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
 
-      const valueArg = this.args[0]
-      if (valueArg) {
-        const orgValue = valueArg.resolve()
-        if (orgValue === undefined) {
-          valueArg.setErrorWeak("Must resolve in first pass")
-        } else if (orgValue < 0 || orgValue > 0xFFFF) {
-          valueArg.setError("Invalid org value " + orgValue)
-        } else {
-          prep.setNextPC(orgValue)
-        }
+    const valueArg = this.args[0]
+    if (valueArg) {
+      const orgValue = valueArg.resolve()
+      if (orgValue === undefined) {
+        valueArg.setErrorWeak("Must resolve in first pass")
+      } else if (orgValue < 0 || orgValue > 0xFFFF) {
+        valueArg.setError("Invalid org value " + orgValue)
       } else {
-        // TODO: Merlin treats an org with address as a reorg
-        //  to sync back to the previous org
+        // TODO: does only Merlin treat this as a virtual PC?
+        const isVirtual = asm.syntax == Syntax.MERLIN
+        this.fillAmount = asm.setNextOrg(orgValue, isVirtual)
       }
+    } else {
+      // TODO: Merlin treats an org with address as a reorg
+      //  to sync back to the previous org
     }
   }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+  public pass1(asm: Assembler): number {
+    return this.fillAmount
+  }
+
+  public pass2(asm: Assembler): void {
+    if (this.fillAmount > 0) {
+      // TODO: 0xFF is the DASM ORG fill value, what about others?
+      asm.writeBytePattern(0xFF, this.fillAmount)
+    }
   }
 }
 
@@ -1903,10 +2507,6 @@ export class EntryStatement extends Statement {
         this.labelExp.setError("Variable label not allowed")
       }
     }
-  }
-
-  pass1(asm: Assembler): number | undefined {
-    return 0
   }
 }
 
@@ -1947,103 +2547,205 @@ export class UsrStatement extends Statement {
   }
 }
 
-// MERLIN:  ASC <string-args>
-//          DCI <string-args>
-//          REV <string-args>
-//          STR <string-args>
-//          TXT <naja-string>
-//          TXC <naja-string>
-//          TXI <naja-string>
-//
+//------------------------------------------------------------------------------
+
+// type TextEncoder = (inBytes: number[], singleQuote: boolean) => number[]
+
+// ascii
+// mapped
+// merlin-ascii
+// merlin-ascii-inv
+// merlin-ascii-flashing
+
+// MERLIN:  ASC <string-args>   // params: "<string>[, <hex>]"  <hl-ascii> <optional-hex>
+//          DCI <string-args>   // params: "<string>[, <hex>]"  <hl-asciI> <optional-hex>
+//          INV <string-args>   // params: "<string>[, <hex>]"  <hl-ascii> <optional-hex> (inverted)
+//          FLS <string-args>   // params: "<string>[, <hex>]"  <hl-ascii> <optional-hex> (blinking)
+//          REV <string-args>   // params: "<string>[, <hex>]"  <hl-ascii-reversed> <optional-hex>
+//          STR <string-args>   // params: "<string>[, <hex>]"  <ascii-length> <hl-ascii> <optional-hex>
+//          TXT <naja-string>   // params: "<string>"           <naja> $8D
+//          TXC <naja-string>   // params: "<string>"           <naja>
+//          TXI <naja-string>   // params: "<string>"           <najA>
+// DASM:    ??? (implict in data statements?)
 // ACME:    !pet <string-args>
 //          !raw <string-args>
 //          !scr <string-args>
+//          !scrxor <string-args>
 //          !text <string-args>
-
-// 64TASS:  .text <string-args>
+// CA65:    .asciiz <string-args> // params: "<str>[, <str> ...]"    <map-ascii> [<map-ascii> ...] 00
+//          .literal <string-args> // params: "<exp>[, <exp> ...]"   <ascii>
+//          .byte (implicit)                                         <map-ascii>
+// LISA:    asc <string>          // params: "<string>"         <hl-ascii>
+//          str <string>          // params: "<string>"         <ascii-length> <hl-ascii>
+//          dci <string>          // params: "<string>"         <hl-asciI>
+//          inv <string>          // params: "<string>"         <hl-ascii> (inverted)
+//          blk <string>          // params: "<string>"         <hl-ascii> (blinking)
+// 64TASS:  .text <string-args>   // "<expression>[, <expression> ...]"   // <enc-ascii>
+//          .shift <string-args>  // "<expression>[, <expression> ...]"   // <enc-ascii-7bit>
+//          .shiftl <string-args> // "<expression>[, <expression> ...]"   // <enc-ascii-7bit>-leftshift>
+//          .null <string-args>   // "<expression>[, <expression> ...]"   // <enc-ascii> [<ascii> ..] 00
+//          .ptext <string-args>  // "<expression>[, <expression> ...]"   // <enc-ascii-length> <ascii>
+//          .byte (implicit)
+// ORCA/M   dc (implicit)
 
 // TODO: make this the basis for all the various string/text statements
+// TODO: move mapping functionality into StringExpression
+
 export class TextStatement extends Statement {
 
-  pass1(asm: Assembler): number | undefined {
-    // TODO: temporary to force "??"
-    return 1
+  protected dataBytes?: number[]
+
+  constructor(private highLow: boolean = true, private mapped: boolean = false, private terminator?: number) {
+    super()
   }
-}
 
-//------------------------------------------------------------------------------
+  pass1(asm: Assembler): number {
 
-// MERLIN:  <label> <macro> [<param>;...]
-//   DASM:  <label> <macro> [<param>, ...]
-//   ACME:  <label> +<macro> [<param>, ...]
-//   CA65:
-// 64TASS:  <label> #<macro> [<param>, ...]
-//   LISA:  n/a
+    this.dataBytes = []
+    const strExp = this.findArg("expression") // *** "string"
+    if (strExp && strExp instanceof exp.StringExpression) {
+      const str = strExp.getString()
+      const firstChar = str[0]
+      const lastChar = str[str.length - 1]
+      const setHigh = firstChar == '"'
+      const endMark = str.length - (firstChar == lastChar ? 1 : 0)
 
-export class MacroInvokeStatement extends Statement {
+      this.dataBytes = stringToBytes(str.substring(1, endMark))
 
-  // *** where is this coming from? in this.labelExp?
-  // public macroName?: exp.SymbolExpression
+      // TODO: this will eventually come from assembler state
+      if (this.mapped) {
+        const mapping = this.getMapping()
 
-  parse(parser: Parser) {
-
-    let pushedExpression = false
-    while (true) {
-      let token = parser.getNextToken()
-      if (!token) {
-        break
-      }
-
-      const str = token.getString()
-
-      // TODO: hacks to allow macros to look like opcodes
-      if (parser.syntax == Syntax.CA65) {   // HACK
-        if (str == "#") {
-          parser.addToken(token)
-          continue
-        }
-        if (str == ":") {
-          this.args.push(parser.parseCA65Local(token, false))
-          continue
+        for (let i = 0; i < this.dataBytes.length; i += 1) {
+          this.dataBytes[i] = mapping[this.dataBytes[i]]
+          // TODO: apply error if character not mapable?
         }
       }
 
-      // TODO: fix this multi-statement hack to suppress errors
-      if (parser.syntax == Syntax.ACME) {   // HACK
-        if (str == ":") {
-          parser.ungetToken(token)
-          break
+      if (this.highLow && setHigh) {
+        for (let i = 0; i < this.dataBytes.length; i += 1) {
+          this.dataBytes[i] |= 0x80
         }
       }
 
-      if (parser.syntaxDef.macroInvokeDelimiters.includes(str)) {
-        if (!pushedExpression) {
-          // TODO: push empty expression
+      if (this.terminator !== undefined) {
+        if (this.terminator == -1) {
+          if (this.dataBytes.length > 0) {
+            this.dataBytes[this.dataBytes.length - 1] ^= 0x80
+          }
+        } else {
+          this.dataBytes.push(this.terminator)
         }
-        parser.addToken(token)
-        pushedExpression = false
-        continue
       }
 
-      if (pushedExpression) {
-        parser.addMissingToken(`Missing delimiter "${parser.syntaxDef.macroInvokeDelimiters}"`)
-        break
-      }
+      // TODO: optional hex, invert, flash, reverse, etc.
 
-      const expression = parser.addNextExpression(token)
-      if (!expression) {
-        break
-      }
+    } else {
+      // TODO: handle other expression types
+    }
 
-      this.args.push(expression)
-      pushedExpression = true
+    return this.dataBytes.length
+  }
+
+  public pass2(asm: Assembler): void {
+    // TODO: Handle case where complex expressions that
+    //  forward reference symbols won't be resolve until now.
+    if (this.dataBytes) {
+      asm.writeBytes(this.dataBytes)
     }
   }
 
-  pass1(asm: Assembler): number | undefined {
-    // TODO: for now, just so ??'s are generated
-    return 1
+  protected getMapping(): number[] {
+    // TODO: fix this
+    return []
   }
+}
+
+export class NajaTextStatement extends TextStatement {
+
+  private najaMapping?: number[]
+
+  constructor(terminator?: number) {
+    super(false, true, terminator)
+  }
+
+  protected override getMapping(): number[] {
+    if (!this.najaMapping) {
+      this.najaMapping = new Array(128)
+
+      for (let i = 0; i < 10; i += 1) {
+        this.najaMapping[0x30 + i] = 0x00 + i // numbers
+      }
+
+      this.najaMapping[0x20] = 0x0A           // space
+      this.najaMapping[0x5F] = 0x0A           // space (underscore)
+
+      for (let i = 0; i < 26; i += 1) {
+        this.najaMapping[0x41 + i] = 0x0B + i // letters
+      }
+
+      const symbols = "!\"%\'*+,-./:<=>?"     // symbols
+      for (let i = 0; i < symbols.length; i += 1) {
+        this.najaMapping[symbols.charCodeAt(i)] = 0x25 + i
+      }
+
+      this.najaMapping[0x0A] = 0x8B           // \n
+    }
+    return this.najaMapping
+  }
+}
+
+function stringToBytes(str: string): number[] {
+  const bytes: number[] = []
+  let offset = 0
+  while (offset < str.length) {
+    let value = str.charCodeAt(offset)
+    if (str[offset] == '\\') {
+      offset += 1
+      if (offset < str.length) {
+        switch (str[offset]) {
+          case '"':
+          case "'":
+          case "\\":
+            value = str.charCodeAt(offset)
+            break
+          case "t":
+            value = 9
+            break
+          case "n":
+            value = 10
+            break
+          case "r":
+            value = 13
+            break
+          case "x":
+            const hexStr: string = str[offset + 1] + str[offset + 2]
+            offset += 2
+            if (offset > str.length) {
+              // TODO: report error on incomplete x escape
+              value = 255
+              break
+            }
+            value = parseInt(hexStr, 16)
+            if (isNaN(value)) {
+              // TODO: report error on bad x escape
+              value = 255
+              break
+            }
+            break
+          default:
+            // TODO: report error on unknown escape
+            value = 255
+            break
+        }
+      } else {
+        // TODO: report error of dangling escape?
+      }
+    }
+    bytes.push(value & 0x7f)
+    offset += 1
+  }
+  return bytes
 }
 
 //------------------------------------------------------------------------------
@@ -2057,68 +2759,53 @@ export class DummyStatement extends Statement {
     // }
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
+  public override preprocess(asm: Assembler): void {
 
-      // NOTE: With Merlin, the start of a dummy section implicitly
-      //  closes any currently active dummy section first.
-      // TODO: consider controlling this with a strict/lax switch
-      if (prep.module.project.syntax == Syntax.MERLIN) {
-        if (prep.isNested(NestingType.Struct)) {
-          prep.popNesting()
-          prep.scopeState.popScope()
-        }
-      }
-
-      const currentPC = prep.getCurrentPC()
-      prep.pushNesting(NestingType.Struct, () => {
-        if (enabled) {
-          prep.setNextPC(currentPC)
-        }
-      })
-
-      // reference any symbols that may be needed to resolve orgValue
-      // TODO: get rid of this after switch to real assembly
-      prep.processSymbolRefs(this)
-
-      const valueArg = this.args[0]
-      if (valueArg) {
-        const orgValue = valueArg.resolve()
-        if (orgValue === undefined) {
-          // *** TODO: only if doing full assemble ***
-          valueArg.setErrorWeak("Must resolve in first pass")
-        } else {
-          prep.setNextPC(orgValue)
-        }
+    // NOTE: With Merlin, the start of a dummy section implicitly
+    //  closes any currently active dummy section first.
+    // TODO: consider controlling this with a strict/lax switch
+    if (asm.module.project.syntax == Syntax.MERLIN) {
+      if (asm.isNested(NestingType.Struct)) {
+        asm.popNesting(true)
       }
     }
-  }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+    asm.pushNesting(NestingType.Struct, () => {
+      asm.popSegment()
+    })
+
+    // reference any symbols that may be needed to resolve orgValue
+    super.preprocess(asm)
+
+    const valueArg = this.args[0]
+    if (valueArg) {
+      let orgValue = valueArg.resolve()
+      if (orgValue === undefined) {
+        valueArg.setErrorWeak("Must resolve in first pass")
+        orgValue = 0
+      }
+
+      asm.pushAndSetDummySegment(orgValue)
+    }
   }
 }
 
 export class DummyEndStatement extends Statement {
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (enabled) {
-      if (!prep.isNested(NestingType.Struct)) {
-        this.setError("Missing begin for this dummy")
-        return
-      }
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
 
-      if (prep.topNestingType() != NestingType.Struct) {
-        this.setError("Dangling scoped type")
-        return
-      }
-      prep.popNesting(true)   // pass true so pop proc gets called
-      prep.scopeState.popScope()
+    if (!asm.isNested(NestingType.Struct)) {
+      this.setError("Missing begin for this dummy")
+      return
     }
-  }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+    if (asm.topNestingType() != NestingType.Struct) {
+      this.setError("Dangling scoped type")
+      return
+    }
+
+    asm.popNesting(true)      // pass true so pop proc gets called
   }
 }
 
@@ -2127,27 +2814,54 @@ export class DummyEndStatement extends Statement {
 // CA65:  .segment "<name>" [: (direct|zeropage|absolute)]
 //                          "direct" means immediate
 
-// TODO: reconcile seg.u and dummy statements (currently DASM-only)
+// ORCA/M:  <name> start [<loadseg>]
+// 64TASS:  section <name>
+//          dsection <name>
+
 export class SegmentStatement extends Statement {
 
-  private impliedName?: string
+  private segName?: string
 
-  constructor(impliedName?: string) {
+  constructor(segName?: string) {
     super()
-    this.impliedName = impliedName
+    this.segName = segName
   }
 
-  pass1(asm: Assembler): number | undefined {
-    return 0
+  public override preprocess(asm: Assembler): void {
+
+    super.preprocess(asm)
+
+    // TODO: DASM: label on segment assigned after segment change
+
+    let addressing = "implicit"
+    let initialized = true
+
+    // DASM specific
+    if (this.opNameLC == "seg.u") {
+      initialized = false
+    }
+
+    // TODO: "quoted-name" for some syntaxes
+    const segNameArg = this.findArg("seg-name") // *** quoted string in other syntaxes
+    if (segNameArg) {
+      this.segName = segNameArg.getString()
+    } else {
+      // TODO: DASM-only?, when no game is given -- same as default
+      this.segName = "code"
+    }
+
+    asm.setSegment(this.segName, addressing, initialized)
   }
 }
+
+// TODO: EndSegmentStatement
+// ORCA/M:  end
+//  64TASS: endsection [<name>]
+//          send [<name>]
 
 //------------------------------------------------------------------------------
 
 export class ListStatement extends Statement {
-  pass1(asm: Assembler): number | undefined {
-    return 0
-  }
 }
 
 //==============================================================================
@@ -2182,10 +2896,6 @@ export class ImportExportStatement extends Statement {
     this.isExport = isExport
     this.isZpage = isZpage
   }
-
-  pass1(asm: Assembler): number | undefined {
-    return 0
-  }
 }
 
 //------------------------------------------------------------------------------
@@ -2203,27 +2913,28 @@ export class AssertTrueStatement extends Statement {
     this.assertTrue = assertTrue
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
+  // TODO: should argument parsing/capture be done in preprocess instead?
 
-    let condArg: exp.Expression | undefined
-    let condition = this.always
-    if (!condition) {
+  // NOTE: Can't commit to error until pass2,
+  //  after forward references are resolved, for example.
+  pass2(asm: Assembler): void {
 
-      // TODO: make this automatic when looking for <condition>?
-      prep.processSymbolRefs(this)
+    let assertArg: exp.Expression | undefined
+    let assertCond = !this.assertTrue
+    if (!this.always) {
 
-      condArg = this.findArg("condition")
-      if (condArg) {
-        const value = condArg.resolve()
-        if (condition === undefined) {
+      assertArg = this.findArg("condition")
+      if (assertArg) {
+        const value = assertArg.resolve()
+        if (assertCond === undefined) {
           // TODO: decide to ignore or trigger when condition not resolved
           return
         }
-        condition = value != 0
+        assertCond = value != 0
       }
     }
 
-    if (condition != this.assertTrue) {
+    if (assertCond != this.assertTrue) {
 
       let type = this.typeName
       if (!type) {
@@ -2249,9 +2960,9 @@ export class AssertTrueStatement extends Statement {
         })
 
         if (error) {
-          (condArg ?? this).setError("ERROR: " + message)
+          (assertArg ?? this).setError("ERROR: " + message)
         } else {
-          (condArg ?? this).setWarning("Warning: " + message)
+          (assertArg ?? this).setWarning("Warning: " + message)
         }
       }
     }
@@ -2297,6 +3008,9 @@ export class SubroutineStatement extends Statement {
 // ACME-only
 //==============================================================================
 
+// TODO: all of these may need a preprocess_disabled method
+//  See ZoneStatement.preprocess_disabled example
+
 //   ACME:  <label> !zone [<name>] [ { <block> } ]
 //          <label> !zn [<name>] [ { <block> } ]
 
@@ -2335,21 +3049,28 @@ export class ZoneStatement extends Statement {
     }
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    if (this.pushState) {
-      prep.pushNesting(NestingType.Zone, () => {
-        if (enabled) {
-          prep.scopeState.popZone()
-        }
-      })
-    }
+  // TODO: preprocess_disabled?
+  //  (push nesting so there's something to pop?)
+  // public override preprocess_disabled(asm: Assembler) {
+  //   super.preprocess_disabled(asm)
+  //
+  //   if (this.pushState) {
+  //     asm.pushNesting(NestingType.Zone, () => {
+  //     })
+  //   }
+  // }
 
-    if (enabled) {
-      if (this.pushState) {
-        prep.scopeState.pushZone(this.zoneTitle)
-      } else {
-        prep.scopeState.setZone(this.zoneTitle)
-      }
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
+    if (this.pushState) {
+      asm.pushNesting(NestingType.Zone, () => {
+        asm.scopeState.popZone()
+      })
+
+      asm.scopeState.pushZone(this.zoneTitle)
+    } else {
+      asm.scopeState.setZone(this.zoneTitle)
     }
   }
 }
@@ -2358,15 +3079,16 @@ export class ZoneStatement extends Statement {
 // TODO: consider folding into OrgStatement?
 export class PseudoPcStatement extends Statement {
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
-    prep.pushNesting(NestingType.PseudoPc, () => {
-      if (enabled) {
-        // TODO: pop behaviour
-      }
+  // TODO: preprocess_disabled?
+
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
+    asm.pushNesting(NestingType.PseudoPc, () => {
+      // TODO: pop behaviour
     })
-    if (enabled) {
-      // TODO: actually change PC
-    }
+
+    // TODO: actually change PC
   }
 }
 
@@ -2380,18 +3102,16 @@ export class XorStatement extends Statement {
     this.pushState = this.hasTrailingOpenBrace()
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
     if (this.pushState) {
-      prep.pushNesting(NestingType.Xor, () => {
-        if (enabled) {
-          // TODO: manage xor value state
-        }
+      asm.pushNesting(NestingType.Xor, () => {
+        // TODO: manage xor value state
       })
     }
 
-    if (enabled) {
-      // TODO: manage xor value state
-    }
+    // TODO: manage xor value state
   }
 }
 
@@ -2406,18 +3126,16 @@ export class AddressStatement extends Statement {
     this.pushState = this.hasTrailingOpenBrace()
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
     if (this.pushState) {
-      prep.pushNesting(NestingType.Addr, () => {
-        if (enabled) {
-          // TODO: manage addr state
-        }
+      asm.pushNesting(NestingType.Addr, () => {
+        // TODO: manage addr state
       })
     }
 
-    if (enabled) {
-      // TODO: manage addr state
-    }
+    // TODO: manage addr state
   }
 }
 
@@ -2431,18 +3149,16 @@ export class ConvTabStatement extends Statement {
     this.pushState = this.hasTrailingOpenBrace()
   }
 
-  preprocess(prep: Preprocessor, enabled: boolean): void {
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
     if (this.pushState) {
-      prep.pushNesting(NestingType.ConvTab, () => {
-        if (enabled) {
-          // TODO: manage converstion table state
-        }
+      asm.pushNesting(NestingType.ConvTab, () => {
+        // TODO: manage converstion table state
       })
     }
 
-    if (enabled) {
-      // TODO: manage converstion table state
-    }
+    // TODO: manage converstion table state
   }
 }
 

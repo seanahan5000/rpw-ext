@@ -1,5 +1,6 @@
 
 import { Statement } from "../statements"
+import { FunctionExpression } from "../functions"
 
 //------------------------------------------------------------------------------
 
@@ -95,10 +96,18 @@ export type OpDef = {
 
 export type KeywordDef = {
   create?: () => Statement
-  alias?: string,
-  label?: string,
-  params?: string,
-  desc?: string,
+  alias?: string
+  label?: string
+  params?: string
+  desc?: string
+  paramsList?: any    // ListParam
+}
+
+export type FunctionDef = {
+  create?: () => FunctionExpression
+  alias?: string
+  params?: string
+  desc?: string
   paramsList?: any    // ListParam
 }
 
@@ -112,6 +121,12 @@ export class SyntaxDef {
   public keywordMap: Map<string, KeywordDef> = new Map<string, KeywordDef>()
   public unaryOpMap: Map<string, OpDef> = new Map<string, OpDef>()
   public binaryOpMap: Map<string, OpDef> = new Map<string, OpDef>()
+
+  // only CA65 currently supports/needs this
+  public functionMap?: Map<string, FunctionDef> = new Map<string, FunctionDef>()
+
+  // case sensitivity of symbols
+  public caseSensitiveSymbols = false
 
   // leading operators that are considered part of a symbol/keyword/macro when tokenizing
   public symbolTokenPrefixes: string = ""
@@ -148,7 +163,9 @@ export class SyntaxDef {
   // normally "::" or "." for syntaxes that support scoping
   public scopeSeparator: string = ""
 
-  public defaultOrg: number = 0
+  // default org when none is provided (not all assemblers have one)
+  // TODO: get rid of this completely?
+  public defaultOrg?: number
 }
 
 //------------------------------------------------------------------------------

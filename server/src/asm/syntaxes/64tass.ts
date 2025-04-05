@@ -11,6 +11,7 @@ import * as stm from "../statements"
 
 export class Tass64Syntax extends SyntaxDef {
 
+  public caseSensitiveSymbols = false        // TODO: check this
   public symbolTokenPrefixes = "._\\"
   public symbolTokenContents = ""     // TODO: "." within symbol? In conjuctions w/scope?
   public cheapLocalPrefixes = "_"
@@ -19,7 +20,7 @@ export class Tass64Syntax extends SyntaxDef {
   public namedParamPrefixes = "\\"
   public keywordPrefixes = "."
   public keywordsInColumn1 = true
-  public macroInvokePrefixes = "#"
+  public macroInvokePrefixes = "#."
   public macroInvokeDelimiters = ","
   public allowLabelTrailingColon = true
   public allowIndentedAssignment = true
@@ -91,6 +92,7 @@ export class Tass64Syntax extends SyntaxDef {
       // macros
       [ ".macro",   { create: () => { return new stm.MacroDefStatement() },
                       label:  "<symbol>",
+// *** maybe change type-param to make it easier to detect defaults? ***
                       params: "[ [<type-param>[=<default>]][, [<type-param>[=<default>]] ...] ]",
                       desc:   "Start of macro block" } ],
       [ ".endmacro",{ create: () => { return new stm.EndMacroDefStatement() },
@@ -282,10 +284,10 @@ export class Tass64Syntax extends SyntaxDef {
                       params: "",
                       desc:   "End of a .for or .bfor loop block" } ],
       [ ".rept",    { // TODO
-                      params: "<expression>",
+                      params: "<loop-count>",
                       desc:   "Repeat enclosed lines the specified number of times" } ],
       [ ".brept",   { // TODO
-                      params: "<expression>",
+                      params: "<loop-count>",
                       desc:   "Repeat enclosed lines the specified number of times" } ],
       [ ".endrept", { // TODO
                       params: "",

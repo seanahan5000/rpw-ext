@@ -2,7 +2,7 @@
 import { SourceFile } from "./project"
 import { Symbol, SymbolType } from "./symbols"
 import { SymbolExpression } from "./expressions"
-import { Statement } from "./statements"
+import { ContinuedStatement, Statement } from "./statements"
 
 // TODO: maybe move to symbols?
 // *** or move to lsp_utils? ***
@@ -36,7 +36,7 @@ class EditCollection {
 
 export function renameSymbol(symbol: Symbol, newName: string): FileEdits | undefined {
   let edits = new EditCollection()
-  const oldName = symbol.getSimpleNameToken(symbol.definition).getString()
+  const oldName = symbol.definition.getSimpleName().asString
   renameSymbolDefAndRefs(symbol, oldName, newName, edits)
   return edits.fileEdits.size ? edits.fileEdits : undefined
 }
@@ -89,7 +89,7 @@ function isLocalStart(statement: Statement, symbolType: SymbolType): boolean {
   const symExp = statement.labelExp
   if (symExp && symExp instanceof SymbolExpression && symExp.symbol) {
     if (symbolType == SymbolType.ZoneLocal) {
-      return symExp.symbol.isZoneStart
+      return symExp.symbol.isZoneStart ?? false
     } else if (symbolType == SymbolType.CheapLocal) {
       return symExp.symbolType == SymbolType.Simple
     }
@@ -137,7 +137,7 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
       continue
     }
 
-    const oldName = symbol.getSimpleNameToken(statement.labelExp).getString()
+    const oldName = statement.labelExp.getSimpleName().asString
     const simpleIndex = parseInt(oldName)
     if (simpleIndex != simpleIndex) {   // NaN != NaN
       // look for :SKIPA and :LOOP1 locals, common in old Naja source code
@@ -176,15 +176,35 @@ function renameSymbolDefAndRefs(symbol: Symbol, oldName: string,
 
 function renameSymExp(symExp: SymbolExpression, oldName: string,
     newName: string | undefined, edits: EditCollection) {
-  const statement = symExp.sourceFile?.statements[symExp.lineNumber]
+
+  let editLineNumber = symExp.lineNumber
+  let statement = symExp.sourceFile?.statements[editLineNumber]
   if (!statement) {
     return
   }
+
   const range = symExp.getRange()
   if (range) {
     let editStart = range.start
     let editEnd = range.end
     let editText = ""
+
+    // adjust for line continuations
+    while (statement.endOffset && editStart >= statement.endOffset) {
+      editLineNumber += 1
+      statement = symExp.sourceFile?.statements[editLineNumber]
+      if (!statement) {
+        return
+      }
+      if (!(statement instanceof ContinuedStatement)) {
+        return
+      }
+    }
+    if (statement.startOffset) {
+      editStart -= statement.startOffset
+      editEnd -= statement.startOffset
+    }
+
     // replace last instance of newName so rest of scope path is unchanged
     if (newName) {
       editText = symExp.getString()
@@ -218,7 +238,7 @@ function renameSymExp(symExp: SymbolExpression, oldName: string,
       }
     }
     if (symExp.sourceFile) {
-      edits.addEdit(symExp.sourceFile, symExp.lineNumber, editStart, editEnd, editText)
+      edits.addEdit(symExp.sourceFile, editLineNumber, editStart, editEnd, editText)
     }
   }
 }

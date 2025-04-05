@@ -1,13 +1,13 @@
 
 import * as fs from 'fs'
-import { RpwProject, RpwSettings } from "../rpw_types"
+import { RpwProject, RpwSettings, RpwDefine } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
 import { Parser } from "./parser"
-import { Preprocessor } from "./assembler"
-import { TypeDef } from "./assembler"
-import { Symbol } from "./symbols"
+import { Assembler } from "./assembler"
+import { Symbol, SymbolType, SymbolFrom } from "./symbols"
+import { SymbolExpression, NumberExpression } from "./expressions"
 
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
@@ -18,13 +18,13 @@ function fixBackslashes(inString: string): string {
 export type LineRecord = {
   sourceFile: SourceFile,
   lineNumber: number,
+  // TODO: startColumn? endColumn?
   statement?: Statement
-  // TODO: isVisible?
+  isHidden?: boolean
+  bytes?: (number | undefined)[]
 
-  address?: number
-  size?: number       // *** use bytes.length instead separate size?
-                      // *** only valid from pass1 to pass2?
-  bytes?: number[]
+  // lines records generate from this macroInvoke statement
+  children?: LineRecord[]
 }
 
 
@@ -64,12 +64,15 @@ export class Project {
   public upperCase: boolean = true
   public tabSize = 4
   public tabStops = [0, 16, 20, 40]
+  public caseSensitive?: boolean    // overrides syntax definition
 
+  public defines: RpwDefine[] = []
   public includes: string[] = []    // NOTE: shared files, not include paths
   public modules: Module[] = []
 
   public rootDir = "."
   public srcDir: string = ""
+  public binDir: string = ""
 
   public includePaths: string[] = []
   public isTemporary = false
@@ -102,6 +105,13 @@ export class Project {
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
+    this.binDir = this.buildFullDirName(rpwProject.binDir)
+
+    if (rpwProject.defines) {
+      for (let define of rpwProject.defines) {
+        this.defines.push({ name: define.name, value: define.value })
+      }
+    }
 
     if (rpwProject.includes) {
       for (let include of rpwProject.includes) {
@@ -132,22 +142,41 @@ export class Project {
       return false
     }
     for (let module of rpwProject.modules) {
-      if (module.src) {
-        let srcPath = ""
-        let srcName = fixBackslashes(module.src)
-        const lastSlash = srcName.lastIndexOf("/")
-        if (lastSlash != -1) {
-          srcPath = srcName.substring(0, lastSlash)
-          srcName = srcName.substring(lastSlash + 1)
-          if (srcPath.indexOf("/") != 0) {
-            srcPath = "/" + srcPath
+      if (module.enabled ?? true) {
+        if (module.src) {
+
+          let srcPath = ""
+          let srcName = fixBackslashes(module.src)
+          let lstFilePath: string | undefined
+
+          const lastSlash = srcName.lastIndexOf("/")
+          if (lastSlash != -1) {
+            srcPath = srcName.substring(0, lastSlash)
+            srcName = srcName.substring(lastSlash + 1)
+            if (srcPath.indexOf("/") != 0) {
+              srcPath = "/" + srcPath
+            }
+            if (srcPath == "/") {
+              srcPath = ""
+            }
           }
-          if (srcPath == "/") {
-            srcPath = ""
+
+          // check for wildcards in src property
+          // (only supported at beginning of name)
+          if (srcName.startsWith("*")) {
+            const suffix = srcName.substring(1)
+            const dirPath = cleanPath(this.srcDir + srcPath)
+            const dirList = fs.readdirSync(dirPath)
+            for (let fileName of dirList) {
+              if (fileName.endsWith(suffix)) {
+                this.modules.push(new Module(this, srcPath, fileName))
+              }
+            }
+          } else {
+            const saveName = module.save
+            this.modules.push(new Module(this, srcPath, srcName, saveName))
           }
         }
-
-        this.modules.push(new Module(this, srcPath, srcName))
       }
     }
     return true
@@ -194,6 +223,9 @@ export class Project {
     if (this.tabStops[0] != 0) {
       this.tabStops.unshift(0)
     }
+
+    // optional override, not a hard setting
+    this.caseSensitive = settings?.caseSensitive
 
     // *** this or caller should send syntax changed notification to client ***
   }
@@ -281,14 +313,14 @@ export class Project {
   //  contents will be created.
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    const isShared = this.includes.indexOf(fullPath) != -1
-    if (isShared) {
-      for (let sourceFile of this.sharedFiles) {
-        if (sourceFile.fullPath == fullPath) {
-          return sourceFile
-        }
-      }
-    }
+    // const isShared = this.includes.indexOf(fullPath) != -1
+    // if (isShared) {
+    //   for (let sourceFile of this.sharedFiles) {
+    //     if (sourceFile.fullPath == fullPath) {
+    //       return sourceFile
+    //     }
+    //   }
+    // }
 
     let lines = this.getFileLines(fullPath)
     if (!lines) {
@@ -296,9 +328,9 @@ export class Project {
     }
 
     const sourceFile = new SourceFile(module, fullPath, lines)
-    if (isShared) {
-      this.sharedFiles.push(sourceFile)
-    }
+    // if (isShared) {
+    //   this.sharedFiles.push(sourceFile)
+    // }
 
     module.sourceFiles.push(sourceFile)
     // *** should the sourceFile be parsed right away, here? ***
@@ -324,20 +356,10 @@ export class Project {
 export class Module {
 
   public project: Project
-  private srcPath: string     // always in the form "/path" or ""
+  public srcPath: string     // always in the form "/path" or ""
   private srcName: string     // always just the file name (*** without suffix?)
+  public saveName?: string
   public symbolMap = new Map<string, Symbol>
-  public variableMap = new Map<string, Symbol>
-
-  // *** split by type ***
-  public macroMap = new Map<string, TypeDef>
-
-  //*** separate list of exported symbols (also in this.symbols)
-  //*** when creating xxx = $ffff symbols, search all other module exports and link
-    //*** linked symbol needs file/line information or linkage
-  //*** list of imported symbols, linked to this.symbols from import file
-
-  // TODO: vars list?
 
   // list of files used to assemble this module, in include order
   public sourceFiles: SourceFile[] = []
@@ -345,29 +367,78 @@ export class Module {
   // list of all statements for the module, in assembly order, including macro expansions
   public lineRecords: LineRecord[] = []
 
-  constructor(project: Project, srcPath: string, srcName: string) {
+  constructor(project: Project, srcPath: string, srcName: string, saveName?: string) {
     this.project = project
     this.srcPath = srcPath
     this.srcName = srcName
+    this.saveName = saveName
   }
+
+  static dumpFile = false
 
   update(syntaxStats: number[]) {
     this.sourceFiles = []
     this.lineRecords = []
-    this.symbolMap = new Map<string, Symbol>
-    this.variableMap = new Map<string, Symbol>
-    this.macroMap = new Map<string, TypeDef>
 
-    const asm = new Preprocessor(this)
-    const lineRecords = asm.preprocess(this.srcName, syntaxStats)
-    if (!lineRecords) {
-      // *** error handling ***
-      return
+    // TODO: maybe grab from assembler when complete instead?
+    this.symbolMap = new Map<string, Symbol>
+
+    // turn defines into symbols
+    for (let define of this.project.defines) {
+      const symExp = new SymbolExpression([], SymbolType.Simple, true)
+      const numExp = new NumberExpression([], define.value ?? 1, false)
+      symExp.symbol!.setValue(numExp, SymbolFrom.Define)
+      symExp.fullName = define.name
+      this.symbolMap.set(define.name, symExp.symbol!)
     }
 
-    this.lineRecords = lineRecords
+    const asm = new Assembler(this)
+    this.lineRecords = asm.assemble_pass01(this.srcName, syntaxStats)
+    asm.assemble_pass2(this.lineRecords)
 
-    asm.assemble(this.lineRecords)
+    // TODO: debug code, to be removed
+    if (Module.dumpFile) {
+
+      console.log(this.srcName)
+
+      // if (this.srcName == "xxx")
+      {
+        for (let line of this.lineRecords) {
+          let str = "  "
+          if (!line.statement?.enabled) {
+            str = "X "
+          } else if (line.isHidden) {
+            str = "* "
+          }
+
+          if (line.bytes?.length) {
+
+            str += line.statement?.PC?.toString(16).padStart(4, "0").toUpperCase() + ": "
+
+            for (let i = 0; i < 3; i += 1) {
+              if (!line.bytes || i >= line.bytes.length) {
+                str += "  "
+              } else {
+                if (line.bytes[i] === undefined) {
+                  str += "??"
+                } else {
+                  str += line.bytes[i]!.toString(16).padStart(2, "0").toUpperCase()
+                }
+              }
+              if (line.bytes.length <= 3 || i < 2) {
+                str += " "
+              } else {
+                str += "+"
+              }
+            }
+          } else {
+            str = str.padEnd(2 + 6 + 9, " ")
+          }
+          str += line.statement?.sourceLine ?? ""
+          console.log(str)
+        }
+      }
+    }
 
     // link up all symbols
     // TODO: move to assembler?
@@ -391,6 +462,14 @@ export class Module {
     // for (let i = 0; i < this.lineRecords.length; i += 1) {
     //   this.lineRecords[i].statement?.postParse()
     // }
+  }
+
+  public getBinFilePath(extFileName: string): string {
+    let binName = fixBackslashes(extFileName)
+    if (binName[0] == "/") {
+      binName = binName.substring(1)
+    }
+    return cleanPath(this.project.binDir + "/" + binName)
   }
 
   // <workspace-dir>/<srcDir>/<src>/<fileName>
@@ -451,6 +530,14 @@ export class Module {
       }
       return this.project.openSourceFile(this, fullPath)
     }
+  }
+
+  public getFileByIndex(fileIndex: number): SourceFile {
+    return this.sourceFiles[fileIndex]
+  }
+
+  public getCurrentFileIndex(): number {
+    return this.sourceFiles.length - 1
   }
 }
 

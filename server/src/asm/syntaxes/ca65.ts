@@ -1,6 +1,7 @@
 
-import { SyntaxDef, KeywordDef, ParamDef, OpDef, Op } from "./syntax_types"
+import { SyntaxDef, KeywordDef, FunctionDef, ParamDef, OpDef, Op } from "./syntax_types"
 import * as stm from "../statements"
+import * as fnc from "../functions"
 
 //------------------------------------------------------------------------------
 // CA65
@@ -13,6 +14,7 @@ import * as stm from "../statements"
 
 export class Ca65Syntax extends SyntaxDef {
 
+  public caseSensitiveSymbols = true
   public symbolTokenPrefixes = ".@"
   public symbolTokenContents = ""
   public cheapLocalPrefixes = "@"
@@ -28,7 +30,7 @@ export class Ca65Syntax extends SyntaxDef {
   public allowLineContinuation = true
   public stringEscapeChars = "\\'\"tnrx"
   public scopeSeparator = "::"
-  public defaultOrg = 0x0800        // TODO: choose correct value
+  public defaultOrg = undefined
 
   // *** TODO: pseudo functions separately? ***
 
@@ -197,7 +199,7 @@ export class Ca65Syntax extends SyntaxDef {
 
       // looping
       [ ".repeat",    { create: () => { return new stm.RepeatStatement() },
-                        params: "<const-expression>[, <symbol-def>]",
+                        params: "<loop-count>[, <loop-var>]",
                         desc:   "Repeat commands a constant number of times." } ],
       [ ".endrepeat", { create: () => { return new stm.EndRepStatement() },
                         params: "",
@@ -271,19 +273,19 @@ export class Ca65Syntax extends SyntaxDef {
 
       // C-types
       [ ".enum",      { create: () => { return new stm.EnumStatement() },
-                        params: "<type-name>",
+                        params: "[<type-name>]",
                         desc:   "Start an enumeration" } ],
       [ ".endenum",   { create: () => { return new stm.EndEnumStatement() },
                         params: "",
                         desc:   "End a .enum declaration" } ],
       [ ".struct",    { create: () => { return new stm.StructStatement() },
-                        params: "<type-name>",
+                        params: "[<type-name>]",
                         desc:   "Start a struct definition" } ],
       [ ".endstruct", { create: () => { return new stm.EndStructStatement() },
                         params: "",
                         desc:   "End a struct definition" } ],
       [ ".union",     { create: () => { return new stm.UnionStatement() },
-                        params: "<type-name>",
+                        params: "[<type-name>]",
                         desc:   "Start a union definition" } ],
       [ ".endunion",  { create: () => { return new stm.EndUnionStatement() },
                         params: "",
@@ -326,16 +328,16 @@ export class Ca65Syntax extends SyntaxDef {
                         params: "<condition>, <assert-type> [,<string>]",
                         desc:   "Add an assert" } ],
       [ ".error",     { create: () => { return new stm.AssertTrueStatement("error", true) },
-                        params: "<string>",
+                        params: "<expression>",   // TODO: <string> later
                         desc:   "Force an assembly error" } ],
       [ ".fatal",     { create: () => { return new stm.AssertTrueStatement("fatal", true) },
-                        params: "<string>",
+                        params: "<expression>",   // TODO: <string> later
                         desc:   "Force an assembly error and terminate assembly" } ],
       [ ".warning",   { create: () => { return new stm.AssertTrueStatement("warning", true) },
-                        params: "<string>",
+                        params: "<expression>",   // TODO: <string> later
                         desc:   "Force an assembly warning" } ],
       [ ".out",       { // TODO
-                        params: "<string>",
+                        params: "<expression>",   // TODO: <string> later
                         desc:   "Output a string to the console without producing an error" } ],
 
       [ ".fileopt",   { // TODO
@@ -421,6 +423,9 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".version",   { // TODO
                         params: "",
                         desc:   "Return the assembler version" } ],
+    ])
+
+    this.functionMap = new Map<string, FunctionDef>([
 
       // pseudo functions
       [ ".addrsize",  { // TODO
@@ -441,7 +446,7 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".const",     { // TODO
                         params: "(<expression>)",
                         desc:   "True if the argument is a constant expression" } ],
-      [ ".defined",   { // TODO
+      [ ".defined",   { create: () => { return new fnc.DefinedFunction() },
                         params: "(<symbol-weakref>)",
                         desc:  "True if symbol has already been defined somewhere up to the current position" } ],
       [ ".def",       { alias:  ".defined" } ],
@@ -489,20 +494,22 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".right",     { // TODO
                         params: "(<expression>, <list>)",
                         desc:   "Extracts the right part of a given token list" } ],
-      [ ".sizeof",    { // TODO
-                        params: "(<symbol>)",
+      [ ".sizeof",    { create: () => { return new fnc.SizeofFunction() },
+                        params: "(<symbol-ref>)",
                         desc:  "Size of the symbol" } ],
       [ ".sprintf",   { // TODO
                         params: "(<string-exp>[, <string-exp> ...])",
                         desc:  "Formatted string" } ],
       [ ".strat",     { // TODO
-                        params: "(<string>, <index>)",
+                        // TODO: should be <string> eventually
+                        params: "(<expression>, <index>)",
                         desc:   "Value of the character at the given position as an integer value" } ],
       [ ".string",    { // TODO
                         params: "(<expression>)",
                         desc:   "Convert argument into a string constant" } ],
-      [ ".strlen",    { // TODO
-                        params: "(<string-arg>)",
+      [ ".strlen",    { create: () => { return new fnc.StrlenFunction() },
+                        // TODO: should be <string> eventually
+                        params: "(<expression>)",
                         desc:   "Length of the string" } ],
       [ ".tcount",    { // TODO
                         params: "(<list>)",

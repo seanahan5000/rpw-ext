@@ -17,6 +17,7 @@ import * as stm from "../statements"
 
 export class LisaSyntax extends SyntaxDef {
 
+  public caseSensitiveSymbols = false
   public symbolTokenPrefixes = "."
   public symbolTokenContents = ""
   public cheapLocalPrefixes = ""
