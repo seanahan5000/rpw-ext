@@ -41,14 +41,11 @@ export class Symbol {
   // NOTE: all booleans are undefined by default, so effectively false
 
   // NOTE: could pack these into bits
-  public isZPage?: boolean
+  public isZPage?: boolean      // *** set this using import/export sizing info
   public isConstant?: boolean   // 8-bit only? automatic in DUMMY 0?
   public isSubroutine?: boolean
   public isData?: boolean
   public isCode?: boolean
-
-  // set by ENT command
-  public isEntryPoint?: boolean
 
   // set by SUBROUTINE and .zone commands
   public isZoneStart?: boolean
@@ -73,8 +70,17 @@ export class Symbol {
     this.from = from
   }
 
+  // TODO: make this a call instead of a getter?
   get type(): SymbolType {
     return this.definition.symbolType
+  }
+
+  public isImport(): boolean {
+    return this.definition.isImport()
+  }
+
+  public isExport(): boolean {
+    return this.definition.isExport()
   }
 
   addReference(symExp: SymbolExpression) {

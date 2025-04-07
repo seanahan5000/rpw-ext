@@ -162,7 +162,7 @@ export class Parser extends Tokenizer {
     this.sourceFile = sourceFile
     this.syntaxStats = syntaxStats
     this.lineNumber = 0
-    this.syntax = sourceFile.module.project.syntax
+    this.syntax = sourceFile.project.syntax
 
     while (this.lineNumber < lines.length) {
 

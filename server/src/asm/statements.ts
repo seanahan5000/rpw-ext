@@ -2494,22 +2494,62 @@ export class OrgStatement extends Statement {
   }
 }
 
+//------------------------------------------------------------------------------
+
+// MERLIN:   <label> ENT
+// MERLIN16:         ENT <symbol>[, <symbol> ...]
 
 export class EntryStatement extends Statement {
 
   postParse(parser: Parser) {
     if (this.labelExp) {
-      if (!this.labelExp.isVariableType()) {
-        if (this.labelExp.symbol) {
-          this.labelExp.symbol.isEntryPoint = true
-        }
-      } else {
+      if (this.labelExp.isVariableType()) {
         this.labelExp.setError("Variable label not allowed")
+        return
       }
+      // TODO: will be forced to definition?
+      this.labelExp.setIsExport()
     }
+    // TODO: else merlin 16 format
   }
 }
 
+// MERLIN:   <label> EXT
+// MERLIN16:         EXT <symbol>[, <symbol> ...]
+
+export class ExternStatement extends Statement {
+
+  postParse(parser: Parser) {
+    if (this.labelExp) {
+      if (this.labelExp.isVariableType()) {
+        this.labelExp.setError("Variable label not allowed")
+        return
+      }
+      // TODO: will be forced to weak definition?
+      this.labelExp.setIsImport()
+    }
+    // TODO: else merlin 16 format
+  }
+}
+
+// CA65:  .IMPORT <name>[:<mode>] [, ...]
+//        .EXPORT <name>[:<mode>] [, ...]
+//        .IMPORTZP <name> [, ...]
+//        .EXPORTZP <name>[, ...]
+
+export class ImportExportStatement extends Statement {
+
+  private isExport: boolean
+  private isZpage: boolean
+
+  constructor(isExport: boolean, isZpage: boolean) {
+    super()
+    this.isExport = isExport
+    this.isZpage = isZpage
+  }
+}
+
+//------------------------------------------------------------------------------
 
 export class UsrStatement extends Statement {
 
@@ -2876,25 +2916,6 @@ export class FeatureStatement extends Statement {
 
   postParse(parser: Parser) {
     // TODO: check all args for valid feature names
-  }
-}
-
-//------------------------------------------------------------------------------
-
-// CA65:  .IMPORT <name>[:<mode>] [, ...]
-//        .EXPORT <name>[:<mode>] [, ...]
-//        .IMPORTZP <name> [, ...]
-//        .EXPORTZP <name>[, ...]
-
-export class ImportExportStatement extends Statement {
-
-  private isExport: boolean
-  private isZpage: boolean
-
-  constructor(isExport: boolean, isZpage: boolean) {
-    super()
-    this.isExport = isExport
-    this.isZpage = isZpage
   }
 }
 
