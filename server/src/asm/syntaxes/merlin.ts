@@ -13,7 +13,7 @@ import * as stm from "../statements"
 
 export class MerlinSyntax extends SyntaxDef {
 
-  public caseSensitiveSymbols = false
+  public caseSensitiveSymbols = true    // according to Merlin8/16 manual
   public symbolTokenPrefixes = ":]"
   public symbolTokenContents = "?"    // TODO: add others (any character > ':')
   public cheapLocalPrefixes = ":"

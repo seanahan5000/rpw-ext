@@ -1,5 +1,10 @@
 # RPW 65 Changelog
 
+### [1.5.1] - 2025-04-07
+
+#### Fixed:
+* MERLIN: Default symbol case sensitivity to true, not false, per docs
+
 ### [1.5.0] - 2025-04-04
 
 Major rewrite of preprocessor to move it towards an actual multi-pass assembler.

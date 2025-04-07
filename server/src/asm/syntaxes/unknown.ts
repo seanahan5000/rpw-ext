@@ -6,7 +6,7 @@ import * as stm from "../statements"
 
 export class UnknownSyntax extends SyntaxDef {
 
-  public caseSensitiveSymbols = false
+  public caseSensitiveSymbols = true
   public symbolTokenPrefixes = "!@:.]_"
   public symbolTokenContents = "."
   public cheapLocalPrefixes = "@:"
