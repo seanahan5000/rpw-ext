@@ -1,6 +1,7 @@
 
 import * as fs from 'fs'
-import { RpwProject, RpwSettings, RpwDefine } from "../shared/rpw_types"
+import * as base64 from 'base64-js'
+import { RpwProject, RpwSettings, RpwSettingsDefaults, RpwDefine } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
@@ -9,11 +10,63 @@ import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
 
+import { ObjectDocBuilder, ObjectDoc } from "../code/lst_parser"
+
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
 }
 
 export type SymbolMap = Map<string, Symbol>
+
+//------------------------------------------------------------------------------
+
+// Convert encode data buffers coming in from breakpoints
+//  and stack traces into a utility class object.
+
+export class DataRange {
+  public address: number
+  public bytes: Uint8Array
+
+  public static create(obj: any): DataRange | undefined {
+    if (obj.dataAddress && obj.dataBytes) {
+      return new DataRange(obj.dataAddress, obj.dataBytes)
+    }
+  }
+
+  constructor(dataAddress: number, dataBytes: string) {
+    this.address = dataAddress
+    this.bytes = base64.toByteArray(dataBytes)
+  }
+
+  public compare(inAddress: number, inBytes: number[] | Uint8Array, inOffset = 0, inCount?: number): number {
+    if (inCount === undefined) {
+      inCount = inBytes.length
+    }
+    if (inAddress < this.address) {
+      inOffset = this.address - inAddress
+      inCount -= inOffset
+      inAddress = this.address
+    }
+
+    let thisOffset = 0
+    if (inAddress > this.address) {
+      thisOffset = inAddress - this.address
+    }
+
+    const overhang = thisOffset + inCount - this.bytes.length
+    if (overhang > 0) {
+      inCount -= overhang
+    }
+
+    let matches = 0
+    for (let i = 0; i < inCount; i += 1) {
+      if (inBytes[inOffset + i] == this.bytes[thisOffset + i]) {
+        matches += 1
+      }
+    }
+    return matches
+  }
+}
 
 //------------------------------------------------------------------------------
 
@@ -406,6 +459,40 @@ export class Project {
       }
     }
   }
+
+  // given an address, find best object file that contains the address
+  public findSourceByAddress(address: number, dataRange?: DataRange): { objectDoc: ObjectDoc, line: number } | undefined {
+    const matchList = []
+    for (let module of this.modules) {
+      if (module.objectDocs) {
+        for (let objectDoc of module.objectDocs) {
+          const line = objectDoc.findLineByAddress(address, dataRange)
+          if (line >= 0) {
+            matchList.push({ objectDoc, line})
+          }
+        }
+      }
+    }
+
+    if (matchList.length > 0) {
+      let objectDoc = matchList[0].objectDoc
+      let objectLine = matchList[0].line
+
+      if (matchList.length > 1 && dataRange) {
+        let matchPercent = -1
+        for (let match of matchList) {
+          const percent = match.objectDoc.calcLoadedPercent(dataRange)
+          if (percent > matchPercent) {
+            matchPercent = percent
+            objectDoc = match.objectDoc
+            objectLine = match.line
+          }
+        }
+      }
+
+      return { objectDoc, line: objectLine }
+    }
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -418,6 +505,10 @@ export class Module {
   public saveName?: string
 
   private asm?: Assembler
+
+  private lstFilePath?: string
+  public lstModTime = 0
+
   public symbolMap = new Map<string, Symbol>
   public importMap = new Map<string, Symbol>
   public exportMap = new Map<string, Symbol>
@@ -428,12 +519,46 @@ export class Module {
   // list of all statements for the module, in assembly order, including macro expansions
   public lineRecords: LineRecord[] = []
 
+  // documents loaded from .lst file
+  public objectDocs?: ObjectDoc[]
+
   constructor(project: Project, srcPath: string, srcName: string, saveName?: string) {
     this.project = project
     this.srcPath = srcPath
     this.srcName = srcName
     this.saveName = saveName
+
+    // if (lstName) {
+
+    //   this.lstFilePath = cleanPath(this.project.binDir + "/" + lstName)
+    //   if (!fs.existsSync(this.lstFilePath)) {
+    //     // TODO: throw error?
+    //     return
+    //   }
+
+    //   this.lstModTime = fs.statSync(this.lstFilePath).mtime.getTime()
+    //   this.scanLstFile()
+
+    //   // watch for changes in .lst file
+    //   // TODO: change to fs.watch to monitor the entire bin directory
+    //   fs.watchFile(this.lstFilePath, { interval: 1000 }, (curStat, prevStat) => {
+    //     if (curStat.mtime.getTime() != prevStat.mtime.getTime()) {
+    //       this.lstModTime = curStat.mtime.getTime()
+    //       this.scanLstFile()
+    //     }
+    //   })
+    // }
   }
+
+  // private scanLstFile() {
+  //   if (this.lstFilePath) {
+  //     const lstText = fs.readFileSync(this.lstFilePath, 'utf8')
+  //     const lstLines = lstText.split(/\r?\n/)
+  //     this.objectDocs = ObjectDocBuilder.buildDocs(this, lstLines)
+  //     // *** builder needs to throw errors ***
+  //     // *** link SourceDocs to modules sources
+  //   }
+  // }
 
   public update_pass01(startingMap: SymbolMap, startingFiles: SourceFile[] | undefined, fileNames: string[], syntaxStats: number[]) {
 
