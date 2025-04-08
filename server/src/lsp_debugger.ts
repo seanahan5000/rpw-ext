@@ -6,10 +6,11 @@ import { DebugProtocol } from "@vscode/debugprotocol"
 import { Handles, Breakpoint, StackFrame, Source, Scope, Variable } from "@vscode/debugadapter"
 import { WebSocket, Server } from "ws"
 import { LspServer, LspProject } from "./lsp_server"
-import { ObjectDoc } from "./code/lst_parser"
 import { StackEntry, StackRegister } from "./shared/types"
 import { Statement } from "./asm/statements"
 import { DataRange } from "./asm/project"
+
+type ObjectDoc = any
 
 // TODO:
 //  - show timing
@@ -198,79 +199,79 @@ export class LspDebugger {
           return []
         }
 
-        // verify and convert source file breakpoint lines to addresses
-        const addresses: number[] = []
+        // // verify and convert source file breakpoint lines to addresses
+        // const addresses: number[] = []
         const outBreakpoints: DebugProtocol.Breakpoint[] = []
-        for (let breakpoint of args.breakpoints!) {
-
-          let verified = false
-          let line = breakpoint.line
-
-          let objectLine = objectDoc.objectLines[breakpoint.line - 1]
-          if (objectLine) {
-
-            // If line is empty but has an address, scan forward
-            //  for a line with same address and some data bytes.
-            //
-            // TODO: should only do this when starting on line with label?
-            // TODO: don't do this on empty or comment lines
-
-            // *** look up and use source statement for more information ***
-
-            let objAddress = objectLine.address
-            if (objectLine.objLength == 0) {
-              while (++line < objectDoc.objectLines.length) {
-                const nextLine = objectDoc.objectLines[line - 1]
-                if (nextLine.address == -1) {
-                  continue
-                }
-                if (objAddress == -1) {
-                  objAddress = nextLine.address
-                }
-                if (nextLine.address == objAddress) {
-                  if (nextLine.objLength > 0) {
-                    objectLine = nextLine
-                    break
-                  }
-                }
-              }
-            }
-
-            if (objectLine.objLength > 0) {
-              // TODO: check that line is code, not storage
-              addresses.push(objectLine.address)
-              verified = true
-            }
-          }
-
-          const bp = new Breakpoint(verified, line) as DebugProtocol.Breakpoint
-          outBreakpoints.push(bp)
-        }
-
-        // add/replace breakpoint addresses for given file
-        this.breakpoints.set(args.source.path!, addresses)
-
-        // build flat list of all addresses with breakpoints, removing duplicates
-        const flatMap = new Map<number, boolean>()
-        for (let entry of this.breakpoints) {
-          const addresses = entry[1]
-          for (let address of addresses) {
-            flatMap.set(address, true)
-          }
-        }
-
-        const request: SetBreakpointsRequest = {
-          command: params.arguments[0],
-          entries: []
-        }
-
-        for (let entry of flatMap) {
-          request.entries.push({ address: entry[0] })
-        }
-
-        this.socket.send(JSON.stringify(request))
-        // TODO: await a response for sync purposes?
-
+        // for (let breakpoint of args.breakpoints!) {
+        //
+        //   let verified = false
+        //   let line = breakpoint.line
+        //
+        //   let objectLine = objectDoc.objectLines[breakpoint.line - 1]
+        //   if (objectLine) {
+        //
+        //     // If line is empty but has an address, scan forward
+        //     //  for a line with same address and some data bytes.
+        //     //
+        //     // TODO: should only do this when starting on line with label?
+        //     // TODO: don't do this on empty or comment lines
+        //
+        //     // *** look up and use source statement for more information ***
+        //
+        //     let objAddress = objectLine.address
+        //     if (objectLine.objLength == 0) {
+        //       while (++line < objectDoc.objectLines.length) {
+        //         const nextLine = objectDoc.objectLines[line - 1]
+        //         if (nextLine.address == -1) {
+        //           continue
+        //         }
+        //         if (objAddress == -1) {
+        //           objAddress = nextLine.address
+        //         }
+        //         if (nextLine.address == objAddress) {
+        //           if (nextLine.objLength > 0) {
+        //             objectLine = nextLine
+        //             break
+        //           }
+        //         }
+        //       }
+        //     }
+        //
+        //     if (objectLine.objLength > 0) {
+        //       // TODO: check that line is code, not storage
+        //       addresses.push(objectLine.address)
+        //       verified = true
+        //     }
+        //   }
+        //
+        //   const bp = new Breakpoint(verified, line) as DebugProtocol.Breakpoint
+        //   outBreakpoints.push(bp)
+        // }
+        //
+        // // add/replace breakpoint addresses for given file
+        // this.breakpoints.set(args.source.path!, addresses)
+        //
+        // // build flat list of all addresses with breakpoints, removing duplicates
+        // const flatMap = new Map<number, boolean>()
+        // for (let entry of this.breakpoints) {
+        //   const addresses = entry[1]
+        //   for (let address of addresses) {
+        //     flatMap.set(address, true)
+        //   }
+        // }
+        //
+        // const request: SetBreakpointsRequest = {
+        //   command: params.arguments[0],
+        //   entries: []
+        // }
+        //
+        // for (let entry of flatMap) {
+        //   request.entries.push({ address: entry[0] })
+        // }
+        //
+        // this.socket.send(JSON.stringify(request))
+        // // TODO: await a response for sync purposes?
+        //
         // DebugProtocol.SetBreakpointsResponse.body
         return { breakpoints: outBreakpoints }
       }
@@ -298,29 +299,29 @@ export class LspDebugger {
           const entryPC = entry.regs[0].value
           const dataRange = DataRange.create(entry)
           const result = this.mainProject.findSourceByAddress(entryPC, dataRange)
-          if (result) {
-
-            let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
-
-            // *** source code should help with this? ***
-            const statement = this.findNearestLabel(result.objectDoc, entry.proc)
-            if (statement && statement.labelExp) {
-              funcName += ": " + statement.labelExp.getString()
-              if (entry.proc != entryPC) {
-                funcName += "+$" + (entryPC - entry.proc).toString(16).toUpperCase().padStart(4, "0")
-              }
-            }
-
-            const source = new Source(
-              path.posix.basename(result.objectDoc.name),
-              result.objectDoc.name)
-
-            if (outStackFrames.length == 0) {
-              (entry as any).topOfStack = true
-            }
-            const uniqueId = this.stackFrameHandles.create(entry)
-            outStackFrames.push(new StackFrame(uniqueId, funcName, source, result.line + 1))
-          }
+          // if (result) {
+          //
+          //   let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
+          //
+          //   // *** source code should help with this? ***
+          //   const statement = this.findNearestLabel(result.objectDoc, entry.proc)
+          //   if (statement && statement.labelExp) {
+          //     funcName += ": " + statement.labelExp.getString()
+          //     if (entry.proc != entryPC) {
+          //       funcName += "+$" + (entryPC - entry.proc).toString(16).toUpperCase().padStart(4, "0")
+          //     }
+          //   }
+          //
+          //   const source = new Source(
+          //     path.posix.basename(result.objectDoc.name),
+          //     result.objectDoc.name)
+          //
+          //   if (outStackFrames.length == 0) {
+          //     (entry as any).topOfStack = true
+          //   }
+          //   const uniqueId = this.stackFrameHandles.create(entry)
+          //   outStackFrames.push(new StackFrame(uniqueId, funcName, source, result.line + 1))
+          // }
         }
 
         return { stackFrames: outStackFrames, totalFrames: msgResponse.entries.length }
@@ -495,39 +496,41 @@ export class LspDebugger {
     reg.value = value
   }
 
-  private findObjectDoc(project: LspProject, sourcePath: string): ObjectDoc | undefined {
-    for (let module of project.modules) {
-      if (module.objectDocs) {
-        for (let doc of module.objectDocs) {
-          if (doc.name == sourcePath) {
-            return doc
-          }
-        }
-      }
-    }
+  private findObjectDoc(project: LspProject, sourcePath: string): /*ObjectDoc |*/ undefined {
+    // for (let module of project.modules) {
+    //   if (module.objectDocs) {
+    //     for (let doc of module.objectDocs) {
+    //       if (doc.name == sourcePath) {
+    //         return doc
+    //       }
+    //     }
+    //   }
+    // }
+    return
   }
 
   private findNearestLabel(objectDoc: ObjectDoc, address: number): Statement | undefined {
-    let funcLine = objectDoc.findLineByAddress(address)
-    if (funcLine >= 0) {
-      const sourceFile = this.lspServer.findSourceFile(objectDoc.name)
-      if (sourceFile) {
-        while (true) {
-          const objLine = objectDoc.objectLines[funcLine]
-          if (objLine.address != -1 && objLine.address != address) {
-            break
-          }
-          const statement = sourceFile.statements[funcLine]
-          if (statement.labelExp) {
-            return statement
-          }
-          funcLine -= 1
-          if (funcLine < 0) {
-            break
-          }
-        }
-      }
-    }
+    // let funcLine = objectDoc.findLineByAddress(address)
+    // if (funcLine >= 0) {
+    //   const sourceFile = this.lspServer.findSourceFile(objectDoc.name)
+    //   if (sourceFile) {
+    //     while (true) {
+    //       const objLine = objectDoc.objectLines[funcLine]
+    //       if (objLine.address != -1 && objLine.address != address) {
+    //         break
+    //       }
+    //       const statement = sourceFile.statements[funcLine]
+    //       if (statement.labelExp) {
+    //         return statement
+    //       }
+    //       funcLine -= 1
+    //       if (funcLine < 0) {
+    //         break
+    //       }
+    //     }
+    //   }
+    // }
+    return
   }
 }
 
