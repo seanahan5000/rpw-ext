@@ -1,7 +1,6 @@
 
 import * as fs from 'fs'
-import * as base64 from 'base64-js'
-import { RpwProject, RpwSettings, RpwSettingsDefaults, RpwDefine } from "../shared/rpw_types"
+import { RpwProject, RpwSettings, RpwDefine } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
@@ -9,6 +8,7 @@ import { Parser } from "./parser"
 import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
+import { DataRange } from "./object_doc"
 
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
@@ -18,62 +18,13 @@ export type SymbolMap = Map<string, Symbol>
 
 //------------------------------------------------------------------------------
 
-// Convert encode data buffers coming in from breakpoints
-//  and stack traces into a utility class object.
-
-export class DataRange {
-  public address: number
-  public bytes: Uint8Array
-
-  public static create(obj: any): DataRange | undefined {
-    if (obj.dataAddress && obj.dataBytes) {
-      return new DataRange(obj.dataAddress, obj.dataBytes)
-    }
-  }
-
-  constructor(dataAddress: number, dataBytes: string) {
-    this.address = dataAddress
-    this.bytes = base64.toByteArray(dataBytes)
-  }
-
-  public compare(inAddress: number, inBytes: number[] | Uint8Array, inOffset = 0, inCount?: number): number {
-    if (inCount === undefined) {
-      inCount = inBytes.length
-    }
-    if (inAddress < this.address) {
-      inOffset = this.address - inAddress
-      inCount -= inOffset
-      inAddress = this.address
-    }
-
-    let thisOffset = 0
-    if (inAddress > this.address) {
-      thisOffset = inAddress - this.address
-    }
-
-    const overhang = thisOffset + inCount - this.bytes.length
-    if (overhang > 0) {
-      inCount -= overhang
-    }
-
-    let matches = 0
-    for (let i = 0; i < inCount; i += 1) {
-      if (inBytes[inOffset + i] == this.bytes[thisOffset + i]) {
-        matches += 1
-      }
-    }
-    return matches
-  }
-}
-
-//------------------------------------------------------------------------------
-
 export type LineRecord = {
   sourceFile: SourceFile,
   lineNumber: number,
   // TODO: startColumn? endColumn?
   statement?: Statement
   isHidden?: boolean
+
   bytes?: (number | undefined)[]
 
   // lines records generate from this macroInvoke statement
@@ -446,7 +397,7 @@ export class Project {
   }
 
   // NOTE: only returns first match
-  findSourceFile(fullPath: string): SourceFile | undefined {
+  public findSourceFile(fullPath: string): SourceFile | undefined {
     // NOTE: shared files are included in each module's files,
     //  so no need to search this.sharedFiles
     for (let module of this.modules) {
@@ -458,39 +409,49 @@ export class Project {
     }
   }
 
+  //--------------------------------------------------------
+  // Debugger-related functionality
+  //--------------------------------------------------------
+
+  // * address -> module, source file, statement, line number
+
+  // * source file name, line -> module, source file, statement (line record?)
+
+  // *** should also return module that's the best match ***
+  // *** also, line index in module's lineRecords ***
+
   // given an address, find best object file that contains the address
-  public findSourceByAddress(address: number, dataRange?: DataRange): /*{ objectDoc: ObjectDoc, line: number } |*/ undefined {
-  //   const matchList = []
-  //   for (let module of this.modules) {
-  //     if (module.objectDocs) {
-  //       for (let objectDoc of module.objectDocs) {
-  //         const line = objectDoc.findLineByAddress(address, dataRange)
-  //         if (line >= 0) {
-  //           matchList.push({ objectDoc, line})
-  //         }
-  //       }
-  //     }
-  //   }
-  //
-  //   if (matchList.length > 0) {
-  //     let objectDoc = matchList[0].objectDoc
-  //     let objectLine = matchList[0].line
-  //
-  //     if (matchList.length > 1 && dataRange) {
-  //       let matchPercent = -1
-  //       for (let match of matchList) {
-  //         const percent = match.objectDoc.calcLoadedPercent(dataRange)
-  //         if (percent > matchPercent) {
-  //           matchPercent = percent
-  //           objectDoc = match.objectDoc
-  //           objectLine = match.line
-  //         }
-  //       }
-  //     }
-  //
-  //     return { objectDoc, line: objectLine }
-  //   }
-    return
+  public findSourceByAddress(address: number, dataRange?: DataRange): { sourceFile: SourceFile, line: number } | undefined {
+    // const matchList = []
+    // for (let module of this.modules) {
+    //   // *** should be searching lineRecords, not source files ***
+    //   for (let sourceFile of module.sourceFiles) {
+    //     const line = sourceFile.findLineByAddress(address, dataRange)
+    //     if (line >= 0) {
+    //       matchList.push({ sourceFile, line})
+    //     }
+    //   }
+    // }
+
+    // if (matchList.length > 0) {
+    //   let sourceFile = matchList[0].sourceFile
+    //   let sourceLine = matchList[0].line
+
+    //   if (matchList.length > 1 && dataRange) {
+    //     let matchPercent = -1
+    //     for (let match of matchList) {
+    //       const percent = match.sourceFile.calcLoadedPercent(dataRange)
+    //       if (percent > matchPercent) {
+    //         matchPercent = percent
+    //         sourceFile = match.sourceFile
+    //         sourceLine = match.line
+    //       }
+    //     }
+    //   }
+
+    //   return { sourceFile, line: sourceLine }
+    // }
+    return // ***
   }
 }
 
@@ -505,9 +466,6 @@ export class Module {
 
   private asm?: Assembler
 
-  private lstFilePath?: string
-  public lstModTime = 0
-
   public symbolMap = new Map<string, Symbol>
   public importMap = new Map<string, Symbol>
   public exportMap = new Map<string, Symbol>
@@ -516,6 +474,7 @@ export class Module {
   public sourceFiles: SourceFile[] = []
 
   // list of all statements for the module, in assembly order, including macro expansions
+  // *** move these to assembler ***
   public lineRecords: LineRecord[] = []
 
   constructor(project: Project, srcPath: string, srcName: string, saveName?: string) {

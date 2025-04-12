@@ -1,6 +1,6 @@
 
 // import * as base64 from 'base64-js'
-import * as path from 'path'
+// import * as path from 'path'
 import * as lsp from 'vscode-languageserver'
 import { DebugProtocol } from "@vscode/debugprotocol"
 import { Handles, Breakpoint, StackFrame, Source, Scope, Variable } from "@vscode/debugadapter"
@@ -8,7 +8,8 @@ import { WebSocket, Server } from "ws"
 import { LspServer, LspProject } from "./lsp_server"
 import { StackEntry, StackRegister } from "./shared/types"
 import { Statement } from "./asm/statements"
-import { DataRange } from "./asm/project"
+import { SourceFile } from "./asm/project"
+import { DataRange } from "./asm/object_doc"
 
 type ObjectDoc = any
 
@@ -194,19 +195,19 @@ export class LspDebugger {
 
         const args = <DebugProtocol.SetBreakpointsArguments>params.arguments[1]
 
-        const objectDoc = this.findObjectDoc(this.mainProject, args.source.path!)
-        if (!objectDoc) {
+        const sourceFile = this.findSourceFile(this.mainProject, args.source.path!)
+        if (!sourceFile) {
           return []
         }
 
-        // // verify and convert source file breakpoint lines to addresses
-        // const addresses: number[] = []
+        // verify and convert source file breakpoint lines to addresses
+        const addresses: number[] = []
         const outBreakpoints: DebugProtocol.Breakpoint[] = []
-        // for (let breakpoint of args.breakpoints!) {
-        //
-        //   let verified = false
-        //   let line = breakpoint.line
-        //
+        for (let breakpoint of args.breakpoints!) {
+
+          let verified = false
+          let line = breakpoint.line
+
         //   let objectLine = objectDoc.objectLines[breakpoint.line - 1]
         //   if (objectLine) {
         //
@@ -243,35 +244,35 @@ export class LspDebugger {
         //       verified = true
         //     }
         //   }
-        //
-        //   const bp = new Breakpoint(verified, line) as DebugProtocol.Breakpoint
-        //   outBreakpoints.push(bp)
-        // }
-        //
-        // // add/replace breakpoint addresses for given file
-        // this.breakpoints.set(args.source.path!, addresses)
-        //
-        // // build flat list of all addresses with breakpoints, removing duplicates
-        // const flatMap = new Map<number, boolean>()
-        // for (let entry of this.breakpoints) {
-        //   const addresses = entry[1]
-        //   for (let address of addresses) {
-        //     flatMap.set(address, true)
-        //   }
-        // }
-        //
-        // const request: SetBreakpointsRequest = {
-        //   command: params.arguments[0],
-        //   entries: []
-        // }
-        //
-        // for (let entry of flatMap) {
-        //   request.entries.push({ address: entry[0] })
-        // }
-        //
-        // this.socket.send(JSON.stringify(request))
-        // // TODO: await a response for sync purposes?
-        //
+
+          const bp = new Breakpoint(verified, line) as DebugProtocol.Breakpoint
+          outBreakpoints.push(bp)
+        }
+
+        // add/replace breakpoint addresses for given file
+        this.breakpoints.set(args.source.path!, addresses)
+
+        // build flat list of all addresses with breakpoints, removing duplicates
+        const flatMap = new Map<number, boolean>()
+        for (let entry of this.breakpoints) {
+          const addresses = entry[1]
+          for (let address of addresses) {
+            flatMap.set(address, true)
+          }
+        }
+
+        const request: SetBreakpointsRequest = {
+          command: params.arguments[0],
+          entries: []
+        }
+
+        for (let entry of flatMap) {
+          request.entries.push({ address: entry[0] })
+        }
+
+        this.socket.send(JSON.stringify(request))
+        // TODO: await a response for sync purposes?
+
         // DebugProtocol.SetBreakpointsResponse.body
         return { breakpoints: outBreakpoints }
       }
@@ -299,7 +300,7 @@ export class LspDebugger {
           const entryPC = entry.regs[0].value
           const dataRange = DataRange.create(entry)
           const result = this.mainProject.findSourceByAddress(entryPC, dataRange)
-          // if (result) {
+          if (result) {
           //
           //   let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
           //
@@ -321,7 +322,7 @@ export class LspDebugger {
           //   }
           //   const uniqueId = this.stackFrameHandles.create(entry)
           //   outStackFrames.push(new StackFrame(uniqueId, funcName, source, result.line + 1))
-          // }
+          }
         }
 
         return { stackFrames: outStackFrames, totalFrames: msgResponse.entries.length }
@@ -496,17 +497,14 @@ export class LspDebugger {
     reg.value = value
   }
 
-  private findObjectDoc(project: LspProject, sourcePath: string): /*ObjectDoc |*/ undefined {
-    // for (let module of project.modules) {
-    //   if (module.objectDocs) {
-    //     for (let doc of module.objectDocs) {
-    //       if (doc.name == sourcePath) {
-    //         return doc
-    //       }
-    //     }
-    //   }
-    // }
-    return
+  private findSourceFile(project: LspProject, sourcePath: string): SourceFile | undefined {
+    for (let module of project.modules) {
+      for (let sourceFile of module.sourceFiles) {
+        if (sourceFile.fullPath == sourcePath) {
+          return sourceFile
+        }
+      }
+    }
   }
 
   private findNearestLabel(objectDoc: ObjectDoc, address: number): Statement | undefined {
