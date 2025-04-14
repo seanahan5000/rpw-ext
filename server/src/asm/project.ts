@@ -22,7 +22,7 @@ export type LineRecord = {
   sourceFile: SourceFile,
   lineNumber: number,
   // TODO: startColumn? endColumn?
-  statement?: Statement
+  statement: Statement
   isHidden?: boolean
 
   bytes?: (number | undefined)[]
@@ -611,8 +611,11 @@ export class Module {
         }
       }
 
-      // next, look relative to <workspace-dir>/<rpwProject.srcDir>
+      // next, look relative to <workspace-dir>/<rpwProject.srcDir>/rpwModule.src
       pathList.push(cleanPath(this.project.srcDir + this.srcPath))
+
+      // next, look relative to <workspace-dir>/<rpwProject.srcDir>
+      pathList.push(cleanPath(this.project.srcDir))
     }
 
     let sourceFile = this.findFile(fileName, pathList)
@@ -647,8 +650,13 @@ export class Module {
     return this.sourceFiles[fileIndex]
   }
 
-  public getCurrentFileIndex(): number {
-    return this.sourceFiles.length - 1
+  public getFileIndex(sourceFile: SourceFile): number {
+    for (let i = 0; i < this.sourceFiles.length; i += 1) {
+      if (this.sourceFiles[i] == sourceFile) {
+        return i
+      }
+    }
+    return -1
   }
 }
 
