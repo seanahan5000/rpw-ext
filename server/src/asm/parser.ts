@@ -162,7 +162,7 @@ export class Parser extends Tokenizer {
     this.sourceFile = sourceFile
     this.syntaxStats = syntaxStats
     this.lineNumber = 0
-    this.syntax = sourceFile.module.project.syntax
+    this.syntax = sourceFile.project.syntax
 
     while (this.lineNumber < lines.length) {
 
@@ -211,15 +211,35 @@ export class Parser extends Tokenizer {
     }
   }
 
-  public reparseAsMacroInvoke(statement: stm.Statement, syntax: Syntax): stm.Statement | undefined {
-    this.sourceFile = undefined
-    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
-    this.lineNumber = 0
+  public reparseAsMacroInvoke(sourceFile: SourceFile, lineNumber: number, sourceLine: string, syntax: Syntax): stm.Statement | undefined {
     this.syntax = syntax
-    this.setSourceLine(statement.sourceLine)
+    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.sourceFile = sourceFile
+    this.lineNumber = lineNumber
+    this.setSourceLine(sourceLine)
     const token = this.getNextToken()
     if (token) {
       return this.parseMacroInvoke(token)
+    }
+  }
+
+  public reparseAsEnumValue(sourceFile: SourceFile, lineNumber: number, sourceLine: string, syntax: Syntax): stm.Statement | undefined {
+    this.syntax = syntax
+    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.sourceFile = sourceFile
+    this.lineNumber = lineNumber
+    this.setSourceLine(sourceLine)
+    const token = this.getNextToken()
+    if (token) {
+      this.startExpression()
+      const symExp = this.parseSymbol(true, token)
+      if (symExp) {
+        this.addExpression(symExp)
+        if (symExp instanceof exp.SymbolExpression) {
+          this.labelExp = symExp
+          return this.initStatement(new stm.EnumValueStatement())
+        }
+      }
     }
   }
 
@@ -620,7 +640,8 @@ export class Parser extends Tokenizer {
 
   private parseSymbol(isDefinition: boolean, token?: Token): exp.Expression | undefined {
 
-    if (isDefinition) {
+    if (isDefinition && !token) {
+
       const nextChar = this.peekVeryNextChar()
       if (!nextChar) {
         return
@@ -958,9 +979,29 @@ export class Parser extends Tokenizer {
 
   private pushTrailingColon() {
     // NOTE: ACME allows space between the label and the trailing colon
-    const token = this.peekNextToken()
+    const prevChar = this.peekVeryNextChar()
+    let token = this.peekNextToken()
     if (token && token.getString() == ":") {
-      this.commitAddToken(token)
+
+      // For CA65, make sure there is nothing immediately after
+      //  the trailing colon.  This helps distinguish an idented symbol
+      //  from "blt :+", for example.
+      //  Also need to handle when no spaces are present "@slope:.phy"
+      if (this.syntax == Syntax.CA65) {
+        const savedPosition = this.position
+        token = this.getNextToken()!
+        const c = this.peekVeryNextChar()
+        if (prevChar == " " || prevChar == "\t") {
+          if (c !== undefined && c != " " && c != "\t") {
+            this.setPosition(savedPosition)
+            return
+          }
+        }
+        this.addToken(token)
+      } else {
+        this.commitAddToken(token)
+      }
+
       if (!this.syntaxDef.allowLabelTrailingColon) {
         token.setError("Not allowed for this syntax")
       }
@@ -1176,7 +1217,27 @@ export class Parser extends Tokenizer {
 
     let str = token.getString()
 
+    // special-case CA65 symbol size prefixes
+    if (this.syntax == Syntax.CA65) {
+      const c = str[0]
+      if (c == "z" || c == "a" || c == "f") {
+        let nextToken = this.peekNextToken()
+        if (nextToken?.getString() == ":") {
+          nextToken = this.getNextToken()
+          nextToken = this.getNextToken()
+          if (!nextToken) {
+            return
+          }
+          token.type = TokenType.Symbol
+          // TODO: actually store/use sizing information somewhere
+          token = nextToken
+          str = token.getString()
+        }
+      }
+    }
+
     if (token.type == TokenType.Symbol) {
+
       // TODO: this needs to be generalized
       if (str[0] == ".") {
 
@@ -1195,6 +1256,7 @@ export class Parser extends Tokenizer {
 
         return this.parseSymbol(false, token)
       }
+
     } else if (token.type == TokenType.Operator) {
       if (str == "$" || str == "%") {
         return this.parseNumberExpression(token)

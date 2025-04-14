@@ -13,13 +13,15 @@ function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
 }
 
+export type SymbolMap = Map<string, Symbol>
+
 //------------------------------------------------------------------------------
 
 export type LineRecord = {
   sourceFile: SourceFile,
   lineNumber: number,
   // TODO: startColumn? endColumn?
-  statement?: Statement
+  statement: Statement
   isHidden?: boolean
   bytes?: (number | undefined)[]
 
@@ -30,19 +32,31 @@ export type LineRecord = {
 
 export class SourceFile {
 
-  public module: Module
+  public project: Project
   public fullPath: string     // fully specified path and name
+  public isShared: boolean
+  public modules: Module[] = []
   public lines: string[]
   public statements: Statement[] = []
   // TODO: displayName for progress/error messages?
 
-  constructor(module: Module, fullPath: string, lines: string[]) {
-    this.module = module
+  constructor(module: Module, fullPath: string, isShared: boolean, lines: string[]) {
+    this.project = module.project
     this.fullPath = fullPath
     this.lines = lines
+    this.isShared = isShared
+    this.modules.push(module)
   }
 
-  parseStatements(syntaxStats: number[]): Statement[] {
+  public getSymbolMap(): SymbolMap {
+    // for now, just return the first module that references source file
+    return this.modules[0].symbolMap
+  }
+
+  public parseStatements(syntaxStats: number[]): Statement[] {
+    // only parse the statements the first time the file is included
+    // TODO: This is intended for shared files but could be a problem
+    //  for normal source files included multiple times.
     if (!this.statements.length) {
       const parser = new Parser()
       this.statements = parser.parseStatements(this, this.lines, syntaxStats)
@@ -77,10 +91,6 @@ export class Project {
   public includePaths: string[] = []
   public isTemporary = false
   public inWorkspace = false
-
-  // state that needs to be reset upon update
-  public sharedFiles: SourceFile[] = []
-  public sharedSymbols = new Map<string, Symbol>()
 
   constructor(defaultSettings: RpwSettings) {
     this.defaultSettings = defaultSettings
@@ -226,18 +236,39 @@ export class Project {
 
     // optional override, not a hard setting
     this.caseSensitive = settings?.caseSensitive
-
-    // *** this or caller should send syntax changed notification to client ***
   }
 
   update() {
     while (true) {
       const syntaxStats = new Array(SyntaxDefs.length).fill(0)
 
-      this.sharedFiles = []
-      this.sharedSymbols = new Map<string, Symbol>()
+      // build temporary module of shared/common headers and symbols
+      const preMod = new Module(this, "", "precompiled")
+
+      // turn external defines into symbols
+      const settingsMap = new Map<string, Symbol>
+      for (let define of this.defines) {
+        const symExp = new SymbolExpression([], SymbolType.Simple, true)
+        const numExp = new NumberExpression([], define.value ?? 1, false)
+        symExp.symbol!.setValue(numExp, SymbolFrom.Define)
+        symExp.fullName = define.name
+        settingsMap.set(define.name, symExp.symbol!)
+      }
+
+      // precompile include files
+      const precompFiles: string[] = []
+      const pathLength = (this.srcDir + "/").length
+      for (let incFile of this.includes) {
+        precompFiles.push(incFile.substring(pathLength))
+      }
+
+      // disable includes mechanism while prepare includes files
+      preMod.update_pass01(settingsMap, undefined, precompFiles, syntaxStats)
+      preMod.update_pass2()
+
+      // assemble first pass using precompiled files/symbols
       for (let module of this.modules) {
-        module.update(syntaxStats)
+        module.update_pass01(preMod.symbolMap, preMod.sourceFiles, [module.srcName], syntaxStats)
       }
 
       // choose syntax based on number of keywords matched
@@ -262,6 +293,43 @@ export class Project {
           this.settingsChanged()
           continue
         }
+      }
+
+      // build single map of exports from all modules, checking for dupes
+      const fullExportMap = new Map<string, Symbol>
+      for (let module of this.modules) {
+        for (let [name, symbol] of module.exportMap) {
+          const foundSym = fullExportMap.get(name)
+          if (foundSym) {
+            symbol.definition.setError("Duplicate export")
+            symbol.definition.setIsReference(foundSym)
+            continue
+          }
+          fullExportMap.set(name, symbol)
+        }
+      }
+
+      // resolve all imports from fullExportMap, reporting unknown symbols
+      for (let module of this.modules) {
+        for (let [name, symbol] of module.importMap) {
+          const foundSym = fullExportMap.get(name)
+          if (!foundSym) {
+            symbol.definition.setError("External symbol not found")
+            continue
+          }
+
+          // relink all references on import symbol to exported symbol
+          while (symbol.references.length) {
+            const symExp = symbol.references.pop()
+            symExp?.setIsReference(foundSym)
+          }
+          symbol.definition.setIsReference(foundSym)
+        }
+      }
+
+      // complete final pass of assembly
+      for (let module of this.modules) {
+        module.update_pass2()
       }
       break
     }
@@ -313,27 +381,16 @@ export class Project {
   //  contents will be created.
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    // const isShared = this.includes.indexOf(fullPath) != -1
-    // if (isShared) {
-    //   for (let sourceFile of this.sharedFiles) {
-    //     if (sourceFile.fullPath == fullPath) {
-    //       return sourceFile
-    //     }
-    //   }
-    // }
+    const isShared = this.includes.indexOf(fullPath) != -1
 
-    let lines = this.getFileLines(fullPath)
+    const lines = this.getFileLines(fullPath)
     if (!lines) {
       return
     }
 
-    const sourceFile = new SourceFile(module, fullPath, lines)
-    // if (isShared) {
-    //   this.sharedFiles.push(sourceFile)
-    // }
-
+    const sourceFile = new SourceFile(module, fullPath, isShared, lines)
     module.sourceFiles.push(sourceFile)
-    // *** should the sourceFile be parsed right away, here? ***
+
     return sourceFile
   }
 
@@ -356,10 +413,14 @@ export class Project {
 export class Module {
 
   public project: Project
-  public srcPath: string     // always in the form "/path" or ""
-  private srcName: string     // always just the file name (*** without suffix?)
+  public srcPath: string      // always in the form "/path" or ""
+  public srcName: string      // always just the file name (*** without suffix?)
   public saveName?: string
+
+  private asm?: Assembler
   public symbolMap = new Map<string, Symbol>
+  public importMap = new Map<string, Symbol>
+  public exportMap = new Map<string, Symbol>
 
   // list of files used to assemble this module, in include order
   public sourceFiles: SourceFile[] = []
@@ -374,27 +435,28 @@ export class Module {
     this.saveName = saveName
   }
 
-  static dumpFile = false
+  public update_pass01(startingMap: SymbolMap, startingFiles: SourceFile[] | undefined, fileNames: string[], syntaxStats: number[]) {
 
-  update(syntaxStats: number[]) {
     this.sourceFiles = []
-    this.lineRecords = []
-
-    // TODO: maybe grab from assembler when complete instead?
-    this.symbolMap = new Map<string, Symbol>
-
-    // turn defines into symbols
-    for (let define of this.project.defines) {
-      const symExp = new SymbolExpression([], SymbolType.Simple, true)
-      const numExp = new NumberExpression([], define.value ?? 1, false)
-      symExp.symbol!.setValue(numExp, SymbolFrom.Define)
-      symExp.fullName = define.name
-      this.symbolMap.set(define.name, symExp.symbol!)
+    if (startingFiles) {
+      this.sourceFiles.push(...startingFiles)
     }
 
-    const asm = new Assembler(this)
-    this.lineRecords = asm.assemble_pass01(this.srcName, syntaxStats)
-    asm.assemble_pass2(this.lineRecords)
+    this.lineRecords = []
+
+    this.symbolMap = new Map(startingMap)
+    this.importMap = new Map<string, Symbol>
+    this.exportMap = new Map<string, Symbol>
+
+    this.asm = new Assembler(this)
+    this.lineRecords = this.asm.assemble_pass01(fileNames, syntaxStats)
+  }
+
+  static dumpFile = false
+
+  public update_pass2() {
+
+    this.asm?.assemble_pass2(this.lineRecords)
 
     // TODO: debug code, to be removed
     if (Module.dumpFile) {
@@ -500,8 +562,11 @@ export class Module {
         }
       }
 
-      // next, look relative to <workspace-dir>/<rpwProject.srcDir>
+      // next, look relative to <workspace-dir>/<rpwProject.srcDir>/rpwModule.src
       pathList.push(cleanPath(this.project.srcDir + this.srcPath))
+
+      // next, look relative to <workspace-dir>/<rpwProject.srcDir>
+      pathList.push(cleanPath(this.project.srcDir))
     }
 
     let sourceFile = this.findFile(fileName, pathList)
@@ -536,8 +601,13 @@ export class Module {
     return this.sourceFiles[fileIndex]
   }
 
-  public getCurrentFileIndex(): number {
-    return this.sourceFiles.length - 1
+  public getFileIndex(sourceFile: SourceFile): number {
+    for (let i = 0; i < this.sourceFiles.length; i += 1) {
+      if (this.sourceFiles[i] == sourceFile) {
+        return i
+      }
+    }
+    return -1
   }
 }
 

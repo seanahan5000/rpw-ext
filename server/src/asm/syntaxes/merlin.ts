@@ -209,13 +209,15 @@ export class MerlinSyntax extends SyntaxDef {
                     desc:   "Skip lines" } ],
 
       // import/export
+      // NOTE: Merlin 16 allows, "ent/ext <symbol>,<symbol>,..."
       [ "ent",    { create: () => { return new stm.EntryStatement() },
                     label: "<symbol>",
                     params: "",
                     desc:   "Export entry point label" } ],
-      [ "ext",    { // TODO
+      // NOTE: extra expression param is just for Naja compatibility
+      [ "ext",    { create: () => { return new stm.ExternStatement() },
                     label: "<symbol>",
-                    params: "",
+                    params: "[<expression>]",
                     desc:   "Import external label" } ],
 
       // misc

@@ -271,6 +271,8 @@ export class SymbolExpression extends Expression {
   public lineNumber: number
   public symbol?: Symbol
   private value?: number
+  private _isImport?: boolean
+  private _isExport?: boolean
 
   // NOTE: not needed after assembly pass2 is complete
   public fullName?: string
@@ -306,6 +308,34 @@ export class SymbolExpression extends Expression {
       this.isDefinition = true
       this.symbol = new Symbol(this, from)
     }
+  }
+
+  // turn this expression into a reference to a different symbol
+  setIsReference(symbol: Symbol) {
+    this.symbol = symbol
+    this.isDefinition = false
+    symbol.addReference(this)
+  }
+
+  // TODO: add sizing information?
+  setIsImport() {
+    // TODO: assume already isDefinition? (weak?)
+    this._isImport = true
+  }
+
+  isImport(): boolean {
+    return this._isImport ?? false
+  }
+
+  // TODO: pass in ref/def flag?
+  // TODO: pass in sizing information?
+  setIsExport() {
+    // TODO: assume already isDefinition?
+    this._isExport = true
+  }
+
+  isExport(): boolean {
+    return this._isExport ?? false
   }
 
   setSymbolType(symbolType: SymbolType) {

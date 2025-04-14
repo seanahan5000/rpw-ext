@@ -5,7 +5,7 @@ import { SourceFile } from "./asm/project"
 import { Token, TokenType } from "./asm/tokenizer"
 import { ContinuedStatement, OpStatement } from "./asm/statements"
 import { SyntaxDefs } from "./asm/syntaxes/syntax_defs"
-import { SymbolType } from "./asm/symbols"
+import { SymbolType, Symbol } from "./asm/symbols"
 import { getLocalRange } from "./asm/labels"
 import { Expression, SymbolExpression } from "./asm/expressions"
 import { ParamsParser } from "./asm/syntaxes/params"
@@ -100,7 +100,7 @@ export class Completions {
     let leadingSymbol = ""
 
     const firstPosition = curPosition + (curStatement.startOffset ?? 0)
-    const syntaxDef = SyntaxDefs[sourceFile.module.project.syntax]
+    const syntaxDef = SyntaxDefs[sourceFile.project.syntax]
 
     // no completions when in comment (top-level token)
     for (let token of firstStatement.children) {
@@ -335,7 +335,7 @@ export class Completions {
       const isa = isaSet65xx.getIsa("65816")
 
       isa.opcodeByName.forEach((value, key) => {
-        if (sourceFile.module.project.upperCase) {
+        if (sourceFile.project.upperCase) {
           key = key.toUpperCase()
         }
         // only add trailing space for opcodes that have addressing modes
@@ -350,10 +350,10 @@ export class Completions {
     }
 
     if (this.addKeywords) {
-      const syntax = sourceFile.module.project.syntax
+      const syntax = sourceFile.project.syntax
       if (syntax) {
         for (let [key, keywordDef] of syntaxDef.keywordMap) {
-          if (sourceFile.module.project.upperCase) {
+          if (sourceFile.project.upperCase) {
             key = key.toUpperCase()
           }
 
@@ -396,7 +396,9 @@ export class Completions {
 
     if (this.addConstants || this.addZpage || this.addData || this.addCode
         || this.addMacros || this.addUnclassified) {
-      for (const [key, symbol] of sourceFile.module.symbolMap) {
+
+      const symbolMap = sourceFile.getSymbolMap()
+      for (const [key, symbol] of symbolMap) {
 
         if (symbol.type == SymbolType.TypeName) {
           if (this.addMacros) {
@@ -442,7 +444,7 @@ export class Completions {
           let keyText = key
           if (appendIndY) {
             keyText = keyText + "),y"
-            if (sourceFile.module.project.upperCase) {
+            if (sourceFile.project.upperCase) {
               keyText = keyText.toUpperCase()
             }
           }
@@ -462,7 +464,7 @@ export class Completions {
           }
           // hack snippet for Naja graphics system
           if (key == "DRAW_PICT") {
-            const indent = "".padStart(sourceFile.module.project.tabStops[1], " ")
+            const indent = "".padStart(sourceFile.project.tabStops[1], " ")
             item = lsp.CompletionItem.create(key)
             item.sortText = `${this.addCode}_${key}`
             item.insertTextFormat = lsp.InsertTextFormat.Snippet

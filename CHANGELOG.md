@@ -1,5 +1,19 @@
 # RPW 65 Changelog
 
+### [1.5.2] - 2025-04-14
+
+#### Added:
+* All: Add base srcDir to include path search
+* CA65: Anonymous .enum parsing, implicit values
+* CA65: Symbol size prefix parsing
+
+#### Fixed:
+* All: MVN and MVP expression parsing
+* All: COP param parsing when # is missing
+* All: Tracking of macro file indexes
+* All: "jsr (symbol,x)" addressing when symbol is imported
+* CA65: Multiple .export parsing
+
 ### [1.5.1] - 2025-04-07
 
 #### Fixed:

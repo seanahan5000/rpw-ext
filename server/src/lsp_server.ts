@@ -438,16 +438,9 @@ export class LspServer {
       }
 
       for (let project of this.projects) {
-        for (let sharedFile of project.sharedFiles) {
-          if (sharedFile != priorityFile) {
-            this.updateDiagnostics(sharedFile)
-          }
-        }
         for (let module of project.modules) {
+          // NOTE: This will update shared files multiple times
           for (let sourceFile of module.sourceFiles) {
-            if (project.sharedFiles.indexOf(sourceFile) != -1) {
-              continue
-            }
             if (sourceFile != priorityFile) {
               this.updateDiagnostics(sourceFile)
             }
@@ -529,7 +522,7 @@ export class LspServer {
     if (filePath) {
       let sourceFile = this.findSourceFile(filePath)
       if (sourceFile) {
-        const project = sourceFile.module.project as LspProject
+        const project = sourceFile.project as LspProject
         if (project && project.isTemporary) {
           this.removeDiagnostics(sourceFile)
           const index = this.projects.indexOf(project)
@@ -649,7 +642,7 @@ export class LspServer {
 
       this.executeUpdate()
 
-      let syntax = SyntaxNames[sourceFile.module.project.syntax]
+      let syntax = SyntaxNames[sourceFile.project.syntax]
       if (syntax) {
         const syntaxes: string[] = []
         syntax = syntax.toUpperCase()
@@ -1088,7 +1081,7 @@ export class LspServer {
         if (expRange && expRange.start >= state.startOffset && expRange.end <= state.endOffset) {
           let diagRange: lsp.Range
           let hint: boolean
-          if (state.sourceFile.module.project.isTemporary) {
+          if (state.sourceFile.project.isTemporary) {
             // dim out the entire line, including put/include
             hint = true
             diagRange = lsp.Range.create(
@@ -1125,7 +1118,7 @@ export class LspServer {
   }
 
   private diagnoseNode(state: DiagnosticState, node: Node): boolean {
-    const includeWeak = !state.sourceFile.module.project.isTemporary
+    const includeWeak = !state.sourceFile.project.isTemporary
     if (node.errorType != NodeErrorType.None) {
       let severity: lsp.DiagnosticSeverity
       switch (node.errorType) {
@@ -1252,7 +1245,7 @@ export class LspServer {
               } else if (symExp.symbol.isCode) {
                 index = SemanticToken.label
               }
-              if (symExp.symbol.isEntryPoint) {
+              if (symExp.symbol.isExport()) {
                 index = SemanticToken.function    //*** only if still symbol?
                 bits |= (1 << SemanticModifier.external)
               }

@@ -242,31 +242,68 @@ export class OpStatement extends Statement {
           this.mode = OpMode.A
         }
       }
+      return
+    }
 
-    } else if (token) {
+    if (token) {
 
+      // special case 65816 mvp/mvn SD mode "#$FF,#$FF"
+
+      if (this.opcode.get(OpMode.SD)) {
+        this.mode = OpMode.SD
+
+        // TODO: fold this into expression parsing
+        if (str == "#") {
+          parser.addToken(token)
+          token.type = TokenType.Opcode
+          token = undefined
+        }
+
+        parser.mustAddNextExpression(token)
+
+        let res = parser.mustAddToken([","], TokenType.Opcode)
+        if (res.index == 0) {
+          token = parser.getNextToken()
+
+          // TODO: fold this into expression parsing
+          if (token?.getString() == "#") {
+            parser.addToken(token)
+            token.type = TokenType.Opcode
+            token = undefined
+          }
+          // TODO: save this expression for code gen use
+          parser.mustAddNextExpression(token)
+        }
+        return
+      }
       if (str == "a") {
 
-        parser.addToken(token)
+        // not accumulator mode if CA65 "a:" prefix
+        if (parser.syntax != Syntax.CA65 || parser.peekVeryNextChar() != ":") {
 
-        // TODO: check for INC/DEC and promote opcode to 65C02
+          parser.addToken(token)
 
-        if (this.opcode.get(OpMode.A) === undefined) {
-          token.setError("Accumulator mode not allowed for this opcode")
-        } else if (parser.syntax == Syntax.ACME || parser.syntax == Syntax.DASM) {
-          token.setError("Accumulator mode not allowed for this syntax")
+          // TODO: check for INC/DEC and promote opcode to 65C02
+
+          if (this.opcode.get(OpMode.A) === undefined) {
+            token.setError("Accumulator mode not allowed for this opcode")
+          } else if (parser.syntax == Syntax.ACME || parser.syntax == Syntax.DASM) {
+            token.setError("Accumulator mode not allowed for this syntax")
+          }
+          token.type = TokenType.Opcode
+          this.mode = OpMode.A
+          return
         }
-        token.type = TokenType.Opcode
-        this.mode = OpMode.A
-
-      } else if (str == "#") {
+      }
+      if (str == "#") {
 
         parser.addToken(token)
         token.type = TokenType.Opcode
         this.mode = OpMode.IMM
         this.expression = parser.mustAddNextExpression()
-
-      } else if (str == "/") {			// same as "#>"
+        return
+      }
+      if (str == "/") {			// same as "#>"
 
         parser.addToken(token)
         if (parser.syntax && parser.syntax != Syntax.LISA) {
@@ -278,8 +315,9 @@ export class OpStatement extends Statement {
         this.mode = OpMode.IMM
         // *** this loses the implied ">" operation
         this.expression = parser.mustAddNextExpression()
-
-      } else if (str == "(" || str == "[") {
+        return
+      }
+      if (str == "(" || str == "[") {
 
         token.type = TokenType.Opcode
         parser.addToken(token)
@@ -402,111 +440,109 @@ export class OpStatement extends Statement {
             }
           }
         }
+        return
+      }
 
-      } else {
 
-        const isDefinition = false
-        if (str == ">" || str == "<") {
-          if (!parser.syntax || parser.syntax == Syntax.LISA) {
-            this.expression = parser.parseLisaLocal(token, isDefinition)
+      const isDefinition = false
+      if (str == ">" || str == "<") {
+        if (!parser.syntax || parser.syntax == Syntax.LISA) {
+          this.expression = parser.parseLisaLocal(token, isDefinition)
+          parser.addExpression(this.expression)
+        }
+      } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
+        this.expression = parser.parseCA65Local(token, isDefinition)
+        parser.addExpression(this.expression)
+      } else if (parser.syntaxDef.anonLocalChars && parser.syntaxDef.anonLocalChars.includes(str[0])) {
+        if (str[0] == str[str.length - 1]) {
+          // TODO: This only handles "-", not "+" because it would otherwise
+          //  be parsed as a unary operator.  See Parser.parseValueExpression
+          //  for the code that should be handling this.
+          if (str.length > 9) {
+            token.setError("Anonymous local is too long")
+            this.expression = new exp.BadExpression([token])
+            parser.addExpression(this.expression)
+          } else {
+            token.type = TokenType.Label
+            this.expression = parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
             parser.addExpression(this.expression)
           }
-        } else if (str[0] == ":" && parser.syntax == Syntax.CA65) {
-          this.expression = parser.parseCA65Local(token, isDefinition)
-          parser.addExpression(this.expression)
-        } else if (parser.syntaxDef.anonLocalChars && parser.syntaxDef.anonLocalChars.includes(str[0])) {
-          if (str[0] == str[str.length - 1]) {
-            // TODO: This only handles "-", not "+" because it would otherwise
-            //  be parsed as a unary operator.  See Parser.parseValueExpression
-            //  for the code that should be handling this.
-            if (str.length > 9) {
-              token.setError("Anonymous local is too long")
-              this.expression = new exp.BadExpression([token])
-              parser.addExpression(this.expression)
-            } else {
-              token.type = TokenType.Label
-              this.expression = parser.newSymbolExpression([token], SymbolType.AnonLocal, isDefinition)
-              parser.addExpression(this.expression)
-            }
+        }
+      }
+
+      if (!this.expression) {
+        this.expression = parser.mustAddNextExpression(token)
+      }
+
+      token = parser.addNextToken()
+
+      // TODO: hack to stop parsing an ACME multi-statement line
+      if (token) {
+        if (parser.syntax == Syntax.ACME) {
+          if (token.getString() == ":") {
+            parser.ungetToken(token)
+            parser.nodeSet.pop()
+            token = undefined
           }
         }
+      }
 
-        if (!this.expression) {
-          this.expression = parser.mustAddNextExpression(token)
+      if (!token) {
+        if (this.opcode.get(OpMode.REL)) {
+          this.mode = OpMode.REL            // exp
+        } else if (this.opcode.get(OpMode.LREL)) {
+          this.mode = OpMode.LREL           // exp
+        } else if (this.opcode.get(OpMode.ABS)) {
+          this.mode = OpMode.ABS            // exp
+        } else if (this.opcode.get(OpMode.LABS)) {
+          this.mode = OpMode.LABS           // exp
+        } else if (this.opcode.get(OpMode.ZP)) {
+          this.mode = OpMode.ZP             // PEI exp
+        } else if (this.opNameLC == "brk") {
+          this.mode = OpMode.IMM            // exp
         }
+      } else if (token.getString() == ",") {
 
-        token = parser.addNextToken()
+        // exp,X or exp,Y or exp,S or exp,R
 
-        // TODO: hack to stop parsing an ACME multi-statement line
-        if (token) {
-          if (parser.syntax == Syntax.ACME) {
-            if (token.getString() == ":") {
-              parser.ungetToken(token)
-              parser.nodeSet.pop()
-              token = undefined
-            }
+        token.type = TokenType.Opcode
+        const c = parser.peekVeryNextChar()
+        token = parser.mustAddNextToken("expecting 'X', 'Y', 'S' or 'R'")
+        if (token.type != TokenType.Missing) {
+          str = token.getString().toLowerCase()
+          if (str == "x") {             // exp,X
+            this.mode = OpMode.ABSX
+          } else if (str == "y") {      // exp,Y
+            this.mode = OpMode.ABSY
+          } else if (str == "s") {      // exp,S
+            // TODO: check for 65816 mode
+            this.mode = OpMode.STS
+          } else if (str == "r") {      // exp,R
+            // TODO: check for 65el02 mode
+            this.mode = OpMode.STR
+          } else if (str != "") {
+            token.setError("Unexpected token, expecting 'X', 'Y', 'S' or 'R'")
+            return
           }
-        }
-
-        if (!token) {
-          if (this.opcode.get(OpMode.REL)) {
-            this.mode = OpMode.REL            // exp
-          } else if (this.opcode.get(OpMode.LREL)) {
-            this.mode = OpMode.LREL           // exp
-          } else if (this.opcode.get(OpMode.ABS)) {
-            this.mode = OpMode.ABS            // exp
-          } else if (this.opcode.get(OpMode.LABS)) {
-            this.mode = OpMode.LABS           // exp
-          } else if (this.opcode.get(OpMode.ZP)) {
-            this.mode = OpMode.ZP             // PEI exp
-          } else if (this.opNameLC == "brk") {
-            this.mode = OpMode.IMM            // exp
-          }
-        } else if (token.getString() == ",") {
-
-          // exp,X or exp,Y or exp,S or exp,R
-
-          // TODO: what about 65816 SD mode? #$FF,#$FF
-
           token.type = TokenType.Opcode
-          const c = parser.peekVeryNextChar()
-          token = parser.mustAddNextToken("expecting 'X', 'Y', 'S' or 'R'")
-          if (token.type != TokenType.Missing) {
-            str = token.getString().toLowerCase()
-            if (str == "x") {             // exp,X
-              this.mode = OpMode.ABSX
-            } else if (str == "y") {      // exp,Y
-              this.mode = OpMode.ABSY
-            } else if (str == "s") {      // exp,S
-              // TODO: check for 65816 mode
-              this.mode = OpMode.STS
-            } else if (str == "r") {      // exp,R
-              // TODO: check for 65el02 mode
-              this.mode = OpMode.STR
-            } else if (str != "") {
-              token.setError("Unexpected token, expecting 'X', 'Y', 'S' or 'R'")
-              return
-            }
-            token.type = TokenType.Opcode
-            if (parser.syntax == Syntax.DASM) {
-              if (c == " " || c == "\t") {
-                token.setError("DASM doesn't allow space between ',' and X or Y register")
-              }
+          if (parser.syntax == Syntax.DASM) {
+            if (c == " " || c == "\t") {
+              token.setError("DASM doesn't allow space between ',' and X or Y register")
             }
           }
-        } else {
-
-          // TODO: fix hack to stop parsing an ACME multi-statement line
-          if (parser.syntax == Syntax.ACME) {
-            if (token.getString() == ":") {
-              parser.ungetToken(token)
-              parser.nodeSet.pop()
-              return
-            }
-          }
-
-          token.setError("Unexpected token, expecting ','")
         }
+      } else {
+
+        // TODO: fix hack to stop parsing an ACME multi-statement line
+        if (parser.syntax == Syntax.ACME) {
+          if (token.getString() == ":") {
+            parser.ungetToken(token)
+            parser.nodeSet.pop()
+            return
+          }
+        }
+
+        token.setError("Unexpected token, expecting ','")
       }
     }
   }
@@ -554,7 +590,10 @@ export class OpStatement extends Statement {
         break
 
       case OpMode.INDX:     // ($FF,X)
-        if (expSize == 2) {
+        // TODO: put actual size check back in once import statements, etc.
+        //  are more explicit in their symbol size definitions.
+        // if (expSize == 2) {
+        if (expSize != 1) {
           newMode = OpMode.AXI    // ($FFFF,X)
         }
         break
@@ -580,6 +619,10 @@ export class OpStatement extends Statement {
         if (this.mode == OpMode.IMM || this.mode == OpMode.ZP) {
           return 1
         }
+      } else if (this.opNameLC == "cop") {
+        // COP argument should be IMM but assemblers (CA65) often allow # to be omitted
+        this.mode = OpMode.IMM
+        return 1
       }
       this.opExp?.setErrorWeak("Opcode does not support this addressing mode")
     } else {
@@ -1819,6 +1862,8 @@ export class DefineDefStatement extends Statement {
   }
 }
 
+//------------------------------------------------------------------------------
+
 export class TypeDefBeginStatement extends Statement {
 
   protected nestingType: NestingType
@@ -1954,6 +1999,8 @@ export class TypeDefEndStatement extends Statement {
   }
 }
 
+//------------------------------------------------------------------------------
+
 // MERLIN:  <name> MAC           (label required)
 //   DASM:         MAC <name>    (no label allowed)
 //                 MACRO <name>
@@ -2061,9 +2108,97 @@ export class EndMacroDefStatement extends TypeDefEndStatement {
   }
 }
 
+//------------------------------------------------------------------------------
+
+//  CA65: .enum [<type-name>]
+
 export class EnumStatement extends TypeDefBeginStatement {
   constructor() {
     super(NestingType.Enum, false)  // cannot nest
+  }
+
+  public override preprocess(asm: Assembler) {
+
+    if (asm.inMacroDef()) {
+      super.preprocess(asm)
+      return
+    }
+
+    if (!this.canRecurse) {
+      if (asm.isNested(this.nestingType)) {
+        this.setError("Cannot be restarted")
+        return
+      }
+    }
+
+    const startPC = 0
+    asm.pushAndSetEnumSegment(startPC)
+
+    const typeNameStr = this.typeName?.getString() ?? ""
+
+    asm.pushNesting(this.nestingType, () => {
+      const size = asm.popSegment()
+      if (typeNameStr) {
+        if (asm.syntax == Syntax.ACME) {
+          asm.scopeState.popZone()
+        } else {
+          asm.scopeState.popScope()
+        }
+      }
+      asm.endTypeDef(size)
+    })
+
+    // assign typeName's full symbol name before scope changes
+
+    if (this.typeName) {
+      asm.processSymbol_pass0(this.typeName)
+      if (this.typeName.hasError()) {
+        return
+      }
+    }
+
+    if (typeNameStr) {
+      if (asm.syntax == Syntax.ACME) {
+        asm.scopeState.pushZone(typeNameStr)
+      } else {
+        asm.scopeState.pushScope(typeNameStr)
+      }
+    }
+
+    asm.startTypeDef(this.nestingType, this.typeName)
+  }
+}
+
+export class EnumValueStatement extends Statement {
+
+  private value?: exp.Expression
+
+  public parse(parser: Parser): void {
+    if (this.labelExp) {
+      const res = parser.mustAddToken(["", "="])
+      if (res.index < 0) {
+        return
+      }
+      if (res.index == 1) {
+        this.value = parser.mustAddNextExpression()
+        if (this.value) {
+          this.labelExp.symbol?.setValue(this.value, SymbolFrom.Equate)
+        }
+      }
+      this.labelExp.symbol!.isConstant = true
+    }
+  }
+
+  public pass1(asm: Assembler): number {
+    if (this.value) {
+      const n = this.value.resolve()
+      if (n === undefined) {
+        this.value.setError("Must resolve in first pass")
+        return 0
+      }
+      return n - this.PC!
+    }
+    return 1
   }
 }
 
@@ -2072,6 +2207,8 @@ export class EndEnumStatement extends TypeDefEndStatement {
     super(NestingType.Enum)
   }
 }
+
+//------------------------------------------------------------------------------
 
 export class StructStatement extends TypeDefBeginStatement {
   constructor() {
@@ -2096,6 +2233,8 @@ export class EndUnionStatement extends TypeDefEndStatement {
     super(NestingType.Union)
   }
 }
+
+//------------------------------------------------------------------------------
 
 // TODO: proc and scope belong elsewhere, in scoping group
 
@@ -2494,22 +2633,62 @@ export class OrgStatement extends Statement {
   }
 }
 
+//------------------------------------------------------------------------------
+
+// MERLIN:   <label> ENT
+// MERLIN16:         ENT <symbol>[, <symbol> ...]
 
 export class EntryStatement extends Statement {
 
   postParse(parser: Parser) {
     if (this.labelExp) {
-      if (!this.labelExp.isVariableType()) {
-        if (this.labelExp.symbol) {
-          this.labelExp.symbol.isEntryPoint = true
-        }
-      } else {
+      if (this.labelExp.isVariableType()) {
         this.labelExp.setError("Variable label not allowed")
+        return
       }
+      // TODO: will be forced to definition?
+      this.labelExp.setIsExport()
     }
+    // TODO: else merlin 16 format
   }
 }
 
+// MERLIN:   <label> EXT
+// MERLIN16:         EXT <symbol>[, <symbol> ...]
+
+export class ExternStatement extends Statement {
+
+  postParse(parser: Parser) {
+    if (this.labelExp) {
+      if (this.labelExp.isVariableType()) {
+        this.labelExp.setError("Variable label not allowed")
+        return
+      }
+      // TODO: will be forced to weak definition?
+      this.labelExp.setIsImport()
+    }
+    // TODO: else merlin 16 format
+  }
+}
+
+// CA65:  .IMPORT <name>[:<mode>] [, ...]
+//        .EXPORT <name>[:<mode>] [, ...]
+//        .IMPORTZP <name> [, ...]
+//        .EXPORTZP <name>[, ...]
+
+export class ImportExportStatement extends Statement {
+
+  private isExport: boolean
+  private isZpage: boolean
+
+  constructor(isExport: boolean, isZpage: boolean) {
+    super()
+    this.isExport = isExport
+    this.isZpage = isZpage
+  }
+}
+
+//------------------------------------------------------------------------------
 
 export class UsrStatement extends Statement {
 
@@ -2876,25 +3055,6 @@ export class FeatureStatement extends Statement {
 
   postParse(parser: Parser) {
     // TODO: check all args for valid feature names
-  }
-}
-
-//------------------------------------------------------------------------------
-
-// CA65:  .IMPORT <name>[:<mode>] [, ...]
-//        .EXPORT <name>[:<mode>] [, ...]
-//        .IMPORTZP <name> [, ...]
-//        .EXPORTZP <name>[, ...]
-
-export class ImportExportStatement extends Statement {
-
-  private isExport: boolean
-  private isZpage: boolean
-
-  constructor(isExport: boolean, isZpage: boolean) {
-    super()
-    this.isExport = isExport
-    this.isZpage = isZpage
   }
 }
 
