@@ -2,4 +2,4 @@ out
 node_modules
 .DS_Store
 obj/
-.tsconfig.tsbuildinfo
+tsconfig.tsbuildinfo

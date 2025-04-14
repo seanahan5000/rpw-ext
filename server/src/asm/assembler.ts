@@ -1,14 +1,13 @@
 
 import * as fs from 'fs'
 import { Module, SourceFile, LineRecord, SymbolMap } from "./project"
-import { Statement, ConditionalStatement, TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
+import { Statement, ConditionalStatement, EquStatement, GenericStatement } from "./statements"
+import { TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
 import { ClosingBraceStatement } from "./statements"
 import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
 import { SymbolType, SymbolFrom } from "./symbols"
-
-// just for the CA65 macro invoke work-around
 import { Parser } from "./parser"
 
 //------------------------------------------------------------------------------
@@ -350,14 +349,14 @@ export class Assembler {
 
           this.pass = 0
 
+          const lineNumber = this.fileReader.state.curLineIndex
           const line: LineRecord = {
             sourceFile: this.fileReader.state.file,
-            lineNumber: this.fileReader.state.curLineIndex,
-            statement: undefined
+            lineNumber: lineNumber,
+            statement: this.fileReader.state.file.statements[lineNumber]
           }
 
           this.curLine = line
-          line.statement = this.fileReader.state.file.statements[line.lineNumber]
 
           // must advance before parsing statement that may include a different file
           this.fileReader.state.curLineIndex += 1
@@ -402,9 +401,42 @@ export class Assembler {
             const enabled = this.conditional.isEnabled()
             if (enabled) {
 
-              // TODO: Find a better location for this and
-              //  a less-brittle solution for the problem.
+              // Handle some CA65 special cases
               if (this.module.project.syntax == Syntax.CA65) {
+
+                // When inside an enum, unknown macro invokes are probably
+                //  implicit enum value definitions.
+
+                if (this.isNested(NestingType.Enum)) {
+                  let reparseEnum = (line.statement instanceof EquStatement)
+                  if (!reparseEnum && line.statement instanceof MacroInvokeStatement) {
+                    const macroExp = (line.statement.opExp as exp.SymbolExpression)!
+                    const macroSym = this.module.symbolMap.get(macroExp.fullName!)
+                    if (!macroSym) {
+                      reparseEnum = true
+                    }
+                  }
+                  if (!reparseEnum && line.statement instanceof GenericStatement) {
+                    if (line.statement.labelExp) {
+                      reparseEnum = true
+                    }
+                  }
+                  if (reparseEnum) {
+                    const newStatement = this.parser.reparseAsEnumValue(
+                      line.sourceFile,
+                      line.lineNumber,
+                      line.statement.sourceLine,
+                      this.module.project.syntax)
+                    if (newStatement) {
+                      line.statement = newStatement
+                      this.fileReader.state.file.statements[line.lineNumber] = newStatement
+                    }
+                  }
+                  // TODO: reparse may now require macro/define expansion
+                }
+
+                // TODO: Find a better location for this and
+                //  a less-brittle solution for the problem.
 
                 // CA65 allows macro invokes in the first column,
                 //  so if the label of this statement matches a
@@ -414,10 +446,15 @@ export class Assembler {
                   const labelName = line.statement.labelExp.getString()
                   const foundSym = this.module.symbolMap.get(labelName)
                   if (foundSym && foundSym.type == SymbolType.TypeName) {
-                    const newStatement = this.parser.reparseAsMacroInvoke(line.statement, this.module.project.syntax)
+                    const newStatement = this.parser.reparseAsMacroInvoke(
+                      line.sourceFile,
+                      line.lineNumber,
+                      line.statement.sourceLine,
+                      this.module.project.syntax)
                     if (newStatement) {
                       line.statement = newStatement
                       this.fileReader.state.file.statements[line.lineNumber] = newStatement
+                      // TODO: reparse may now require macro/define expansion
                     }
                   }
                 }
@@ -924,6 +961,14 @@ export class Assembler {
     this.curSeg = new Segment("_dummy_", "implicit", false, startPC)
   }
 
+  public pushAndSetEnumSegment(startPC: number) {
+    this.checkPass(0)
+
+    this.pushSegment()
+    // NOTE: This is temporary and not added to segMap
+    this.curSeg = new Segment("_enum_", "implicit", false, startPC)
+  }
+
   public pushSegment() {
     this.checkPass(0)
 
@@ -1313,7 +1358,7 @@ export class Assembler {
   // *** what about nesting these? .define instead .macro, for example ***
     // *** are structs within macros allowed?
 
-  public startTypeDef(nestingType: NestingType, typeName: SymbolExpression, typeParams?: string[]) {
+  public startTypeDef(nestingType: NestingType, typeName?: SymbolExpression, typeParams?: string[]) {
     this.checkPass(0)
 
     // NOTE: caller should have checked this and flagged an error
@@ -1323,7 +1368,7 @@ export class Assembler {
       if (statement instanceof TypeDefBeginStatement || statement instanceof DefineDefStatement) {
 
         this.typeStart = statement
-        const fileIndex = this.module.getCurrentFileIndex()
+        const fileIndex = this.module.getFileIndex(this.fileReader.state.file!)
         const startLineIndex = this.curLine!.lineNumber + 1
         this.typeDef = new TypeDef(nestingType, fileIndex, startLineIndex, typeParams ?? [])
 

@@ -218,7 +218,7 @@ export class Ca65Syntax extends SyntaxDef {
                         desc:   "Import an absolute symbol from another module" } ],
       [ ".export",    { create: () => { return new stm.ImportExportStatement(true, false) },
                         // TODO: more possibilities
-                        params: "<export-def>[ {=|:=} <expression>][, <export-def>[ {=|:=} <expression> ...]]",
+                        params: "<export-def>[ {=|:=} <expression>][, <export-def>[ {=|:=} <expression>] ...]",
                         desc:   "Make symbols accessible from other modules" } ],
       [ ".exportzp",  { create: () => { return new stm.ImportExportStatement(true, true) },
                         params: "<symbol>[ {=|:=} <expression>][, <symbol> [{=|:=} <expression>] ...]",
