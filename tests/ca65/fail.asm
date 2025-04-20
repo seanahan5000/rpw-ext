@@ -25,3 +25,11 @@ no_colon                                ; ERROR: missing colon
 
 LABEL           .byte LABEL, \
                     2,LABEL, 4          ; ERROR: (correct locations in multi-line statement)
+
+                lda #-1                 ; negative values not allowed
+
+test = test+1                           ; ERROR: circular symbol reference
+               bne test
+
+                lda zpageVar            ; WARNING: forward declared zpage
+zpageVar        =   0
