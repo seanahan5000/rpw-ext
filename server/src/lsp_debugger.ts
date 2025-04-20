@@ -298,7 +298,7 @@ export class LspDebugger {
         for (let entry of msgResponse.entries) {
 
           const entryPC = entry.regs[0].value
-          const dataRange = DataRange.create(entry)
+          const dataRange = DataRange.fromEntry(entry)
           const result = this.mainProject.findSourceByAddress(entryPC, dataRange)
           if (result) {
           //

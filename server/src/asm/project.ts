@@ -8,7 +8,7 @@ import { Parser } from "./parser"
 import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
-import { DataRange } from "./object_doc"
+import { ObjectDoc, DataRange, RangeMatch } from "./object_doc"
 
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
@@ -17,20 +17,6 @@ function fixBackslashes(inString: string): string {
 export type SymbolMap = Map<string, Symbol>
 
 //------------------------------------------------------------------------------
-
-export type LineRecord = {
-  sourceFile: SourceFile,
-  lineNumber: number,
-  // TODO: startColumn? endColumn?
-  statement: Statement
-  isHidden?: boolean
-
-  bytes?: (number | undefined)[]
-
-  // lines records generate from this macroInvoke statement
-  children?: LineRecord[]
-}
-
 
 export class SourceFile {
 
@@ -329,10 +315,17 @@ export class Project {
         }
       }
 
-      // complete final pass of assembly
+      // complete final passes of assembly
+
       for (let module of this.modules) {
+        // write all output data
         module.update_pass2()
       }
+
+      for (let module of this.modules) {
+        module.update_finalize()
+      }
+
       break
     }
   }
@@ -413,45 +406,27 @@ export class Project {
   // Debugger-related functionality
   //--------------------------------------------------------
 
-  // * address -> module, source file, statement, line number
-
-  // * source file name, line -> module, source file, statement (line record?)
-
-  // *** should also return module that's the best match ***
-  // *** also, line index in module's lineRecords ***
-
   // given an address, find best object file that contains the address
   public findSourceByAddress(address: number, dataRange?: DataRange): { sourceFile: SourceFile, line: number } | undefined {
-    // const matchList = []
-    // for (let module of this.modules) {
-    //   // *** should be searching lineRecords, not source files ***
-    //   for (let sourceFile of module.sourceFiles) {
-    //     const line = sourceFile.findLineByAddress(address, dataRange)
-    //     if (line >= 0) {
-    //       matchList.push({ sourceFile, line})
-    //     }
-    //   }
-    // }
-
-    // if (matchList.length > 0) {
-    //   let sourceFile = matchList[0].sourceFile
-    //   let sourceLine = matchList[0].line
-
-    //   if (matchList.length > 1 && dataRange) {
-    //     let matchPercent = -1
-    //     for (let match of matchList) {
-    //       const percent = match.sourceFile.calcLoadedPercent(dataRange)
-    //       if (percent > matchPercent) {
-    //         matchPercent = percent
-    //         sourceFile = match.sourceFile
-    //         sourceLine = match.line
-    //       }
-    //     }
-    //   }
-
-    //   return { sourceFile, line: sourceLine }
-    // }
-    return // ***
+    const matchList: RangeMatch[] = []
+    for (let module of this.modules) {
+      for (let objectDoc of module.objectDocs) {
+        matchList.push(...objectDoc.findRanges(address, dataRange))
+      }
+    }
+    if (matchList.length > 0) {
+      let bestMatch = matchList[0]
+      if (matchList.length > 1 && dataRange) {
+        for (let i = 1; i < matchList.length; i += 1) {
+          const match = matchList[i]
+          if (match.matchCount > bestMatch.matchCount) {
+            // TODO: look at match.sourceFile.calcLoadedPercent(dataRange)?
+            bestMatch = match
+          }
+        }
+      }
+      return { sourceFile: bestMatch.sourceFile, line: bestMatch.sourceLine }
+    }
   }
 }
 
@@ -473,9 +448,8 @@ export class Module {
   // list of files used to assemble this module, in include order
   public sourceFiles: SourceFile[] = []
 
-  // list of all statements for the module, in assembly order, including macro expansions
-  // *** move these to assembler ***
-  public lineRecords: LineRecord[] = []
+  // list of pseudo documents that map object data to source file lines
+  public objectDocs: ObjectDoc[] = []
 
   constructor(project: Project, srcPath: string, srcName: string, saveName?: string) {
     this.project = project
@@ -491,65 +465,19 @@ export class Module {
       this.sourceFiles.push(...startingFiles)
     }
 
-    this.lineRecords = []
-
     this.symbolMap = new Map(startingMap)
     this.importMap = new Map<string, Symbol>
     this.exportMap = new Map<string, Symbol>
+    this.objectDocs = []
 
     this.asm = new Assembler(this)
-    this.lineRecords = this.asm.assemble_pass01(fileNames, syntaxStats)
+    this.asm.assemble_pass01(fileNames, syntaxStats)
   }
-
-  static dumpFile = false
 
   public update_pass2() {
 
-    this.asm?.assemble_pass2(this.lineRecords)
-
-    // TODO: debug code, to be removed
-    if (Module.dumpFile) {
-
-      console.log(this.srcName)
-
-      // if (this.srcName == "xxx")
-      {
-        for (let line of this.lineRecords) {
-          let str = "  "
-          if (!line.statement?.enabled) {
-            str = "X "
-          } else if (line.isHidden) {
-            str = "* "
-          }
-
-          if (line.bytes?.length) {
-
-            str += line.statement?.PC?.toString(16).padStart(4, "0").toUpperCase() + ": "
-
-            for (let i = 0; i < 3; i += 1) {
-              if (!line.bytes || i >= line.bytes.length) {
-                str += "  "
-              } else {
-                if (line.bytes[i] === undefined) {
-                  str += "??"
-                } else {
-                  str += line.bytes[i]!.toString(16).padStart(2, "0").toUpperCase()
-                }
-              }
-              if (line.bytes.length <= 3 || i < 2) {
-                str += " "
-              } else {
-                str += "+"
-              }
-            }
-          } else {
-            str = str.padEnd(2 + 6 + 9, " ")
-          }
-          str += line.statement?.sourceLine ?? ""
-          console.log(str)
-        }
-      }
-    }
+    this.asm?.assemble_pass2()
+    this.asm = undefined
 
     // link up all symbols
     // TODO: move to assembler?
@@ -573,6 +501,12 @@ export class Module {
     // for (let i = 0; i < this.lineRecords.length; i += 1) {
     //   this.lineRecords[i].statement?.postParse()
     // }
+  }
+
+  public update_finalize() {
+    for (let objectDoc of this.objectDocs) {
+      objectDoc.finalize()
+    }
   }
 
   public getBinFilePath(extFileName: string): string {
@@ -657,6 +591,14 @@ export class Module {
       }
     }
     return -1
+  }
+
+  public findObjectDoc(sourceFile: SourceFile): ObjectDoc | undefined {
+    for (let objectDoc of this.objectDocs) {
+      if (objectDoc.sourceFile == sourceFile) {
+        return objectDoc
+      }
+    }
   }
 }
 

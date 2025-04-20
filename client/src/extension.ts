@@ -145,3 +145,28 @@ async function updateStatusItem() {
 		statusBarItem.hide()
 	}
 }
+
+//------------------------------------------------------------------------------
+// TODO: figure out how to share this with lsp_server
+
+type GetCodeBytesArgs = {
+  startLine?: number
+  endLine?: number
+  cycleCounts?: boolean
+}
+
+export type CodeBytesEntry = {
+  a?: number      // address
+  d?: number[]    // data bytes
+  e?: boolean     // empty src line
+  c?: string      // cycle count ("3", "2/3", "4+", etc.)
+}
+
+// response to GetCodeBytes
+type CodeBytes = {
+  startLine: number
+  cycleCounts?: boolean
+  entries: CodeBytesEntry[]
+}
+
+//------------------------------------------------------------------------------
