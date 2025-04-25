@@ -69,6 +69,11 @@
 					"default": true,
 					"markdownDescription": "Highlight syntax warnings."
 				},
+				"rpw65.showCodeBytes": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Show assembled code bytes next to source."
+				},
 				"rpw65.columns.enable": {
 					"type": "boolean",
 					"default": true,

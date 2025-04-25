@@ -77,42 +77,47 @@ class ObjectRange {
   // starting position in source file, zero-based
   public startLine: number = 0
 
-  // empty until after finalize
-  private dataRange: DataRange
+  // valid after finalize
+  private dataRange?: DataRange
 
   // one per source line, plus terminator, relative to dataRange
   private offsets: number[] = [0]
 
   // used while collecting object data
-  public buildSegment?: Segment
-  public buildOffset: number
+  public buildSegment: Segment
+  public buildStartAddress?: number
+  public buildStartOffset: number   // starting offset into segment data
+  public buildCurrOffset: number    // current offset, relative to baseOffset
 
-  constructor(startLine: number, segment?: Segment) {
-    this.buildSegment = segment
-    this.buildOffset = 0
-    this.dataRange = new DataRange(segment?.address ?? 0, new Uint8Array(0))
+  constructor(startLine: number, segment: Segment, preOffset: number) {
     this.startLine = startLine
+    this.buildSegment = segment
+    this.buildStartOffset = (segment.dataArray?.length ?? 0) - preOffset
+    this.buildCurrOffset = 0
   }
 
-  public addLine(byteCount: number, isHidden: boolean) {
-    this.buildOffset += byteCount
+  public addLine(address: number | undefined, byteCount: number, isHidden: boolean) {
+    this.buildCurrOffset += byteCount
     if (isHidden) {
       // add to previous offset instead of adding a new one
-      this.offsets[this.offsets.length - 1] = this.buildOffset
+      this.offsets[this.offsets.length - 1] = this.buildCurrOffset
     } else {
-      this.offsets.push(this.buildOffset)
+      // commit to a start address when a valid address first comes through
+      if (this.buildStartAddress === undefined) {
+        if (address !== undefined) {
+          this.buildStartAddress = address
+        }
+      }
+      this.offsets.push(this.buildCurrOffset)
     }
   }
 
   public finalize() {
-    if (this.buildSegment && this.buildOffset > 0) {
+    if (this.buildCurrOffset > 0 && this.buildStartAddress !== undefined) {
       this.buildSegment.finalize()
-      const startOffset = this.dataRange.address - this.buildSegment.address
-      const subData = this.buildSegment.dataBytes!.subarray(startOffset, startOffset + this.buildOffset)
-      this.dataRange = new DataRange(this.dataRange.address, subData)
+      const subData = this.buildSegment.dataBytes!.subarray(this.buildStartOffset, this.buildStartOffset + this.buildCurrOffset)
+      this.dataRange = new DataRange(this.buildStartAddress, subData)
     }
-    this.buildSegment = undefined
-    this.buildOffset = 0
   }
 
   public get endLine(): number {
@@ -120,29 +125,29 @@ class ObjectRange {
   }
 
   public get startAddress(): number {
-    return this.dataRange.startAddress
+    return this.dataRange?.startAddress ?? 0
   }
 
   public get dataLength(): number {
-    return this.dataRange.dataLength
+    return this.dataRange?.dataLength ?? 0
   }
 
   public getAddress(lineNumber: number): number {
-    return this.dataRange.address + this.offsets[lineNumber]
+    return (this.dataRange?.address ?? 0) + this.offsets[lineNumber - this.startLine]
   }
 
   public getDataBytes(lineNumber: number): Uint8Array | undefined {
     if (this.offsets.length > 1) {
-      const startOffset = this.offsets[lineNumber]
-      const endOffset = this.offsets[lineNumber + 1]
+      const startOffset = this.offsets[lineNumber - this.startLine]
+      const endOffset = this.offsets[lineNumber - this.startLine + 1]
       if (startOffset != endOffset) {
-        return this.dataRange.bytes.subarray(startOffset, endOffset)
+        return this.dataRange?.bytes.subarray(startOffset, endOffset)
       }
     }
   }
 
   public matchRange(dataRange: DataRange): number {
-    return this.dataRange.compare(dataRange.address, dataRange.bytes)
+    return this.dataRange?.compare(dataRange.address, dataRange.bytes) ?? 0
   }
 
   public getLine(address: number): number {
@@ -192,25 +197,27 @@ export class ObjectDoc {
     if (this.objectRanges.length) {
       curRange = this.objectRanges[this.objectRanges.length - 1]
     }
-    if (curRange) {
+    if (curRange && !line.isHidden) {
       // check for segment discontinuity
       if (line.statement.segment != curRange.buildSegment) {
         curRange = undefined
-      // check for address discontinuity
-      } else if (line.statement.PC != curRange.startAddress + curRange.buildOffset) {
-        curRange = undefined
-        // check for line discontinuity
-      } else if (line.lineNumber != curRange.endLine) {
-        // TODO: should this be an error instead?
-        curRange = undefined
+      } else if (line.statement.segment?.isInitialized) {
+        // check for address discontinuity
+        if (line.statement.PC !== undefined && curRange.buildStartAddress !== undefined) {
+          if (line.statement.PC != curRange.buildStartAddress + curRange.buildCurrOffset) {
+            curRange = undefined
+          }
+        }
       }
     }
     if (!curRange) {
-      curRange = new ObjectRange(line.lineNumber, line.statement.segment)
+      // NOTE: byteCount is passed in as pre offset to compensate
+      //  for bytes already added to segment dataArray
+      curRange = new ObjectRange(line.lineNumber, line.statement.segment!, byteCount)
       this.objectRanges.push(curRange)
     }
 
-    curRange.addLine(byteCount, line.isHidden ?? false)
+    curRange.addLine(line.statement.PC, byteCount, line.isHidden ?? false)
   }
 
   public finalize() {
@@ -266,9 +273,6 @@ export class ObjectDoc {
       }
     }
 
-    if (lineNum != endLine) {
-      throw "ASSERT: lineNum == endLine failed"
-    }
     return result
   }
 }

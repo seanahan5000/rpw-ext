@@ -87,7 +87,6 @@ export type CodeBytesEntry = {
 
 // response to GetCodeBytes
 type CodeBytes = {
-  // modTime?: number
   startLine: number
   cycleCounts?: boolean
   entries: CodeBytesEntry[]

@@ -4,6 +4,7 @@ import * as path from 'path'
 import * as vsclnt from 'vscode-languageclient'
 import * as cmd from "./commands"
 import { RpwDebugSession } from "./debugger"
+import { Decorator } from "./codebytes"
 
 // TODO:
 //	? step instructions could be used to step into/through macros
@@ -17,6 +18,7 @@ import {
 
 export let client: LanguageClient
 let statusBarItem: vscode.StatusBarItem
+let decorator: Decorator
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -57,12 +59,36 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.leftArrowIndent", () => { cmd.arrowIndentCmd(true) }))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.rightArrowIndent", () => { cmd.arrowIndentCmd(false) }))
 
+	const config = vscode.workspace.getConfiguration("rpw65")
+	decorator = new Decorator(config.get("showCodeBytes"))
+
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
-	client.onNotification("rpw65.syntaxChanged", () => { updateStatusItem() })
+  client.onNotification("rpw65.syntaxChanged", () => { updateStatusItem() })
+  client.onNotification("rpw.codeBytesChanged", () => { decorator.scheduleUpdate(true) })
 
-	// debugger support
+  vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
+    // TODO: why is this commented out?
+    // decorator.scheduleUpdate()
+  })
+
+  vscode.window.onDidChangeVisibleTextEditors(event => {
+    decorator.scheduleUpdate()
+  })
+
+  vscode.workspace.onDidChangeTextDocument(event => {
+    decorator.onTextChanged(event.document, event.contentChanges)
+  })
+
+  vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration("rpw65.showCodeBytes")) {
+      const config = vscode.workspace.getConfiguration("rpw65")
+      decorator.enable(config.get("showCodeBytes"))
+    }
+  })
+
+  // debugger support
 
 	const provider = new RpwDebugConfigurationProvider();
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('rpw65', provider));
@@ -144,29 +170,6 @@ async function updateStatusItem() {
 	} else {
 		statusBarItem.hide()
 	}
-}
-
-//------------------------------------------------------------------------------
-// TODO: figure out how to share this with lsp_server
-
-type GetCodeBytesArgs = {
-  startLine?: number
-  endLine?: number
-  cycleCounts?: boolean
-}
-
-export type CodeBytesEntry = {
-  a?: number      // address
-  d?: number[]    // data bytes
-  e?: boolean     // empty src line
-  c?: string      // cycle count ("3", "2/3", "4+", etc.)
-}
-
-// response to GetCodeBytes
-type CodeBytes = {
-  startLine: number
-  cycleCounts?: boolean
-  entries: CodeBytesEntry[]
 }
 
 //------------------------------------------------------------------------------
