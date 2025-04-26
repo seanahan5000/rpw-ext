@@ -712,6 +712,7 @@ export class Parser extends Tokenizer {
             return
           }
         // TODO: hack for handling indented data defs in .structs
+        // (This will go away once parsing is integrated into pass 0)
         } else if (t2str == ".byte"
             || t2str == ".res"
             || t2str == ".dbyt"

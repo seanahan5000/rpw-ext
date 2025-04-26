@@ -486,7 +486,13 @@ export class Assembler {
                 //  known macro name, convert it to a macro invoke
                 //  statement and reparse.
                 if (line.statement.labelExp) {
-                  const labelName = line.statement.labelExp.getString()
+                  let labelName = line.statement.labelExp.getString()
+
+                  // TODO: choose case insensitive macro names by syntax
+                  //  (DASM, for example, is case insensitive for macros, but
+                  //  case sensitive for symbols)
+                  labelName = labelName.toLowerCase()
+
                   const foundSym = this.module.symbolMap.get(labelName)
                   if (foundSym && foundSym.type == SymbolType.TypeName) {
                     const newStatement = this.parser.reparseAsMacroInvoke(
