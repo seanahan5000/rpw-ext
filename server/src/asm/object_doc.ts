@@ -79,6 +79,7 @@ class ObjectRange {
 
   // valid after finalize
   private dataRange?: DataRange
+  private refRange?: DataRange
 
   // one per source line, plus terminator, relative to dataRange
   private offsets: number[] = [0]
@@ -115,8 +116,14 @@ class ObjectRange {
   public finalize() {
     if (this.buildCurrOffset > 0 && this.buildStartAddress !== undefined) {
       this.buildSegment.finalize()
-      const subData = this.buildSegment.dataBytes!.subarray(this.buildStartOffset, this.buildStartOffset + this.buildCurrOffset)
+      const startOffset = this.buildStartOffset
+      const endOffset = startOffset + this.buildCurrOffset
+      const subData = this.buildSegment.dataBytes!.subarray(startOffset, endOffset)
       this.dataRange = new DataRange(this.buildStartAddress, subData)
+      if (this.buildSegment.refBytes) {
+        const refData = this.buildSegment.refBytes.subarray(startOffset, endOffset)
+        this.refRange = new DataRange(this.buildStartAddress, refData)
+      }
     }
   }
 
@@ -136,12 +143,25 @@ class ObjectRange {
     return (this.dataRange?.address ?? 0) + this.offsets[lineNumber - this.startLine]
   }
 
-  public getDataBytes(lineNumber: number): Uint8Array | undefined {
+  public getDataBytes(lineNumber: number): number[] | undefined {
     if (this.offsets.length > 1) {
       const startOffset = this.offsets[lineNumber - this.startLine]
       const endOffset = this.offsets[lineNumber - this.startLine + 1]
       if (startOffset != endOffset) {
-        return this.dataRange?.bytes.subarray(startOffset, endOffset)
+        if (this.dataRange) {
+          // check against reference data and report mismatches as negative values
+          const dataBytes: number[] = []
+          for (let i = startOffset; i < endOffset; i += 1) {
+            let val = this.dataRange.bytes[i]
+            if (this.refRange) {
+              if (val != this.refRange.bytes[i]) {
+                val = -val
+              }
+            }
+            dataBytes.push(val)
+          }
+          return dataBytes
+        }
       }
     }
   }
@@ -176,7 +196,7 @@ export type RangeMatch = {
 export type ObjectLine = {
   statement: Statement
   dataAddress?: number
-  dataBytes?:Uint8Array
+  dataBytes?: number[]
 }
 
 // each module has a list of these object files

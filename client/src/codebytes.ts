@@ -35,15 +35,52 @@ class CodeLine {
   public data?: (number | undefined)[]
   public isEmpty?: boolean
   public cycleCount?: string
-  public decorations?: DecorationTypes
+
+  public currDecorations?: DecorationTypes
+  public nextDecorations?: DecorationTypes
 
   constructor (emptySrcLine = false) {
     this.isEmpty = emptySrcLine
   }
 
-  public rebuildDecorations(entry: CodeBytesEntry, showCycleCounts: boolean): boolean {
+  public clearDecorations(editor: vscode.TextEditor, linenum: number) {
+    this.nextDecorations = []
+    this.applyDecorations(editor, linenum)
+  }
+
+  public applyDecorations(editor: vscode.TextEditor, linenum: number) {
+    if (this.nextDecorations) {
+
+      const decoration = { range: new vscode.Range(linenum, 0, linenum, 0) }
+
+      // apply new decorations
+      if (Array.isArray(this.nextDecorations)) {
+        for (let type of this.nextDecorations) {
+          editor.setDecorations(type, [ decoration ])
+        }
+      } else {
+        editor.setDecorations(this.nextDecorations, [ decoration ])
+      }
+
+      // dispose now-old decorations
+      if (this.currDecorations) {
+        if (Array.isArray(this.currDecorations)) {
+          for (let type of this.currDecorations) {
+            type.dispose()
+          }
+        } else {
+          this.currDecorations.dispose()
+        }
+      }
+
+      this.currDecorations = this.nextDecorations
+      this.nextDecorations = undefined
+    }
+  }
+
+  public buildNextDecorations(entry: CodeBytesEntry, showCycleCounts: boolean): boolean {
     let changed = true
-    if (this.decorations && entry) {
+    if (this.currDecorations && entry) {
       if (this.address == entry.a && !this.data == !entry.d) {
         if (!this.isEmpty == !entry.e) {
           if (this.cycleCount == entry.c) {
@@ -69,7 +106,7 @@ class CodeLine {
       this.data = entry.d
       // this.isEmpty = entry.e ?? false
       this.cycleCount = entry.c
-      this.decorations = this.buildDecoration(showCycleCounts)
+      this.nextDecorations = this.buildDecoration(showCycleCounts)
     }
     return changed
   }
@@ -79,7 +116,7 @@ class CodeLine {
     this.address = address
     this.data = bytes
     this.isEmpty = emptySrcLine
-    this.decorations = this.buildDecoration(showCycleCounts)
+    this.nextDecorations = this.buildDecoration(showCycleCounts)
   }
 
   public isIndent(): boolean {
@@ -95,29 +132,12 @@ class CodeLine {
     // TODO: this case could eventually fold into general case
     if (this.address === undefined && this.data === undefined) {
 
-      // TODO: figure out how to work around vscode bug
-      //  and avoid this hack using two decorations
-
-      let contentStr = "".padEnd(5 + 3 + 3 + 3 + 1/*2*/ + (showCycleCounts ? 5 : 0), "\xA0")
-
-      if (emptySrcLine) {
-        contentStr += "\xA0"
-      }
-      // const contentStr = "xxxx: xx xx xx\xA0\xA0"
+      const contentStr = "".padEnd(5 + 3 + 3 + 3 + 1 + 2 + (showCycleCounts ? 5 : 0), "\xA0")
       decorations.push(vscode.window.createTextEditorDecorationType({
         before: {
           contentText: contentStr,
-          // width: "114px"    // TODO: get rid of
         }
       }))
-      // decorations.push(vscode.window.createTextEditorDecorationType({
-      //   before: {
-      //     contentText: " ",
-      //     // width: "114px"    // TODO: get rid of
-      //   }
-      // }))
-
-      emptySrcLine = true
 
     } else {
 
@@ -131,7 +151,7 @@ class CodeLine {
 
       // just an address/offset, no bytes
       if (this.data === undefined) {
-        let contentStr = addressStr.padEnd(5 + 3 + 3 + 3 + 2 + (showCycleCounts ? 5 : 0), "\xA0")
+        const contentStr = addressStr.padEnd(5 + 3 + 3 + 3 + 1 + 2 + (showCycleCounts ? 5 : 0), "\xA0")
         decorations.push(vscode.window.createTextEditorDecorationType({
           before: {
             contentText: contentStr
@@ -145,6 +165,12 @@ class CodeLine {
           let hasChanged = false
           if (i == 3) {
             hasChanged = !curChanged  // force final flush
+            if (this.data.length > 3) {
+              curStr += "+"
+            } else {
+              curStr += "\xA0"
+            }
+            curStr += "\xA0\xA0"
             if (showCycleCounts) {
               if (this.cycleCount) {
                 // *** what about red color? ***
@@ -153,7 +179,6 @@ class CodeLine {
                 curStr += "\xA0\xA0\xA0\xA0\xA0"
               }
             }
-            curStr += "\xA0\xA0"
             byteStr = ""
           } else if (i >= this.data.length) {
             byteStr = "\xA0\xA0\xA0"
@@ -212,7 +237,7 @@ class CodeList {
   private codeLines: CodeLine[]
   private isCleared = true
 
-  constructor(editor: vscode.TextEditor, showCycleCounts: boolean) {
+  constructor(editor: vscode.TextEditor, showCycleCounts: boolean, visibleStart: number, visibleEnd: number) {
     this.editor = editor
     this.showCycleCounts = showCycleCounts
     this.document = editor.document
@@ -224,9 +249,11 @@ class CodeList {
       const codeLine = new CodeLine(emptySrcLine)
       this.codeLines.push(codeLine)
 
-      const entry: CodeBytesEntry = { e: emptySrcLine }
-      codeLine.rebuildDecorations(entry, this.showCycleCounts)
-      this.applyDecorations(i, codeLine.decorations)
+      if (i >= visibleStart && i < visibleEnd) {
+        const entry: CodeBytesEntry = { e: emptySrcLine }
+        codeLine.buildNextDecorations(entry, this.showCycleCounts)
+        codeLine.applyDecorations(this.editor, i)
+      }
     }
   }
 
@@ -239,16 +266,10 @@ class CodeList {
     this.isCleared = false
     for (let i = codeBytes.startLine; i < codeBytes.startLine + codeBytes.entries.length; i += 1) {
       const codeEntry = codeBytes.entries[i - codeBytes.startLine]
-      if (this.codeLines[i]) {
-        const oldDecorations = this.codeLines[i].decorations
-        if (this.codeLines[i].rebuildDecorations(codeEntry, codeBytes.cycleCounts ?? false)) {
-          if (oldDecorations) {
-            this.removeDecorations(oldDecorations)
-          }
-          this.applyDecorations(i, this.codeLines[i].decorations)
-        }
-      } else {
-        this.clearDecorations(i, 1)
+      const codeLine = this.codeLines[i]
+      if (codeLine) {
+        codeLine.buildNextDecorations(codeEntry, codeBytes.cycleCounts ?? false)
+        codeLine.applyDecorations(this.editor, i)
       }
     }
   }
@@ -274,13 +295,13 @@ class CodeList {
       }
 
       let startLine = change.range.start.line
-      let endLine = change.range.end.line
-      let partialStart = change.range.start.character != 0
+      let endLineInc = change.range.end.line
+      const partialStart = change.range.start.character != 0
 
       // *** simple end of line return ***
         // *** not possible? ***
 
-      if (startLine == endLine) {
+      if (startLine == endLineInc) {
         // single partial line of text to insert or delete
         const simpleInsert = newLines.length == 1 && partialInsertEnd
         const simpleDelete = newLines.length == 0
@@ -296,12 +317,12 @@ class CodeList {
 
       // clear existing decorations from affected lines
       //  (do this first, before any new decorations)
-      let clearCount = endLine + 1 - startLine
+      let clearCount = endLineInc + 1 - startLine
       this.clearDecorations(startLine, clearCount)
 
       // compute full lines to be added/removed
 
-      let fullDeleteCount = endLine - startLine
+      let fullDeleteCount = endLineInc - startLine
       let fullInsertCount = newLines.length
       if (partialInsertEnd) {
         fullInsertCount -= 1
@@ -333,15 +354,16 @@ class CodeList {
       for (let i = startLine; i < startLine + indentCount; i += 1) {
         let codeLine = this.codeLines[i]
         if (!codeLine) {
-          codeLine = new CodeLine()
+          // *** empty lines or not? ***
+          codeLine = new CodeLine(true)
           this.codeLines[i] = codeLine
         }
         // *** empty lines or not? ***
-        codeLine.rebuildDecorations_OLD(undefined, undefined, false, this.showCycleCounts)
+        codeLine.rebuildDecorations_OLD(undefined, undefined, true/*codeLine.isEmpty*/, this.showCycleCounts)
       }
 
       // save range for later application
-      updateRanges.push({ start: startLine, end: startLine + indentCount})
+      updateRanges.push({ start: startLine, end: startLine + indentCount })
     }
 
     // now that final ranges are known, apply decorations to current text layout
@@ -349,40 +371,16 @@ class CodeList {
     for (let i = updateRanges.length; --i >= 0; ) {
       const range = updateRanges[i]
       for (let i = range.start; i < range.end; i += 1) {
-        // *** don't do repeated calls here ***
-        this.applyDecorations(i, this.codeLines[i].decorations)
+        this.codeLines[i].applyDecorations(this.editor, i)
       }
-    }
-  }
-
-  private applyDecorations(line: number, decorations: DecorationTypes) {
-    const range = new vscode.Range(line, 0, line, 0)
-    const decoration = { range: range }
-    if (Array.isArray(decorations)) {
-      for (let type of decorations) {
-        this.editor.setDecorations(type, [ decoration ])
-      }
-    } else {
-      this.editor.setDecorations(decorations, [ decoration ])
     }
   }
 
   private clearDecorations(startLine: number, count: number) {
     for (let i = startLine; i < startLine + count; i += 1) {
-      const decorations = this.codeLines[i]?.decorations
-      if (decorations) {
-        this.removeDecorations(decorations)
+      if (this.codeLines[i]) {
+        this.codeLines[i].clearDecorations(this.editor, i)
       }
-    }
-  }
-
-  private removeDecorations(decorations: DecorationTypes) {
-    if (Array.isArray(decorations)) {
-      for (let type of decorations) {
-        this.editor.setDecorations(type, [])
-      }
-    } else {
-      this.editor.setDecorations(decorations, [])
     }
   }
 }
@@ -487,7 +485,7 @@ export class Decorator {
 
       if (editor.document.languageId == "rpw65") {
 
-        const showCycleCounts = true    // TODO: make a setting
+        const showCycleCounts = false    // TODO: make a setting
 
         // Flatten visible ranges into a single range
         //  and pad to cover partial lines.
@@ -521,7 +519,7 @@ export class Decorator {
         }
 
         if (!codeList) {
-          codeList = new CodeList(editor, showCycleCounts)
+          codeList = new CodeList(editor, showCycleCounts, visibleStart, visibleEnd)
           newLists.push(codeList)
           refresh = true
         }

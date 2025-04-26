@@ -98,6 +98,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate(): Thenable<void> | undefined {
+	decorator?.enable(false)
 	return client?.stop()
 }
 

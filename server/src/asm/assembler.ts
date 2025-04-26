@@ -252,6 +252,9 @@ export class Segment {
   // only valid while building segment
   public dataArray?: (number | undefined)[] = []
 
+  // optionally valid after pass2, before finalize
+  public refBytes?: Uint8Array
+
   // valid after finalize
   public dataBytes?: Uint8Array
 
@@ -276,10 +279,10 @@ export class Segment {
 
   // Base address of segment should always be available
   //  by the time this is called.
-  public get address(): number {
-    if (this.startPC === undefined) {
-      throw "ASSERT: Segment address not defined"
-    }
+  public get address(): number | undefined {
+    // if (this.startPC === undefined) {
+    //   throw "ASSERT: Segment address not defined"
+    // }
     return this.startPC
   }
 }
@@ -367,7 +370,7 @@ export class Assembler {
 
     this.pass = 0
 
-    this.setSegment("code", "absolute", true, this.module.project.syntaxDef.defaultOrg)
+    this.setSegment("code", "absolute", true, undefined/* ***this.module.project.syntaxDef.defaultOrg*/)
     this.curSeg = this.curSeg!
 
     for (let fileName of fileNames) {
@@ -524,14 +527,18 @@ export class Assembler {
                 this.curSeg.curPC = this.curSeg.nextPC
                 this.curSeg.nextPC = undefined
               } else {
-                // Once statements start trying to use the current PC
-                //  default to 0 and advance that.  (This shows up when
-                //  a new segment is created and then immediately used.)
-                if (this.curSeg.curPC === undefined) {
-                  this.curSeg.curPC = 0
-                  line.statement.PC = 0
+                if (advancePC != 0) {   // *** just a hack right now ***
+                  // Once statements start trying to use the current PC
+                  //  default to 0 and advance that.  (This shows up when
+                  //  a new segment is created and then immediately used.)
+                  // *** may need to be assembler-specific ***
+                  if (this.curSeg.curPC === undefined) {
+                    // *** should use default PC here ***
+                    this.curSeg.curPC = 0
+                    line.statement.PC = 0
+                  }
+                  this.curSeg.curPC += advancePC
                 }
-                this.curSeg.curPC += advancePC
               }
             }
           }
@@ -633,6 +640,9 @@ export class Assembler {
 
     for (let line of this.lineRecords) {
 
+      this.curLine = line
+      this.curSeg = line.statement.segment
+
       // *** would linking of forward references still be needed?
       // *** maybe still process symbol references (not definitions)
       if (!line.statement.enabled) {
@@ -687,7 +697,9 @@ export class Assembler {
 
         line.statement.pass2(this)
 
+        // NOTE: bytes have already been added to current segment
         this.addObjectLine(line, this.statementBytes.length)
+
         if (this.statementBytes.length) {
           // *** this will go away once file dumper is converted ***
           line.bytes = this.statementBytes
@@ -710,6 +722,9 @@ export class Assembler {
     if (this.module.saveName) {
       this.writeFile(this.module.saveName)
     }
+
+    this.curSeg = undefined
+    this.curLine = undefined
 
     // TODO: debug code, to be removed
     if (Assembler.dumpFile) {
@@ -1039,6 +1054,20 @@ export class Assembler {
     }
 
     this.curSeg = nextSeg
+  }
+
+  public saveSegment(cleanFileName: string) {
+    this.checkPass(0)
+
+    // rename the current code segment after a save (MERLIN-only)
+    if (this.curSeg) {
+      this.segMap.delete(this.curSeg.name)
+      this.segMap.set(cleanFileName.toLowerCase(), this.curSeg)
+    }
+
+    // start a new code segment after the save
+    // NOTE: SaveStatement.segment has already been set to previous segment
+    this.setSegment("code", "absolute", true, undefined)
   }
 
   public pushAndSetMacroSegment() {
@@ -1384,7 +1413,11 @@ export class Assembler {
       }
     }
 
-    this.curSeg.dataArray = []
+    if (fs.existsSync(binFileName)) {
+      this.curSeg.refBytes = fs.readFileSync(binFileName)
+    }
+
+    this.curSeg.finalize()
     return true
   }
 

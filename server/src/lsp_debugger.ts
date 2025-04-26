@@ -4,7 +4,7 @@
 import * as lsp from 'vscode-languageserver'
 import { DebugProtocol } from "@vscode/debugprotocol"
 import { Handles, Breakpoint, StackFrame, Source, Scope, Variable } from "@vscode/debugadapter"
-import { WebSocket, Server } from "ws"
+import { WebSocket, WebSocketServer } from "ws"
 import { LspServer, LspProject } from "./lsp_server"
 import { StackEntry, StackRegister } from "./shared/types"
 import { Statement } from "./asm/statements"
@@ -85,7 +85,7 @@ export class LspDebugger {
 
   public mainProject?: LspProject
 
-  private socketServer: Server
+  private socketServer: WebSocketServer
   private socket?: WebSocket
   private responseProc?: any
 
@@ -95,7 +95,7 @@ export class LspDebugger {
 
   constructor(private lspServer: LspServer, private connection: lsp.Connection ) {
 
-    this.socketServer = new Server({ port: 6502 }, () => {
+    this.socketServer = new WebSocketServer({ port: 6502 }, () => {
     })
 
     // *** close socket?

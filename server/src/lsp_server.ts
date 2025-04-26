@@ -15,7 +15,6 @@ import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
 import { SyntaxNames } from "./asm/syntaxes/syntax_types"
 import { OpcodeDef, OpMode, isaSet65xx, Isa6502 } from "./isa65xx"
-import { ObjectDoc } from "./asm/object_doc"
 
 import { LspDebugger } from "./lsp_debugger"
 
