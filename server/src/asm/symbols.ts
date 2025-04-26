@@ -181,6 +181,14 @@ export class ScopeState {
         // skip invoke prefix token if present
         const nameToken = symExp.children[symExp.children.length - 1]
         result = nameToken?.getString() ?? ""
+
+        // TODO: Choose case insensitive macro names by syntax,
+        //  separate from symbol sensitivity.
+        //  (DASM, for example, is case insensitive for macros, but
+        //  case sensitive for symbols)
+        // TODO: may need to create/split SymbolType.MacroName
+        result = result.toLowerCase()
+
         result = this.addScopePath(result, scopeIndex)
         break
       }

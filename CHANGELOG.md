@@ -1,5 +1,15 @@
 # RPW 65 Changelog
 
+### [1.5.3] - 2025-xx-xx
+
+#### Added:
+
+* 64TASS [from agurtovoy]: include all supported CPUs in .cpu syntax
+
+#### Fixed:
+
+* DASM: Macros are case insensitive, unlike symbols
+
 ### [1.5.2] - 2025-04-14
 
 #### Added:

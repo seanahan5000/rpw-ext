@@ -35,7 +35,7 @@ export class Tass64Syntax extends SyntaxDef {
     this.keywordMap = new Map<string, KeywordDef>([
       // target
       [ ".cpu",     { create: () => { return new stm.CpuStatement() },
-                      params: '{"6502"|"65c02"|"65816"|"65el02"|"default"}',
+                      params: '{"6502"|"65c02"|"65ce02"|"6502i"|"65816"|"65dtv02"|"65el02"|"r65c02"|"w65c02"|"4510"|"default"}',
                       desc:   "Selects CPU according to the string argument" } ],
 
       // equates
