@@ -4,7 +4,7 @@ import * as path from 'path'
 import * as vsclnt from 'vscode-languageclient'
 import * as cmd from "./commands"
 import { RpwDebugSession } from "./debugger"
-import { Decorator } from "./codebytes"
+import { CodeDecorator } from "./codebytes"
 
 // TODO:
 //	? step instructions could be used to step into/through macros
@@ -18,7 +18,7 @@ import {
 
 export let client: LanguageClient
 let statusBarItem: vscode.StatusBarItem
-let decorator: Decorator
+let decorator: CodeDecorator
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -60,13 +60,13 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.rightArrowIndent", () => { cmd.arrowIndentCmd(false) }))
 
 	const config = vscode.workspace.getConfiguration("rpw65")
-	decorator = new Decorator(config.get("showCodeBytes"))
+	decorator = new CodeDecorator(config.get("showCodeBytes"))
 
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
   client.onNotification("rpw65.syntaxChanged", () => { updateStatusItem() })
-  client.onNotification("rpw.codeBytesChanged", () => { decorator.scheduleUpdate(true) })
+  client.onNotification("rpw.codeBytesChanged", () => { decorator.scheduleUpdate() })
 
   vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
     // TODO: why is this commented out?

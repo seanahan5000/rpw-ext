@@ -80,7 +80,6 @@ type GetCodeBytesArgs = {
 export type CodeBytesEntry = {
   a?: number      // address
   d?: number[]    // data bytes
-  e?: boolean     // empty src line
   c?: string      // cycle count ("3", "2/3", "4+", etc.)
 }
 
@@ -738,7 +737,9 @@ export class LspServer {
               entry.d.push(line.dataBytes[i])
             }
             if (isa && line.statement instanceof OpStatement) {
-              entry.c = isa.opcodes[line.dataBytes[0]].cy
+              // dataByte might have error and be negative
+              const opByte = Math.abs(line.dataBytes[0])
+              entry.c = isa.opcodes[opByte].cy
               if (entry.c == "2/3+") {
                 let pageCross = false
                 if (line.dataAddress && line.dataBytes[1]) {
@@ -757,9 +758,6 @@ export class LspServer {
                 }
               }
             }
-          }
-          if (line.statement.sourceLine == "") {
-            entry.e = true
           }
         }
         codeBytes.entries.push(entry)
