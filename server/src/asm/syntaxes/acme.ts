@@ -77,7 +77,7 @@ export class AcmeSyntax extends SyntaxDef {
       // macros
       [ "!macro",     { create: () => { return new stm.MacroDefStatement() },
                         label:  "",
-                        params: "<type-name> [ [~]<type-param> [, [~]<type-param> ...] ] \\{ [<block> \\}]",
+                        params: "<macro-name> [ [~]<type-param> [, [~]<type-param> ...] ] \\{ [<block> \\}]",
                         desc:   "Define a macro" } ],
 
       // data storage

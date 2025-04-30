@@ -90,7 +90,7 @@ export class Ca65Syntax extends SyntaxDef {
 
       // macros
       [ ".macro",     { create: () => { return new stm.MacroDefStatement() },
-                        params: "<type-name> [<type-param> [, <type-param> ...]]",
+                        params: "<macro-name> [<type-param> [, <type-param> ...]]",
                         desc:   "Start a classic macro definition" } ],
       [ ".mac",       { alias: ".macro" }],
       [ ".endmacro",  { create: () => { return new stm.EndMacroDefStatement() },
@@ -105,7 +105,7 @@ export class Ca65Syntax extends SyntaxDef {
                         params: "{atari|cbm|cpu|generic|longbranch}",
                         desc:   "Insert a predefined macro package" } ],
       [ ".delmacro",  { // TODO
-                        params: "<type-name>",
+                        params: "<macro-name>",
                         desc:   "Delete a classic macro" } ],
       [ ".delmac",    { alias: ".delmacro" }],
 

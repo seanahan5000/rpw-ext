@@ -99,7 +99,7 @@ export class DasmSyntax extends SyntaxDef {
       // macros
       [ "macro",      { create: () => { return new stm.MacroDefStatement() },
                         label:  "",
-                        params: "<type-name>",
+                        params: "<macro-name>",
                         desc:   "Start of macro definition" } ],
       [ "mac",        { alias: "macro" }],
       [ "endm",       { create: () => { return new stm.EndMacroDefStatement() },

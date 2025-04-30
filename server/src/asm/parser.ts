@@ -621,7 +621,7 @@ export class Parser extends Tokenizer {
     }
 
     token.type = TokenType.Macro
-    const symExp = this.newSymbolExpression([token], SymbolType.TypeName, false)
+    const symExp = this.newSymbolExpression([token], SymbolType.MacroName, false)
     return this.initStatement(new stm.MacroInvokeStatement(), symExp)
   }
 
