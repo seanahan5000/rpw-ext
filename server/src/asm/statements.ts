@@ -1740,6 +1740,12 @@ export class IncludeStatement extends FileStatement {
   }
 }
 
+// 64TASS:  [<label>] .binclude "filename"
+export class BlockIncludeStatement extends IncludeStatement {
+  // TODO: if label present, add named scope around include
+  //  else, add anonymous unique scope around include
+}
+
 // MERLIN:  SAV filename
 //   DASM:  n/a
 //   ACME:  n/a
@@ -1877,7 +1883,6 @@ export class TypeDefBeginStatement extends Statement {
   }
 
   postParse(parser: Parser) {
-
     const name = this.findArg("type-name")
     if (name instanceof exp.SymbolExpression) {
       this.typeName = name
@@ -2025,6 +2030,16 @@ export class MacroDefStatement extends TypeDefBeginStatement {
 
   constructor() {
     super(NestingType.Macro, false)
+  }
+
+  public override postParse(parser: Parser) {
+    const name = this.findArg("macro-name")
+    if (name instanceof exp.SymbolExpression) {
+      this.typeName = name
+    } else if (this.labelExp) {
+      this.typeName = this.labelExp
+      this.typeName.setSymbolType(SymbolType.MacroName)
+    }
   }
 
   public override preprocess(asm: Assembler): void {

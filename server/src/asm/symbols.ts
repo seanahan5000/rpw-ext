@@ -6,17 +6,18 @@ import { Expression, SymbolExpression} from "./expressions"
 
 export enum SymbolType {
   Variable    = 0,
-  TypeName    = 1,  // macro, struct, enum, define, etc.
-  NamedParam  = 2,  // named params to macros, structs, enums
+  MacroName   = 1,
+  TypeName   = 2,  // struct, enum, define, etc.
+  NamedParam  = 3,  // named params to macros, structs, enums
 
-  Simple      = 3,
-  Scoped      = 4,  // explicit scope, fully specified
+  Simple      = 4,
+  Scoped      = 5,  // explicit scope, fully specified
 
-  CheapLocal  = 5,  // scoped to previous non-local
-  ZoneLocal   = 6,  // scoped to SUBROUTINE or !zone
-  AnonLocal   = 7,  // ++ or --
-  LisaLocal   = 8,  // ^# def, <# or ># ref
-  CA65Local   = 9,  // : def, :+ or :- ref
+  CheapLocal  = 6,  // scoped to previous non-local
+  ZoneLocal   = 7,  // scoped to SUBROUTINE or !zone
+  AnonLocal   = 8,  // ++ or --
+  LisaLocal   = 9,  // ^# def, <# or ># ref
+  CA65Local   = 10  // : def, :+ or :- ref
 }
 
 export function isLocalType(symbolType: SymbolType): boolean {
@@ -141,6 +142,7 @@ export class ScopeState {
       case SymbolType.CA65Local:
         return 1
 
+      case SymbolType.MacroName:
       case SymbolType.TypeName:
       case SymbolType.NamedParam:
       case SymbolType.Simple:
@@ -177,10 +179,21 @@ export class ScopeState {
         break
       }
 
+      case SymbolType.MacroName:
       case SymbolType.TypeName: {
         // skip invoke prefix token if present
         const nameToken = symExp.children[symExp.children.length - 1]
         result = nameToken?.getString() ?? ""
+
+        if (symExp.symbolType == SymbolType.MacroName) {
+          // TODO: Choose case insensitive macro names by syntax,
+          //  separate from symbol sensitivity.
+          //  (DASM, for example, is case insensitive for macros, but
+          //  case sensitive for symbols)
+          // TODO: may need to create/split SymbolType.MacroName
+          result = result.toLowerCase()
+        }
+
         result = this.addScopePath(result, scopeIndex)
         break
       }

@@ -400,7 +400,7 @@ export class Completions {
       const symbolMap = sourceFile.getSymbolMap()
       for (const [key, symbol] of symbolMap) {
 
-        if (symbol.type == SymbolType.TypeName) {
+        if (symbol.type == SymbolType.MacroName) {
           if (this.addMacros) {
             // TODO: add leading "+" for ACME syntax? trigger character?
             const item = lsp.CompletionItem.create(key)

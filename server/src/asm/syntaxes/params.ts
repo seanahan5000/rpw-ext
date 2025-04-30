@@ -214,6 +214,9 @@ class TermParam extends Param {
       return this.addNameExpression(parser, "segment name", TokenType.Keyword)
     }
 
+    if (this.termType == "macro-name") {
+      return this.addSymbolExpression(parser, "type name", true, SymbolType.MacroName)
+    }
     if (this.termType == "type-name") {
       return this.addSymbolExpression(parser, "type name", true, SymbolType.TypeName)
     }

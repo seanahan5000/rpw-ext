@@ -1,5 +1,16 @@
 # RPW 65 Changelog
 
+### [1.5.3] - 2025-04-30
+
+#### Added:
+* 64TASS [from agurtovoy]: All supported CPUs in .cpu syntax
+* 64TASS: Support for unspecified values (".byte ?", for example) in .structs
+* 64TASS: Support lower word, higher word, and lower byte swapped word operators
+
+#### Fixed:
+* 64TASS: Change bank byte operator from "^" to "`"
+* DASM: Macros are case insensitive, unlike symbols
+
 ### [1.5.2] - 2025-04-14
 
 #### Added:

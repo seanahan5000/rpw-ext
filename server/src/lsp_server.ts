@@ -1231,7 +1231,8 @@ export class LspServer {
               index = SemanticToken.label
               bits |= (1 << SemanticModifier.local)
             } else if (symExp.symbol) {
-              if (symExp.symbol.type == SymbolType.TypeName) {
+              if (symExp.symbol.type == SymbolType.MacroName ||
+                  symExp.symbol.type == SymbolType.TypeName) {
                 index = SemanticToken.macro
               } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage

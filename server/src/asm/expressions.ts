@@ -432,6 +432,15 @@ export class UnaryExpression extends Expression {
         case Op.BankByte:
           value = (value >> 16) & 255
           break
+        case Op.SwappedWord:
+          value = ((value & 255) << 8) + ((value >> 8) & 255)
+          break
+        case Op.HighWord:
+          value = (value >> 8) & 0xFFFF
+          break
+        case Op.Word:
+          value = value & 0xFFFF
+          break
       }
     }
     return value
@@ -448,6 +457,10 @@ export class UnaryExpression extends Expression {
       case Op.HighByte:
       case Op.BankByte:
         return 1
+      case Op.SwappedWord:
+      case Op.HighWord:
+      case Op.Word:
+        return 2
     }
     // TODO: use resolved value to determine size (does -value change size?)
     return this.arg.getSize()

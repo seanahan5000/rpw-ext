@@ -54,6 +54,9 @@ export enum Op {
   LowByte,
   HighByte,
   BankByte,
+  SwappedWord,
+  HighWord,
+  Word,
 
   // binary
   Pow,

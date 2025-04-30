@@ -443,9 +443,15 @@ export class Assembler {
                 //  known macro name, convert it to a macro invoke
                 //  statement and reparse.
                 if (line.statement.labelExp) {
-                  const labelName = line.statement.labelExp.getString()
+                  let labelName = line.statement.labelExp.getString()
+
+                  // TODO: choose case insensitive macro names by syntax
+                  //  (DASM, for example, is case insensitive for macros, but
+                  //  case sensitive for symbols)
+                  labelName = labelName.toLowerCase()
+
                   const foundSym = this.module.symbolMap.get(labelName)
-                  if (foundSym && foundSym.type == SymbolType.TypeName) {
+                  if (foundSym && foundSym.type == SymbolType.MacroName) {
                     const newStatement = this.parser.reparseAsMacroInvoke(
                       line.sourceFile,
                       line.lineNumber,
@@ -868,7 +874,7 @@ export class Assembler {
         if (!symExp.isWeak) {
           // TODO: make temporary project check a setting
           if (!this.module.project.isTemporary) {
-            if (symExp.symbolType == SymbolType.TypeName) {
+            if (symExp.symbolType == SymbolType.MacroName) {
               symExp.setError("Unknown macro or opcode")
             }
           }
@@ -1521,9 +1527,13 @@ export class SymbolUtils {
 
     if (expression instanceof exp.UnaryExpression) {
       const opType = expression.opType
-      if (opType == Op.LowByte
-          || opType == Op.HighByte
-          || opType == Op.BankByte) {
+      // TODO: something other than this explicit check
+      if (opType == Op.LowByte ||
+          opType == Op.HighByte ||
+          opType == Op.BankByte ||
+          opType == Op.SwappedWord ||
+          opType == Op.HighWord ||
+          opType == Op.Word) {
         return
       }
     }

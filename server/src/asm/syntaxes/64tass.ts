@@ -35,7 +35,7 @@ export class Tass64Syntax extends SyntaxDef {
     this.keywordMap = new Map<string, KeywordDef>([
       // target
       [ ".cpu",     { create: () => { return new stm.CpuStatement() },
-                      params: '{"6502"|"65c02"|"65816"|"65el02"|"default"}',
+                      params: '{"6502"|"65c02"|"65ce02"|"6502i"|"65816"|"65dtv02"|"65el02"|"r65c02"|"w65c02"|"4510"|"default"}',
                       desc:   "Selects CPU according to the string argument" } ],
 
       // equates
@@ -82,9 +82,9 @@ export class Tass64Syntax extends SyntaxDef {
       [ ".include", { create: () => { return new stm.IncludeStatement() },
                       params: "<filename>",
                       desc:   "Include source file" } ],
-      [ ".binclude",{ // TODO
+      [ ".binclude",{ create: () => { return new stm.BlockIncludeStatement() },
                       params: "<filename>",
-                      desc:   "Include source file here in it's local block" } ],
+                      desc:   "Include source file here in its local block" } ],
       [ ".binary",  { create: () => { return new stm.IncBinStatement() },
                       params: "<filename>[, <offset>[, <length>]]",
                       desc:   "Include raw binary data from file" } ],
@@ -126,34 +126,34 @@ export class Tass64Syntax extends SyntaxDef {
 
       // data storage
       [ ".byte",    { create: () => { return new stm.DataStatement_U8() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 8 bit unsigned constants (0-255)" } ],
       [ ".char",    { create: () => { return new stm.DataStatement_S8() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 8 bit signed constants (-128-127)" } ],
       [ ".word",    { create: () => { return new stm.DataStatement_U16() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 16 bit unsigned constants (0-65535)" } ],
       [ ".sint",    { create: () => { return new stm.DataStatement_S16() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 16 bit signed constants (-32768-32767)" } ],
       [ ".addr",    { create: () => { return new stm.DataStatement_U16() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create 16 bit address constants for addresses" } ],
       [ ".rta",     { create: () => { return new stm.DataStatement_U16() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create 16 bit return address constants for addresses" } ],
       [ ".long",    { create: () => { return new stm.DataStatement_U24() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 24 bit unsigned constants (0-16777215)" } ],
       [ ".lint",    { create: () => { return new stm.DataStatement_S24() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 24 bit signed constants (-8388608-8388607)" } ],
       [ ".dword",   { create: () => { return new stm.DataStatement_U32() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 32 bit unsigned constants (0-4294967295)" } ],
       [ ".dint",    { create: () => { return new stm.DataStatement_S32() },
-                      params: "<expression>[, <expression> ...]",
+                      params: "{?|<expression>[, <expression> ...]}",
                       desc:   "Create bytes from 32 bit signed constants (-2147483648-2147483647)" } ],
 
       // text
@@ -479,12 +479,12 @@ export class Tass64Syntax extends SyntaxDef {
       [ "+",         { pre: 17, op: Op.Pos      }],
       [ "-",         { pre: 17, op: Op.Neg      }],
 
-      [ "^",         { pre: 4, op: Op.BankByte }],
-      [ ">",         { pre: 4, op: Op.HighByte }],
-      [ "<",         { pre: 4, op: Op.LowByte  }],
-      // "swapped word '><", O_BSWORD, 4
-      // "high word '>`", O_HWORD, 4
-      // "word '<>", O_WORD, 4
+      [ "`",         { pre: 4, op: Op.BankByte    }],
+      [ ">",         { pre: 4, op: Op.HighByte    }],
+      [ "<",         { pre: 4, op: Op.LowByte     }],
+      [ "><",        { pre: 4, op: Op.SwappedWord }],
+      [ ">`",        { pre: 4, op: Op.HighWord    }],
+      [ "<>",        { pre: 4, op: Op.Word        }],
 
       [ "(",         { pre: 0,  op: Op.Group, end: ")" }],
       [ "[",         { pre: 0,  op: Op.Group, end: "]" }],
