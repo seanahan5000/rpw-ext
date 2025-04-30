@@ -29,124 +29,131 @@ type CodeBytes = {
 
 class CodeLine {
 
-  private static emptyStr   = "".padEnd(5 + 3 + 3 + 3 + 1 + 0 + 2, "\xA0")
-  private static emptyStrCC = "".padEnd(5 + 3 + 3 + 3 + 1 + 5 + 2, "\xA0")
-
-  public address?: number
-  public data?: (number | undefined)[]
-  public cycleCount?: string
-
-  constructor(showCycleCounts: boolean) {
-    this.rebuildContents(showCycleCounts)
-  }
-
-  public buildDecorations(entry: CodeBytesEntry, showCycleCounts: boolean) {
-    this.address = entry.a
-    this.data = entry.d
-    this.cycleCount = entry.c
-    this.rebuildContents(showCycleCounts)
-  }
-
-  public clearDecorations(showCycleCounts: boolean) {
-    this.codeStr = showCycleCounts ? CodeLine.emptyStrCC : CodeLine.emptyStr
-    this.errStr = undefined
-  }
-
+  private codeList: CodeList
   public codeStr?: string
   public errStr?: string
+  public cyclesStr?: string
 
-  private rebuildContents(showCycleCounts: boolean) {
+  constructor(codeList: CodeList) {
+    this.codeList = codeList
+    this.rebuildContents()
+  }
 
-    // address is "0000:" or "????:"
-    let addressStr = this.address?.toString(16).toUpperCase() ?? "????"
-    if (addressStr.length <= 2) {
-      addressStr = addressStr.padStart(2, "0").padStart(4, "\xA0") + ":"
-    } else {
-      addressStr = addressStr.padStart(4, "0") + ":"
+  public buildDecorations(entry: CodeBytesEntry) {
+    this.rebuildContents(entry.a, entry.d, entry.c)
+  }
+
+  public clearDecorations() {
+    if (this.codeList.showCodeBytes) {
+      this.codeStr = this.getEmptyCodeStr()
+      this.errStr = undefined
     }
+    if (this.codeList.showCycleCounts) {
+      this.cyclesStr = "\xA0\xA0\xA0\xA0\xA0"
+    }
+  }
 
-    this.errStr = undefined
+  private rebuildContents(address?: number, dataBytes?: (number | undefined)[], cycleCount?: string) {
 
-    if (this.data) {
+    if (this.codeList.showCodeBytes) {
 
-      this.codeStr = addressStr
-      for (let i = 0; i < 3; i += 1) {
-        if (i < this.data.length) {
-          if (this.data[i] === undefined) {
+      // address is "0000:" or "????:"
+      let addressStr = address?.toString(16).toUpperCase() ?? "????"
+      if (addressStr.length <= 2) {
+        addressStr = addressStr.padStart(2, "0").padStart(4, "\xA0") + ":"
+      } else {
+        addressStr = addressStr.padStart(4, "0") + ":"
+      }
+
+      this.errStr = undefined
+
+      if (dataBytes) {
+
+        this.codeStr = addressStr
+        for (let i = 0; i < 3; i += 1) {
+          if (i < dataBytes.length) {
+            if (dataBytes[i] === undefined) {
+              this.syncStrings()
+              this.codeStr += "\xA0??"
+              continue
+            }
+            let byteValue = dataBytes[i]
+            if (byteValue < 0) {
+              byteValue = -byteValue
+              if (!this.errStr) {
+                this.errStr = ""
+              }
+            }
             this.syncStrings()
-            this.codeStr += "\xA0??"
-            continue
-          }
-          let byteValue = this.data[i]
-          if (byteValue < 0) {
-            byteValue = -byteValue
-            if (!this.errStr) {
-              this.errStr = ""
+            const byteStr = "\xA0" + byteValue.toString(16).toUpperCase().padStart(2, "0")
+            if (byteValue == dataBytes[i]) {
+              this.codeStr += byteStr
+            } else {
+              this.errStr += byteStr
             }
-          }
-          this.syncStrings()
-          const byteStr = "\xA0" + byteValue.toString(16).toUpperCase().padStart(2, "0")
-          if (byteValue == this.data[i]) {
-            this.codeStr += byteStr
           } else {
-            this.errStr += byteStr
+            this.syncStrings()
+            this.codeStr += "\xA0\xA0\xA0"
           }
+        }
+
+        // check remaining data
+        if (dataBytes.length > 3) {
+
+          // scan remaining bytes for errors
+          let inRemaining = false
+          for (let i = 3; i < dataBytes.length; i += 1) {
+            if (dataBytes[i] < 0) {
+              inRemaining = true
+              if (this.errStr === undefined) {
+                this.errStr = ""
+              }
+              break
+            }
+          }
+
+          // if error found, draw "+" in red
+          this.syncStrings()
+          if (inRemaining) {
+            this.errStr += "+"
+          } else {
+            this.codeStr += "+"
+          }
+
         } else {
           this.syncStrings()
-          this.codeStr += "\xA0\xA0\xA0"
-        }
-      }
-
-      // check remaining data
-      if (this.data.length > 3) {
-
-        // scan remaining bytes for errors
-        let inRemaining = false
-        for (let i = 3; i < this.data.length; i += 1) {
-          if (this.data[i] < 0) {
-            inRemaining = true
-            if (this.errStr === undefined) {
-              this.errStr = ""
-            }
-            break
-          }
+          this.codeStr += "\xA0"
         }
 
-        // if error found, draw "+" in red
         this.syncStrings()
-        if (inRemaining) {
-          this.errStr += "+"
-        } else {
-          this.codeStr += "+"
-        }
+        this.codeStr += "\xA0\xA0"
+
+        // final sync
+        this.syncStrings()
 
       } else {
-        this.syncStrings()
-        this.codeStr += "\xA0"
-      }
-
-      if (showCycleCounts) {
-        this.syncStrings()
-        if (this.cycleCount) {
-          this.codeStr += "\xA0\xA0" + this.cycleCount.padEnd(3, "\xA0")
+        if (address === undefined) {
+          this.codeStr = this.getEmptyCodeStr()
         } else {
-          this.codeStr += "\xA0\xA0\xA0\xA0\xA0"
+          this.codeStr = addressStr.padEnd(5 + 3 + 3 + 3 + 1 + 2, "\xA0")
         }
-      }
-
-      this.syncStrings()
-      this.codeStr += "\xA0\xA0"
-
-      // final sync
-      this.syncStrings()
-
-    } else {
-      if (this.address === undefined) {
-        this.codeStr = showCycleCounts ? CodeLine.emptyStrCC : CodeLine.emptyStr
-      } else {
-        this.codeStr = addressStr.padEnd(5 + 3 + 3 + 3 + 1 + (showCycleCounts ? 5 : 0) + 2, "\xA0")
       }
     }
+
+    if (this.codeList.showCycleCounts) {
+      if (cycleCount) {
+        this.cyclesStr = cycleCount.padEnd(5, "\xA0")
+      } else {
+        this.cyclesStr = "\xA0\xA0\xA0\xA0\xA0"
+      }
+    }
+  }
+
+  private getEmptyCodeStr(): string {
+    if (!this.codeList.emptyCodeStr) {
+      this.codeList.emptyCodeStr = "".padEnd(5 + 3 + 3 + 3 + 1 + 2, "\xA0")
+    }
+    return this.codeList.emptyCodeStr
   }
 
   private syncStrings() {
@@ -166,21 +173,26 @@ class CodeLine {
 
 class CodeList {
   public editor: vscode.TextEditor
-  public document: vscode.TextDocument
-  private showCycleCounts: boolean
+  public showCodeBytes: boolean
+  public showCycleCounts: boolean
   private codeLines: CodeLine[]
 
   private codeDecType: vscode.TextEditorDecorationType
   private errorDecType: vscode.TextEditorDecorationType
+  private cyclesDecType: vscode.TextEditorDecorationType
 
-  constructor(editor: vscode.TextEditor, showCycleCounts: boolean, ) {
+  // cached for use by CodeLines
+  public emptyCodeStr: string = ""
+
+  constructor(editor: vscode.TextEditor, showCodeBytes: boolean, showCycleCounts: boolean) {
     this.editor = editor
+    this.showCodeBytes = showCodeBytes
     this.showCycleCounts = showCycleCounts
-    this.document = editor.document
 
     this.codeLines = []
-    for (let i = 0; i < this.document.lineCount; i += 1) {
-      const codeLine = new CodeLine(this.showCycleCounts)
+    const lineCount = this.editor.document.lineCount
+    for (let i = 0; i < lineCount; i += 1) {
+      const codeLine = new CodeLine(this)
       this.codeLines.push(codeLine)
     }
 
@@ -189,10 +201,14 @@ class CodeList {
         color: "gray"
       }
     })
-
     this.errorDecType = vscode.window.createTextEditorDecorationType({
       before: {
         color: "red"
+      }
+    })
+    this.cyclesDecType = vscode.window.createTextEditorDecorationType({
+      before: {
+        color: "gray"
       }
     })
   }
@@ -200,14 +216,14 @@ class CodeList {
   public dispose() {
     this.codeDecType.dispose()
     this.errorDecType.dispose()
+    this.cyclesDecType.dispose()
   }
 
   public applyCodeBytes(codeBytes: CodeBytes) {
-    for (let i = codeBytes.startLine; i < codeBytes.startLine + codeBytes.entries.length; i += 1) {
-      const codeLine = this.codeLines[i]
+    for (let i = 0; i < codeBytes.entries.length; i += 1) {
+      const codeLine = this.codeLines[codeBytes.startLine + i]
       if (codeLine) {
-        const codeEntry = codeBytes.entries[i - codeBytes.startLine]
-        codeLine.buildDecorations(codeEntry, codeBytes.cycleCounts ?? false)
+        codeLine.buildDecorations(codeBytes.entries[i])
       }
     }
   }
@@ -269,7 +285,7 @@ class CodeList {
       if (linesDelta > 0) {
         const newSlots: CodeLine[] = []
         for (let i = 0; i < linesDelta; i += 1) {
-          newSlots.push(new CodeLine(this.showCycleCounts))
+          newSlots.push(new CodeLine(this))
         }
         this.codeLines.splice(clearStart, 0, ...newSlots)
       } else if (linesDelta < 0) {
@@ -284,7 +300,7 @@ class CodeList {
   private clearDecorations(startLine: number, count: number) {
     for (let i = startLine; i < startLine + count; i += 1) {
       if (this.codeLines[i]) {
-        this.codeLines[i].clearDecorations(this.showCycleCounts)
+        this.codeLines[i].clearDecorations()
       }
     }
   }
@@ -312,6 +328,7 @@ class CodeList {
 
     let codeDecOptions: vscode.DecorationOptions[] = []
     let errDecOptions: vscode.DecorationOptions[] = []
+    let cyclesDecOptions: vscode.DecorationOptions[] = []
 
     if (visibleEnd > this.codeLines.length) {
       visibleEnd = this.codeLines.length
@@ -321,32 +338,48 @@ class CodeList {
 
       const codeLine = this.codeLines[i]
 
-      if (codeLine.codeStr) {
-        codeDecOptions.push({
-          range: new vscode.Range(i, 0, i, 0),
-          renderOptions: {
-            before: {
-              contentText: codeLine.codeStr
+      if (this.showCodeBytes) {
+        if (codeLine.codeStr) {
+          codeDecOptions.push({
+            range: new vscode.Range(i, 0, i, 0),
+            renderOptions: {
+              before: {
+                contentText: codeLine.codeStr
+              }
             }
-          }
-        })
+          })
+        }
+
+        if (codeLine.errStr) {
+          errDecOptions.push({
+            range: new vscode.Range(i, 0, i, 0),
+            renderOptions: {
+              before: {
+                margin: "0 0 0 -17ch",
+                contentText: codeLine.errStr
+              }
+            }
+          })
+        }
       }
 
-      if (codeLine.errStr) {
-        errDecOptions.push({
-          range: new vscode.Range(i, 0, i, 0),
-          renderOptions: {
-            before: {
-              margin: this.showCycleCounts ? "0 0 0 -22ch" : "0 0 0 -17ch",
-              contentText: codeLine.errStr
+      if (this.showCycleCounts) {
+        if (codeLine.cyclesStr) {
+          cyclesDecOptions.push({
+            range: new vscode.Range(i, 0, i, 0),
+            renderOptions: {
+              before: {
+                contentText: codeLine.cyclesStr
+              }
             }
-          }
-        })
+          })
+        }
       }
     }
 
     this.editor.setDecorations(this.codeDecType, codeDecOptions)
     this.editor.setDecorations(this.errorDecType, errDecOptions)
+    this.editor.setDecorations(this.cyclesDecType, cyclesDecOptions)
   }
 }
 
@@ -354,40 +387,44 @@ class CodeList {
 
 export class CodeDecorator {
 
-  private enabled: boolean
+  private showCodeBytes: boolean
+  private showCycleCounts: boolean
+
   private codeLists: CodeList[] = []
   private updateId?: NodeJS.Timeout
   private updateComplete = Promise.resolve()
 
-  constructor(enabled: boolean) {
-    this.enabled = enabled
+  constructor(codeBytes: boolean, cycleCounts: boolean) {
+    this.showCodeBytes = codeBytes
+    this.showCycleCounts = cycleCounts
   }
 
-  public async enable(enabled: boolean) {
-    if (enabled != this.enabled) {
-      if (enabled) {
-        this.enabled = true
-        this.scheduleUpdate()
-      } else {
+  public async enableCodeBytes(codeBytes: boolean) {
+    this.enable(codeBytes, this.showCycleCounts)
+  }
 
-        if (this.updateId !== undefined) {
-          clearTimeout(this.updateId)
-          delete this.updateId
-        }
+  public async enableCycleCounts(cycleCounts: boolean) {
+    this.enable(this.showCodeBytes, cycleCounts)
+  }
 
-        await this.updateComplete
+  private async enable(codeBytes: boolean, cycleCounts: boolean) {
+    if (this.showCodeBytes != codeBytes || this.showCycleCounts != cycleCounts) {
 
-        for (let codeList of this.codeLists) {
-          codeList.dispose()
-        }
-        this.codeLists = []
-        this.enabled = false
+      if (this.updateId !== undefined) {
+        clearTimeout(this.updateId)
+        delete this.updateId
       }
+
+      await this.updateComplete
+
+      this.showCodeBytes = codeBytes
+      this.showCycleCounts = cycleCounts
+      this.scheduleUpdate(undefined, true)
     }
   }
 
-  public scheduleUpdate(timeout?: number) {
-    if (this.enabled) {
+  public scheduleUpdate(timeout?: number, forceUpdate = false) {
+    if (this.showCodeBytes || this.showCycleCounts || forceUpdate) {
 
       if (this.updateId !== undefined) {
         clearTimeout(this.updateId)
@@ -412,12 +449,12 @@ export class CodeDecorator {
       document: vscode.TextDocument,
       changes: readonly vscode.TextDocumentContentChangeEvent[]) {
 
-    if (this.enabled) {
+    if (this.showCodeBytes || this.showCycleCounts) {
 
       await this.updateComplete
 
       for (let codeList of this.codeLists) {
-        if (codeList.document == document) {
+        if (codeList.editor.document == document) {
           codeList.applyEdits(changes)
         }
       }
@@ -451,30 +488,26 @@ export class CodeDecorator {
 
       if (editor.document.languageId == "rpw65") {
 
-        const showCycleCounts = false    // TODO: make this a setting
-
         let codeList: CodeList | undefined
 
         for (let i = 0; i < this.codeLists.length; i += 1) {
           const list = this.codeLists[i]
-          if (list.editor != editor) {
-            continue
+          if (list.editor == editor) {
+            codeList = list
+            codeList.showCodeBytes = this.showCodeBytes
+            codeList.showCycleCounts = this.showCycleCounts
+            this.codeLists.splice(i, 1)
+            newLists.push(codeList)
+            break
           }
-          if (list.document != editor.document) {
-            continue
-          }
-          codeList = list
-          this.codeLists.splice(i, 1)
-          newLists.push(codeList)
-          break
         }
 
-        let visibleRange = codeList?.getVisibleRange()
+        let visRange = codeList?.getVisibleRange()
 
         if (!codeList) {
-          codeList = new CodeList(editor, showCycleCounts)
-          visibleRange = codeList.getVisibleRange()
-          codeList.setDecorations(visibleRange.start, visibleRange.end)
+          codeList = new CodeList(editor, this.showCodeBytes, this.showCycleCounts)
+          visRange = codeList.getVisibleRange()
+          codeList.setDecorations(visRange.start, visRange.end)
           newLists.push(codeList)
         }
 
@@ -485,31 +518,32 @@ export class CodeDecorator {
           arguments: []
         }
         request.arguments.push(editor.document.uri.toString())
-        request.arguments.push({ startLine: visibleRange.start, endLine: visibleRange.end, cycleCounts: showCycleCounts })
+        request.arguments.push({ startLine: visRange.start, endLine: visRange.end, cycleCounts: this.enableCycleCounts })
 
         const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, request)
         if (content) {
           codeList.applyCodeBytes(content)
-          codeList.setDecorations(visibleRange.start, visibleRange.end)
+          codeList.setDecorations(visRange.start, visRange.end)
         }
 
         // do a final full refresh
 
-        if (visibleRange.start > 0 || visibleRange.end < codeList.document.lineCount) {
+        const lineCount = codeList.editor.document.lineCount
+        if (visRange.start > 0 || visRange.end < lineCount) {
 
           const request = {
             command: "rpw65.getCodeBytes",
             arguments: []
           }
           request.arguments.push(editor.document.uri.toString())
-          request.arguments.push({ cycleCounts: showCycleCounts })
+          request.arguments.push({ cycleCounts: this.showCycleCounts })
 
           const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, request)
           if (content) {
             codeList.applyCodeBytes(content)
           }
 
-          codeList.setDecorations(0, codeList.document.lineCount)
+          codeList.setDecorations(0, lineCount)
         }
       }
     }

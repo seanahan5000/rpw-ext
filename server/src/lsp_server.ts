@@ -116,10 +116,6 @@ export class LspProject extends Project {
     this.server.removeTemporary(this, fullPath)
     return super.openSourceFile(module, fullPath)
   }
-
-  // public codeBytesChanged() {
-  //   this.server.connection.sendNotification("rpw.codeBytesChanged")
-  // }
 }
 
 //------------------------------------------------------------------------------

@@ -60,18 +60,13 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.rightArrowIndent", () => { cmd.arrowIndentCmd(false) }))
 
 	const config = vscode.workspace.getConfiguration("rpw65")
-	decorator = new CodeDecorator(config.get("showCodeBytes"))
+	decorator = new CodeDecorator(config.get("showCodeBytes"), config.get("showCycleCounts"))
 
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
   client.onNotification("rpw65.syntaxChanged", () => { updateStatusItem() })
-  client.onNotification("rpw.codeBytesChanged", () => { decorator.scheduleUpdate() })
-
-  vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
-    // TODO: why is this commented out?
-    // decorator.scheduleUpdate()
-  })
+  client.onNotification("rpw65.codeBytesChanged", () => { decorator.scheduleUpdate() })
 
   vscode.window.onDidChangeVisibleTextEditors(event => {
     decorator.scheduleUpdate()
@@ -84,7 +79,11 @@ export function activate(context: vscode.ExtensionContext) {
   vscode.workspace.onDidChangeConfiguration(event => {
     if (event.affectsConfiguration("rpw65.showCodeBytes")) {
       const config = vscode.workspace.getConfiguration("rpw65")
-      decorator.enable(config.get("showCodeBytes"))
+      decorator.enableCodeBytes(config.get("showCodeBytes"))
+    }
+    if (event.affectsConfiguration("rpw65.showCycleCounts")) {
+      const config = vscode.workspace.getConfiguration("rpw65")
+      decorator.enableCycleCounts(config.get("showCycleCounts"))
     }
   })
 
@@ -98,7 +97,8 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate(): Thenable<void> | undefined {
-	decorator?.enable(false)
+	decorator?.enableCodeBytes(false)
+	decorator?.enableCycleCounts(false)
 	return client?.stop()
 }
 

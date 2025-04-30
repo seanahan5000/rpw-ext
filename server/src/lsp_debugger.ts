@@ -85,7 +85,7 @@ export class LspDebugger {
 
   public mainProject?: LspProject
 
-  private socketServer: WebSocketServer
+  private socketServer?: WebSocketServer
   private socket?: WebSocket
   private responseProc?: any
 
@@ -95,14 +95,11 @@ export class LspDebugger {
 
   constructor(private lspServer: LspServer, private connection: lsp.Connection ) {
 
-    this.socketServer = new WebSocketServer({ port: 6502 }, () => {
-    })
-
-    // *** close socket?
-    const errHandle = (err: any) => {
-      if (err) {
-        throw err
-      }
+    try {
+      this.socketServer = new WebSocketServer({ port: 6502 }, () => {})
+    } catch {
+      // TODO: how should port already in use be handled?
+      return
     }
 
     this.socketServer.on("connection", (socket: WebSocket) => {

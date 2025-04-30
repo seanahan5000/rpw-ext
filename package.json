@@ -74,6 +74,11 @@
 					"default": true,
 					"markdownDescription": "Show assembled code bytes next to source."
 				},
+				"rpw65.showCycleCounts": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Show instruction cycle counts next to source."
+				},
 				"rpw65.columns.enable": {
 					"type": "boolean",
 					"default": true,
