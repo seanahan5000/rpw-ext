@@ -1754,6 +1754,17 @@ export class BlockIncludeStatement extends IncludeStatement {
 
 export class SaveStatement extends FileStatement {
 
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    if (this.fileName) {
+      const fileNameStr = this.cleanFileName()
+      if (fileNameStr) {
+        asm.saveSegment(fileNameStr)
+      }
+    }
+  }
+
   public pass2(asm: Assembler): void {
 
     // TODO: share more of this code

@@ -1,6 +1,6 @@
 
 import * as fs from 'fs'
-import { Module, SourceFile, LineRecord, SymbolMap } from "./project"
+import { Module, SourceFile, SymbolMap } from "./project"
 import { Statement, ConditionalStatement, EquStatement, GenericStatement } from "./statements"
 import { TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
 import { ClosingBraceStatement } from "./statements"
@@ -9,6 +9,23 @@ import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
 import { SymbolType, SymbolFrom } from "./symbols"
 import { Parser } from "./parser"
+import { ObjectDoc } from "./object_doc"
+
+//------------------------------------------------------------------------------
+
+export type LineRecord = {
+  sourceFile: SourceFile,
+  lineNumber: number,
+  // TODO: startColumn? endColumn?
+  statement: Statement
+  isHidden?: boolean
+
+  // *** this will go away once file dumper updated ***
+  bytes?: (number | undefined)[]
+
+  // lines records generate from this macroInvoke statement
+  children?: LineRecord[]
+}
 
 //------------------------------------------------------------------------------
 // MARK: FileReader
@@ -231,7 +248,15 @@ export class Segment {
   public startPC?: number
   public curPC?: number
   public nextPC?: number
-  public fileBytes: (number | undefined)[] = []
+
+  // only valid while building segment
+  public dataArray?: (number | undefined)[] = []
+
+  // optionally valid after pass2, before finalize
+  public refBytes?: Uint8Array
+
+  // valid after finalize
+  public dataBytes?: Uint8Array
 
   constructor(name: string, addressing: string, isInitialized: boolean, startPC?: number) {
     this.name = name
@@ -241,6 +266,24 @@ export class Segment {
     if (startPC !== undefined) {
       this.curPC = startPC
     }
+  }
+
+  // called by ObjectRange.finalize
+  public finalize() {
+    if (this.dataArray && !this.dataBytes) {
+      // TODO: what happens if dataArray has undefined values?
+      this.dataBytes = new Uint8Array(this.dataArray! as Array<number>)
+      this.dataArray = undefined
+    }
+  }
+
+  // Base address of segment should always be available
+  //  by the time this is called.
+  public get address(): number | undefined {
+    // if (this.startPC === undefined) {
+    //   throw "ASSERT: Segment address not defined"
+    // }
+    return this.startPC
   }
 }
 
@@ -256,6 +299,8 @@ export class Assembler {
   public scopeState: ScopeState
   private syntaxStats: number[] = []
   public symUtils = new SymbolUtils()
+
+  private lineRecords: LineRecord[] = []
 
   private nestingStack: NestingEntry[] = []
   private nestingCounts: number[] = new Array(NestingType.Count).fill(0)
@@ -276,8 +321,6 @@ export class Assembler {
   private curSeg?: Segment
 
   private curLine?: LineRecord
-
-  private statementBytes: (number | undefined)[] = []
 
   private pass: number = -1
 
@@ -308,9 +351,9 @@ export class Assembler {
   // #region Pass 01
   //---------------------------------------------------
 
-  public assemble_pass01(fileNames: string[], syntaxStats: number[]): LineRecord[] {
+  public assemble_pass01(fileNames: string[], syntaxStats: number[]) {
 
-    const lineRecords: LineRecord[] = []
+    this.lineRecords = []
     this.syntaxStats = syntaxStats
 
     this.segMap = new Map<string, Segment>()
@@ -327,7 +370,7 @@ export class Assembler {
 
     this.pass = 0
 
-    this.setSegment("code", "absolute", true, this.module.project.syntaxDef.defaultOrg)
+    this.setSegment("code", "absolute", true, undefined/* ***this.module.project.syntaxDef.defaultOrg*/)
     this.curSeg = this.curSeg!
 
     for (let fileName of fileNames) {
@@ -336,7 +379,7 @@ export class Assembler {
 
       // parse all the statements of the initial file and set fileReader state
       if (!this.includeFile(fileName)) {
-        return lineRecords
+        return
       }
 
       // NOTE: All vars/params must be resolved/set by end of preprocess (pass 0).
@@ -490,19 +533,23 @@ export class Assembler {
                 this.curSeg.curPC = this.curSeg.nextPC
                 this.curSeg.nextPC = undefined
               } else {
-                // Once statements start trying to use the current PC
-                //  default to 0 and advance that.  (This shows up when
-                //  a new segment is created and then immediately used.)
-                if (this.curSeg.curPC === undefined) {
-                  this.curSeg.curPC = 0
-                  line.statement.PC = 0
+                if (advancePC != 0) {   // *** just a hack right now ***
+                  // Once statements start trying to use the current PC
+                  //  default to 0 and advance that.  (This shows up when
+                  //  a new segment is created and then immediately used.)
+                  // *** may need to be assembler-specific ***
+                  if (this.curSeg.curPC === undefined) {
+                    // *** should use default PC here ***
+                    this.curSeg.curPC = 0
+                    line.statement.PC = 0
+                  }
+                  this.curSeg.curPC += advancePC
                 }
-                this.curSeg.curPC += advancePC
               }
             }
           }
 
-          lineRecords.push(this.curLine)
+          this.lineRecords.push(this.curLine)
 
           // if macroInvoke active, also attach new lines to invoker
           if (this.macroInvokeState?.line) {
@@ -554,7 +601,29 @@ export class Assembler {
     // }
 
     this.pass = -1
-    return lineRecords
+  }
+
+  // replace named parameters with their current values
+  private expandStatement(statement: Statement): string {
+    this.checkPass(0)
+
+    let result = statement.sourceLine
+    if (this.macroInvokeState) {
+      statement.forEachExpressionBack((expression: exp.Expression) => {
+        if (expression instanceof exp.SymbolExpression) {
+          if (expression.symbolType == SymbolType.NamedParam) {
+            const range = expression.getRange()
+            if (range) {
+              const newStr = this.macroInvokeState!.varMap.get(expression.getSimpleName().asString)
+              if (newStr !== undefined) {
+                result = result.slice(0, range.start) + newStr + result.slice(range.end)
+              }
+            }
+          }
+        }
+      })
+    }
+    return result
   }
 
   // #endregion
@@ -562,20 +631,28 @@ export class Assembler {
   // #region Pass 2
   //---------------------------------------------------
 
-  public assemble_pass2(lineRecords: LineRecord[]) {
+  // only valid during pass 2
+  private statementBytes: (number | undefined)[] = []
+  private curObjDoc?: ObjectDoc
+
+  // debug-only
+  static dumpFile = false
+
+  public assemble_pass2() {
     this.pass = 2
 
     this.statementBytes = []
+    this.curObjDoc = undefined
 
-    for (let line of lineRecords) {
+    for (let line of this.lineRecords) {
 
-      if (!line.statement) {
-        continue
-      }
+      this.curLine = line
+      this.curSeg = line.statement.segment
 
       // *** would linking of forward references still be needed?
       // *** maybe still process symbol references (not definitions)
       if (!line.statement.enabled) {
+        this.addObjectLine(line, 0)
         continue
       }
 
@@ -622,19 +699,25 @@ export class Assembler {
       // *** error on final resolve failure ***
 
       // only call write pass if current segment is initialized (has data)
-      if (line.statement?.segment?.isInitialized) {
+      if (line.statement.segment?.isInitialized) {
 
         line.statement.pass2(this)
 
+        // NOTE: bytes have already been added to current segment
+        this.addObjectLine(line, this.statementBytes.length)
+
         if (this.statementBytes.length) {
+          // *** this will go away once file dumper is converted ***
           line.bytes = this.statementBytes
           this.statementBytes = []
         }
+      } else {
+        this.addObjectLine(line, 0)
       }
     }
 
     // walk each macro invoke statement and collect errors from their children
-    for (let line of lineRecords) {
+    for (let line of this.lineRecords) {
       if (!line.isHidden && line.statement?.enabled) {
         if (line.statement instanceof MacroInvokeStatement) {
           this.collectErrors(line)
@@ -646,66 +729,102 @@ export class Assembler {
       this.writeFile(this.module.saveName)
     }
 
+    this.curSeg = undefined
+    this.curLine = undefined
+
+    // TODO: debug code, to be removed
+    if (Assembler.dumpFile) {
+
+      console.log(this.module.srcName)
+
+      // if (this.srcName == "xxx")
+      {
+        for (let line of this.lineRecords) {
+          let str = "  "
+          if (!line.statement?.enabled) {
+            str = "X "
+          } else if (line.isHidden) {
+            str = "* "
+          }
+
+          if (line.bytes?.length) {
+
+            str += line.statement?.PC?.toString(16).padStart(4, "0").toUpperCase() + ": "
+
+            for (let i = 0; i < 3; i += 1) {
+              if (!line.bytes || i >= line.bytes.length) {
+                str += "  "
+              } else {
+                if (line.bytes[i] === undefined) {
+                  str += "??"
+                } else {
+                  str += line.bytes[i]!.toString(16).padStart(2, "0").toUpperCase()
+                }
+              }
+              if (line.bytes.length <= 3 || i < 2) {
+                str += " "
+              } else {
+                str += "+"
+              }
+            }
+          } else {
+            str = str.padEnd(2 + 6 + 9, " ")
+          }
+          str += line.statement?.sourceLine ?? ""
+          console.log(str)
+        }
+      }
+    }
+
     this.pass = -1
+
+    // TODO: parent/child relationship between statements is lost here
+    this.lineRecords = []
   }
 
-  // #endregion
-  //--------------------------------------------------------
-  // #region Writing
-  // write callbacks for pass 2
-  //--------------------------------------------------------
+  private addObjectLine(line: LineRecord, byteCount: number) {
+    if (!this.curObjDoc || (this.curObjDoc.sourceFile != line.sourceFile && !line.isHidden)) {
+      this.curObjDoc = undefined
+      for (let objectDoc of this.module.objectDocs) {
+        if (objectDoc.sourceFile == line.sourceFile) {
+          this.curObjDoc = objectDoc
+          break
+        }
+      }
+      if (!this.curObjDoc) {
+        this.curObjDoc = new ObjectDoc(line.sourceFile)
+        this.module.objectDocs.push(this.curObjDoc)
+      }
+    }
+    this.curObjDoc.addLine(line, byteCount)
+  }
 
   public writeByte(value: number | undefined) {
-    if (!this.curSeg?.fileBytes) {
+    if (!this.curSeg?.dataArray) {
       throw "ASSERT: writeByte called without a segment"
     }
     this.checkPass(2)
-    this.curSeg.fileBytes.push(value)
+    this.curSeg.dataArray.push(value)
     this.statementBytes.push(value)
   }
 
   public writeBytes(values: (number | undefined)[]) {
-    if (!this.curSeg?.fileBytes) {
+    if (!this.curSeg?.dataArray) {
       throw "ASSERT: writeBytes called without a segment"
     }
     this.checkPass(2)
-    this.curSeg.fileBytes.push(...values)
+    this.curSeg.dataArray.push(...values)
     this.statementBytes.push(...values)
   }
 
   public writeBytePattern(value: number | undefined, count: number) {
-    if (!this.curSeg?.fileBytes) {
+    if (!this.curSeg?.dataArray) {
       throw "ASSERT: writeBytePattern called without a segment"
     }
     this.checkPass(2)
     const bytes = new Array(count).fill(value)
-    this.curSeg.fileBytes.push(...bytes)
+    this.curSeg.dataArray.push(...bytes)
     this.statementBytes.push(...bytes)
-  }
-
-  //--------------------------------------------------------
-
-  // replace named parameters with their current values
-  private expandStatement(statement: Statement): string {
-    this.checkPass(0)
-
-    let result = statement.sourceLine
-    if (this.macroInvokeState) {
-      statement.forEachExpressionBack((expression: exp.Expression) => {
-        if (expression instanceof exp.SymbolExpression) {
-          if (expression.symbolType == SymbolType.NamedParam) {
-            const range = expression.getRange()
-            if (range) {
-              const newStr = this.macroInvokeState!.varMap.get(expression.getSimpleName().asString)
-              if (newStr !== undefined) {
-                result = result.slice(0, range.start) + newStr + result.slice(range.end)
-              }
-            }
-          }
-        }
-      })
-    }
-    return result
   }
 
   //--------------------------------------------------------
@@ -941,6 +1060,20 @@ export class Assembler {
     }
 
     this.curSeg = nextSeg
+  }
+
+  public saveSegment(cleanFileName: string) {
+    this.checkPass(0)
+
+    // rename the current code segment after a save (MERLIN-only)
+    if (this.curSeg) {
+      this.segMap.delete(this.curSeg.name)
+      this.segMap.set(cleanFileName.toLowerCase(), this.curSeg)
+    }
+
+    // start a new code segment after the save
+    // NOTE: SaveStatement.segment has already been set to previous segment
+    this.setSegment("code", "absolute", true, undefined)
   }
 
   public pushAndSetMacroSegment() {
@@ -1246,16 +1379,18 @@ export class Assembler {
     if (Assembler.verifyOnWrite) {
       console.log(`Checking ${binFileName}`)
 
-      for (let i = 0; i < this.curSeg.fileBytes.length; i += 1) {
-        if (this.curSeg.fileBytes[i] === undefined) {
-          const addrStr = i.toString(16).padStart(4, "0").toUpperCase()
-          this.curSeg.fileBytes[i] = 0xEE
-          console.log(`Undefined data at ${addrStr}`)
+      if (this.curSeg.dataArray) {
+        for (let i = 0; i < this.curSeg.dataArray.length; i += 1) {
+          if (this.curSeg.dataArray[i] === undefined) {
+            const addrStr = i.toString(16).padStart(4, "0").toUpperCase()
+            this.curSeg.dataArray[i] = 0xEE
+            console.log(`Undefined data at ${addrStr}`)
+          }
         }
       }
     }
 
-    const buffer = new Uint8Array(<number[]>this.curSeg.fileBytes)
+    const buffer = new Uint8Array(<number[]>this.curSeg.dataArray)
 
     // TODO: eventually write out final data
     // fs.writeFileSync(binFileName + "_new", buffer, { encoding: null, flag: "w" })
@@ -1284,7 +1419,11 @@ export class Assembler {
       }
     }
 
-    this.curSeg.fileBytes = []
+    if (fs.existsSync(binFileName)) {
+      this.curSeg.refBytes = fs.readFileSync(binFileName)
+    }
+
+    this.curSeg.finalize()
     return true
   }
 

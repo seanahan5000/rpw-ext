@@ -1,4 +1,4 @@
-// NOTE: duplicated in dbug/src
+// NOTE: duplicated in rpw-ext/server/src
 
 export type RpwSettings = {
   syntax: string
