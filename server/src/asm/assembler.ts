@@ -1073,7 +1073,7 @@ export class Assembler {
 
     // start a new code segment after the save
     // NOTE: SaveStatement.segment has already been set to previous segment
-    this.setSegment("code", "absolute", true, undefined)
+    this.setSegment("code", "absolute", true, this.curSeg?.curPC)
   }
 
   public pushAndSetMacroSegment() {
