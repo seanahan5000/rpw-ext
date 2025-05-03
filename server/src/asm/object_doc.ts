@@ -1,5 +1,4 @@
 
-import * as base64 from 'base64-js'
 import { SourceFile } from "./project"
 import { Statement } from "./statements"
 import { LineRecord, Segment } from "./assembler"
@@ -16,16 +15,6 @@ export class DataRange {
   constructor(dataAddress: number, dataBytes: Uint8Array) {
     this.address = dataAddress
     this.bytes = dataBytes
-  }
-
-  public static fromString(dataAddress: number, dataString: string): DataRange {
-    return new DataRange(dataAddress, base64.toByteArray(dataString))
-  }
-
-  public static fromEntry(obj: any): DataRange | undefined {
-    if (obj.dataAddress && obj.dataBytes) {
-      return new DataRange(obj.dataAddress, obj.dataBytes)
-    }
   }
 
   public compare(inAddress: number, inBytes: number[] | Uint8Array, inOffset = 0, inCount?: number): number {
@@ -170,25 +159,28 @@ class ObjectRange {
     return this.dataRange?.compare(dataRange.address, dataRange.bytes) ?? 0
   }
 
-  public getLine(address: number): number {
+  public getLine(address: number): number | undefined {
     const offset = address - this.startAddress
     let minOffset = 0
     let maxOffset = this.offsets[0]
     for (let i = 1; i < this.offsets.length; i += 1) {
       minOffset = maxOffset
       maxOffset = this.offsets[i]
-      if (offset >= minOffset && offset < maxOffset) {
-        return i
+      if (offset >= maxOffset) {
+        continue
       }
+      if (offset < minOffset) {
+        break
+      }
+      return i - 1
     }
-    throw "ASSERT: ObjectRange.getLine failed"
   }
 }
 
 //------------------------------------------------------------------------------
 
 export type RangeMatch = {
-  sourceFile: SourceFile
+  objectDoc: ObjectDoc
   sourceLine: number
   matchCount: number
 }
@@ -252,17 +244,21 @@ export class ObjectDoc {
     const dataStart = dataRange ? dataRange.startAddress : dataPC
     const dataEnd = dataRange ? dataRange.endAddress : dataPC + 1
     for (let objRange of this.objectRanges) {
-      if (objRange.startAddress + objRange.dataLength <= dataStart) {
+      if (dataStart >= objRange.startAddress + objRange.dataLength) {
         continue
       }
-      if (objRange.startAddress >= dataEnd) {
+      if (dataEnd <= objRange.startAddress) {
         break
       }
-      matches.push({
-        sourceFile: this.sourceFile,
-        sourceLine: objRange.getLine(dataPC),
-        matchCount: dataRange ? objRange.matchRange(dataRange) : 1
-      })
+      // NOTE: dataRange could partially overlap objRange but dataPC may not
+      const sourceLine = objRange.getLine(dataPC)
+      if (sourceLine) {
+        matches.push({
+          objectDoc: this,
+          sourceLine,
+          matchCount: dataRange ? objRange.matchRange(dataRange) : 1
+        })
+      }
     }
     return matches
   }

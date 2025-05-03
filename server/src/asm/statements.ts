@@ -1687,12 +1687,10 @@ function scanHex(hexString: string, buffer: number[]) {
 class FileStatement extends Statement {
 
   protected fileName?: exp.FileNameExpression
+  protected fileNameStr: string = ""
 
   postParse(parser: Parser) {
     this.fileName = this.findArg("filename")
-  }
-
-  protected cleanFileName(): string | undefined {
     if (this.fileName) {
       let fileNameStr = this.fileName.getString() || ""
       if (fileNameStr.length > 0) {
@@ -1708,7 +1706,7 @@ class FileStatement extends Statement {
             }
           }
         }
-        return fileNameStr
+        this.fileNameStr = fileNameStr
       }
     }
   }
@@ -1728,13 +1726,9 @@ export class IncludeStatement extends FileStatement {
   public override preprocess(asm: Assembler): void {
     super.preprocess(asm)
 
-    // TODO: share more of this code
-    if (this.fileName) {
-      const fileNameStr = this.cleanFileName()
-      if (fileNameStr) {
-        if (!asm.includeFile(fileNameStr)) {
-          this.fileName.setError("File not found")
-        }
+    if (this.fileName && this.fileNameStr) {
+      if (!asm.includeFile(this.fileNameStr)) {
+        this.fileName.setError("File not found")
       }
     }
   }
@@ -1758,25 +1752,17 @@ export class SaveStatement extends FileStatement {
     super.preprocess(asm)
 
     if (this.fileName) {
-      const fileNameStr = this.cleanFileName()
-      if (fileNameStr) {
-        asm.saveSegment(fileNameStr)
-      }
+      asm.saveSegment(this.fileNameStr)
     }
   }
 
   public pass2(asm: Assembler): void {
-
-    // TODO: share more of this code
     if (this.fileName) {
-      const fileNameStr = this.cleanFileName()
-      if (fileNameStr) {
-        if (!asm.writeFile(fileNameStr)) {
-          this.fileName.setError("File not found")
-        }
+      if (!asm.writeFile(this.fileNameStr)) {
+        this.fileName.setError("File not found")
       }
     }
-}
+  }
 }
 
 

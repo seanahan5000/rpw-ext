@@ -1,17 +1,15 @@
 
-// import * as base64 from 'base64-js'
-// import * as path from 'path'
+import * as base64 from 'base64-js'
+import * as path from 'path'
 import * as lsp from 'vscode-languageserver'
 import { DebugProtocol } from "@vscode/debugprotocol"
 import { Handles, Breakpoint, StackFrame, Source, Scope, Variable } from "@vscode/debugadapter"
 import { WebSocket, WebSocketServer } from "ws"
 import { LspServer, LspProject } from "./lsp_server"
 import { StackEntry, StackRegister } from "./shared/types"
-import { Statement } from "./asm/statements"
+import { Statement, OpStatement, MacroInvokeStatement } from "./asm/statements"
 import { SourceFile } from "./asm/project"
-import { DataRange } from "./asm/object_doc"
-
-type ObjectDoc = any
+import { ObjectDoc, DataRange, RangeMatch } from "./asm/object_doc"
 
 // TODO:
 //  - show timing
@@ -55,7 +53,7 @@ type StopNotification = RequestHeader & {
   reason: string
   pc: number
   dataAddress?: number
-  dataBytes?: string
+  dataString?: string
 }
 
 type SetRegisterRequest = RequestHeader & StackRegister
@@ -83,7 +81,7 @@ class DebugVariable {
 
 export class LspDebugger {
 
-  public mainProject?: LspProject
+  private mainProject?: LspProject
 
   private socketServer?: WebSocketServer
   private socket?: WebSocket
@@ -94,13 +92,24 @@ export class LspDebugger {
   private stackFrameHandles = new Handles<StackEntry>()
 
   constructor(private lspServer: LspServer, private connection: lsp.Connection ) {
+  }
+
+  public startup(mainProject: LspProject) {
+
+    this.mainProject = mainProject
 
     try {
-      this.socketServer = new WebSocketServer({ port: 6502 }, () => {})
-    } catch {
+      this.socketServer = new WebSocketServer({ port: 6502 })
+    } catch (err) {
+      const error = err as NodeJS.ErrnoException
       // TODO: how should port already in use be handled?
       return
     }
+
+    this.socketServer.on("error", (error: Error) => {
+      // TODO: do something with errors?
+      console.log(error.message)
+    })
 
     this.socketServer.on("connection", (socket: WebSocket) => {
 
@@ -148,8 +157,6 @@ export class LspDebugger {
           }
         }
         this.connection.sendNotification("rpw65.debuggerStopped", { reason: msg.reason })
-        this.variableHandles.reset()
-        this.stackFrameHandles.reset()
         break
       }
 
@@ -188,226 +195,313 @@ export class LspDebugger {
         this.socket.send('{"command":"stepCpuOutOf"}')
         break
 
-      case "setBreakpoints": {
+      case "setBreakpoints":
+        return this.onSetBreakpoints(<DebugProtocol.SetBreakpointsArguments>params.arguments![1])
 
-        const args = <DebugProtocol.SetBreakpointsArguments>params.arguments[1]
+      case "stackTrace":
+        return this.onStackTrace(<DebugProtocol.StackTraceArguments>params.arguments![1])
 
-        const sourceFile = this.findSourceFile(this.mainProject, args.source.path!)
-        if (!sourceFile) {
-          return []
-        }
+      case "scopes":
+        return this.onScopes(<DebugProtocol.ScopesArguments>params.arguments![1])
 
-        // verify and convert source file breakpoint lines to addresses
-        const addresses: number[] = []
-        const outBreakpoints: DebugProtocol.Breakpoint[] = []
-        for (let breakpoint of args.breakpoints!) {
+      case "variables":
+        return this.onVariables(<DebugProtocol.VariablesArguments>params.arguments[1])
 
-          let verified = false
-          let line = breakpoint.line
+      case "setVariable":
+        return this.onSetVariables(<DebugProtocol.SetVariableArguments>params.arguments[1])
+    }
+  }
 
-        //   let objectLine = objectDoc.objectLines[breakpoint.line - 1]
-        //   if (objectLine) {
-        //
-        //     // If line is empty but has an address, scan forward
-        //     //  for a line with same address and some data bytes.
-        //     //
-        //     // TODO: should only do this when starting on line with label?
-        //     // TODO: don't do this on empty or comment lines
-        //
-        //     // *** look up and use source statement for more information ***
-        //
-        //     let objAddress = objectLine.address
-        //     if (objectLine.objLength == 0) {
-        //       while (++line < objectDoc.objectLines.length) {
-        //         const nextLine = objectDoc.objectLines[line - 1]
-        //         if (nextLine.address == -1) {
-        //           continue
-        //         }
-        //         if (objAddress == -1) {
-        //           objAddress = nextLine.address
-        //         }
-        //         if (nextLine.address == objAddress) {
-        //           if (nextLine.objLength > 0) {
-        //             objectLine = nextLine
-        //             break
-        //           }
-        //         }
-        //       }
-        //     }
-        //
-        //     if (objectLine.objLength > 0) {
-        //       // TODO: check that line is code, not storage
-        //       addresses.push(objectLine.address)
-        //       verified = true
-        //     }
-        //   }
+  //--------------------------------------------------------
+  // MARK: setBreakpoints
 
-          const bp = new Breakpoint(verified, line) as DebugProtocol.Breakpoint
-          outBreakpoints.push(bp)
-        }
-
-        // add/replace breakpoint addresses for given file
-        this.breakpoints.set(args.source.path!, addresses)
-
-        // build flat list of all addresses with breakpoints, removing duplicates
-        const flatMap = new Map<number, boolean>()
-        for (let entry of this.breakpoints) {
-          const addresses = entry[1]
-          for (let address of addresses) {
-            flatMap.set(address, true)
-          }
-        }
-
-        const request: SetBreakpointsRequest = {
-          command: params.arguments[0],
-          entries: []
-        }
-
-        for (let entry of flatMap) {
-          request.entries.push({ address: entry[0] })
-        }
-
-        this.socket.send(JSON.stringify(request))
-        // TODO: await a response for sync purposes?
-
-        // DebugProtocol.SetBreakpointsResponse.body
-        return { breakpoints: outBreakpoints }
-      }
-
-      case "stackTrace": {
-
-        const args = <DebugProtocol.StackTraceArguments>params.arguments[1]
-
-        // *** make sure !this.responseProc ***
-
-        const promise = new Promise((resolve, reject) => {
-          this.responseProc = (responseMsg: any) => {
-            resolve(responseMsg)
-          }
-        })
-
-        this.socket.send('{"command":"getStack"}')
-        const msgResponse = <StackResponse>await promise
-
-        // *** figure out function name if at top of stack ***
-
-        const outStackFrames: StackFrame[] = []
-        for (let entry of msgResponse.entries) {
-
-          const entryPC = entry.regs[0].value
-          const dataRange = DataRange.fromEntry(entry)
-          const result = this.mainProject.findSourceByAddress(entryPC, dataRange)
-          if (result) {
-          //
-          //   let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
-          //
-          //   // *** source code should help with this? ***
-          //   const statement = this.findNearestLabel(result.objectDoc, entry.proc)
-          //   if (statement && statement.labelExp) {
-          //     funcName += ": " + statement.labelExp.getString()
-          //     if (entry.proc != entryPC) {
-          //       funcName += "+$" + (entryPC - entry.proc).toString(16).toUpperCase().padStart(4, "0")
-          //     }
-          //   }
-          //
-          //   const source = new Source(
-          //     path.posix.basename(result.objectDoc.name),
-          //     result.objectDoc.name)
-          //
-          //   if (outStackFrames.length == 0) {
-          //     (entry as any).topOfStack = true
-          //   }
-          //   const uniqueId = this.stackFrameHandles.create(entry)
-          //   outStackFrames.push(new StackFrame(uniqueId, funcName, source, result.line + 1))
-          }
-        }
-
-        return { stackFrames: outStackFrames, totalFrames: msgResponse.entries.length }
-      }
-
-      case "scopes": {
-
-        const args = <DebugProtocol.ScopesArguments>params.arguments[1]
-        const stackEntry = this.stackFrameHandles.get(args.frameId)
-        const topOfStack = (stackEntry as any).topOfStack ?? false
-
-        const outScopes = [
-          new Scope("Registers", this.variableHandles.create(new DebugVariable("registers", args.frameId, "")), false)
-        ]
-        if (topOfStack) {
-          // TODO: check for invalidated timing numbers above
-          outScopes.push(new Scope("Timing", this.variableHandles.create(new DebugVariable("timing", args.frameId, "")), false))
-        }
-        return { scopes: outScopes }
-      }
-
-      case "variables": {
-
-        const args = <DebugProtocol.VariablesArguments>params.arguments[1]
-        const v: DebugVariable = this.variableHandles.get(args.variablesReference)
-        const outVariables: Variable[] = []
-
-        const stackEntry = this.stackFrameHandles.get(v.value as number)
-        const topOfStack = (stackEntry as any).topOfStack ?? false
-
-        if (v.name == "registers") {
-
-          for (let i = 0; i < stackEntry.regs.length; i += 1) {
-            // put PC, SP, and PS at end of variables
-            let index = i + 3
-            if (index >= stackEntry.regs.length) {
-              index -= stackEntry.regs.length
-            }
-            const reg = stackEntry.regs[index]
-            const valueStr = this.regToString(reg)
-            const debugVar = new DebugVariable(reg.name, reg.value, valueStr)
-            debugVar.register = reg
-            v.addChild(debugVar)
-            let regVar: DebugProtocol.Variable = {
-              name: debugVar.name,
-              value: debugVar.valueStr,
-              variablesReference: 0
-            }
-            if (!topOfStack) {
-              regVar.presentationHint = { attributes: ["readOnly"] }
-            }
-            outVariables.push(regVar)
-          }
-
-        } else if (v.name == "timing") {
-
-          // *** show timing numbers ***
-
-          if (topOfStack) {
-            // *** delta cycles and delta ms -- always readonly ***
-          }
-        }
-        return { variables: outVariables }
-      }
-
-      case "setVariable": {
-
-        const args = <DebugProtocol.SetVariableArguments>params.arguments[1]
-        const v: DebugVariable = this.variableHandles.get(args.variablesReference)
-        if (v.name == "registers") {
-          const debugVar = v.children.get(args.name)
-          if (debugVar) {
-            const reg = debugVar.register!
-            this.parseRegValue(reg, args.value)
-            if (reg.value != debugVar.value) {
-              this.socket.send(`{"command":"setRegister","name":"${reg.name}","value":${reg.value}}`)
-            }
-            debugVar.value = reg.value
-            debugVar.valueStr = this.regToString(reg)
-            return {
-              value: debugVar.valueStr,
-              variablesReference: 0
-            }
-          }
+  private findSourceFile(project: LspProject, sourcePath: string): SourceFile | undefined {
+    for (let module of project.modules) {
+      for (let sourceFile of module.sourceFiles) {
+        if (sourceFile.fullPath == sourcePath) {
+          return sourceFile
         }
       }
     }
   }
+
+  private onSetBreakpoints(args: DebugProtocol.SetBreakpointsArguments) {
+
+    let objectDoc: ObjectDoc | undefined
+    for (let module of this.mainProject!.modules) {
+      for (let doc of module.objectDocs) {
+        if (doc.sourceFile.fullPath == args.source.path!) {
+          objectDoc = doc
+          break
+        }
+      }
+    }
+    if (!objectDoc) {
+      return []
+    }
+
+    const objectLines = objectDoc.getObjectLines(0, objectDoc.sourceFile.lines.length)
+
+    // verify and convert source file breakpoint lines to addresses
+    const addresses: number[] = []
+    const breakpoints: DebugProtocol.Breakpoint[] = []
+    for (let breakpoint of args.breakpoints!) {
+
+      let verified = false
+      let line = breakpoint.line - 1    // make line 0-based
+
+      let objectLine = objectLines[line]
+      if (objectLine) {
+
+        // If line is empty but has an address, scan forward
+        //  for a line with same address and some data bytes.
+        //
+        // TODO: should only do this when starting on line with label?
+        // TODO: don't do this on empty or comment lines
+
+        let objAddress = objectLine.dataAddress
+        if (objectLine.dataBytes == undefined) {
+          while (++line < objectLines.length) {
+            const nextLine = objectLines[line]
+            if (nextLine.dataAddress == undefined || !nextLine.dataBytes) {
+              continue
+            }
+            if (objAddress == undefined) {
+              objAddress = nextLine.dataAddress
+            }
+            if (nextLine.dataAddress == objAddress) {
+              if (nextLine.dataBytes.length > 0) {
+                objectLine = nextLine
+                break
+              }
+            }
+          }
+        }
+
+        if (objectLine.dataAddress && objectLine.dataBytes) {
+          const statement = objectDoc.sourceFile.statements[line]
+          if (statement instanceof OpStatement ||
+              statement instanceof MacroInvokeStatement) {
+            addresses.push(objectLine.dataAddress)
+            verified = true
+          }
+        }
+      }
+
+      // make line 1-based
+      const bp = new Breakpoint(verified, line + 1) as DebugProtocol.Breakpoint
+      breakpoints.push(bp)
+    }
+
+    // add/replace breakpoint addresses for given file
+    this.breakpoints.set(args.source.path!, addresses)
+
+    // build flat list of all addresses with breakpoints, removing duplicates
+    const flatMap = new Map<number, boolean>()
+    for (let entry of this.breakpoints) {
+      const addresses = entry[1]
+      for (let address of addresses) {
+        flatMap.set(address, true)
+      }
+    }
+
+    const request: SetBreakpointsRequest = {
+      command: "setBreakpoints",
+      entries: []
+    }
+
+    for (let entry of flatMap) {
+      request.entries.push({ address: entry[0] })
+    }
+
+    this.socket!.send(JSON.stringify(request))
+    // TODO: await a response for sync purposes?
+
+    // DebugProtocol.SetBreakpointsResponse.body
+    return { breakpoints }
+  }
+
+  //--------------------------------------------------------
+  // MARK: stackTrace
+
+  private async onStackTrace(args: DebugProtocol.StackTraceArguments) {
+
+    // *** make sure !this.responseProc ***
+
+    const promise = new Promise((resolve, reject) => {
+      this.responseProc = (responseMsg: any) => {
+        resolve(responseMsg)
+      }
+    })
+
+    this.socket!.send('{"command":"getStack"}')
+    const msgResponse = <StackResponse>await promise
+
+    this.variableHandles.reset()
+    this.stackFrameHandles.reset()
+
+    const outStackFrames: StackFrame[] = []
+    for (let entry of msgResponse.entries) {
+
+      const entryPC = entry.regs[0].value
+      let dataRange: DataRange | undefined
+      if (entry.dataAddress && entry.dataString) {
+        dataRange = new DataRange(entry.dataAddress, base64.toByteArray(entry.dataString))
+      }
+      const rangeMatch = this.mainProject!.findSourceByAddress(entryPC, dataRange)
+      if (rangeMatch) {
+
+        let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
+
+        const result = this.findProcLabel(rangeMatch, entry.proc)
+        if (result) {
+          funcName += ": " + result.statement.labelExp!.getString()
+          funcName += "+$" + (entryPC - result.baseAddress).toString(16).toUpperCase().padStart(2, "0")
+        }
+
+        const sourceFile = rangeMatch.objectDoc.sourceFile
+        const source = new Source(
+          path.posix.basename(sourceFile.fullPath),
+          sourceFile.fullPath)
+
+        if (outStackFrames.length == 0) {
+          (entry as any).topOfStack = true
+        }
+        const uniqueId = this.stackFrameHandles.create(entry)
+        outStackFrames.push(new StackFrame(uniqueId, funcName, source, rangeMatch.sourceLine + 1))
+      }
+    }
+
+    return { stackFrames: outStackFrames, totalFrames: msgResponse.entries.length }
+  }
+
+  private findProcLabel(pcRangeMatch: RangeMatch, procAddress: number):
+      { statement: Statement, baseAddress: number } | undefined {
+
+    let rangeMatch = pcRangeMatch.objectDoc.findRanges(procAddress)[0]
+    for (let pass = 0; pass < 2; pass += 1) {
+      if (rangeMatch) {
+        const sourceFile = rangeMatch.objectDoc.sourceFile
+        for (let i = rangeMatch.sourceLine; i >= 0; i -= 1) {
+          const statement = sourceFile.statements[i]
+          if (statement.labelExp && statement.PC !== undefined) {
+            if (!statement.labelExp.isLocalType() && !statement.labelExp.isVariableType()) {
+              // *** should PC be coming from an ObjectLine? ***
+              return { statement, baseAddress: statement.PC }
+            }
+          }
+        }
+      }
+      // If the proc wasn't found in the file, then it's probably
+      //  ambiguous because of a jmp/jsr-rts.  Use the pcRangeMatch
+      //  instead to search for a label.
+      rangeMatch = pcRangeMatch
+    }
+  }
+
+  //--------------------------------------------------------
+  // MARK: scopes
+
+  private onScopes(args: DebugProtocol.ScopesArguments) {
+
+    const scopes: Scope[] = []
+
+    const stackEntry = this.stackFrameHandles.get(args.frameId)
+    if (stackEntry) {
+      const topOfStack = (stackEntry as any).topOfStack ?? false
+
+      scopes.push(new Scope("Registers", this.variableHandles.create(new DebugVariable("registers", args.frameId, "")), false))
+      if (topOfStack) {
+        // TODO: check for invalidated timing numbers above
+        scopes.push(new Scope("Timing", this.variableHandles.create(new DebugVariable("timing", args.frameId, "")), false))
+      }
+    }
+
+    return { scopes }
+  }
+
+  //--------------------------------------------------------
+  // MARK: variables
+
+  private onVariables(args: DebugProtocol.VariablesArguments) {
+
+    const variables: Variable[] = []
+
+    const v: DebugVariable = this.variableHandles.get(args.variablesReference)
+    if (!v) {
+      return { variables }
+    }
+
+    const stackEntry = this.stackFrameHandles.get(v.value as number)
+    if (!stackEntry) {
+      return { variables }
+    }
+    const topOfStack = (stackEntry as any).topOfStack ?? false
+
+    if (v.name == "registers") {
+
+      for (let i = 0; i < stackEntry.regs.length; i += 1) {
+        // put PC, SP, and PS at end of variables
+        let index = i + 3
+        if (index >= stackEntry.regs.length) {
+          index -= stackEntry.regs.length
+        }
+        const reg = stackEntry.regs[index]
+        const valueStr = this.regToString(reg)
+        const debugVar = new DebugVariable(reg.name, reg.value, valueStr)
+        debugVar.register = reg
+        v.addChild(debugVar)
+        let regVar: DebugProtocol.Variable = {
+          name: debugVar.name,
+          value: debugVar.valueStr,
+          variablesReference: 0
+        }
+        if (!topOfStack) {
+          regVar.presentationHint = { attributes: ["readOnly"] }
+        }
+        variables.push(regVar)
+      }
+
+    } else if (v.name == "timing") {
+
+      // *** show timing numbers ***
+
+      if (topOfStack) {
+        // *** delta cycles and delta ms -- always readonly ***
+      }
+    }
+    return { variables }
+  }
+
+  //--------------------------------------------------------
+  // MARK: setVariables
+
+  private onSetVariables(args: DebugProtocol.SetVariableArguments) {
+
+    const v: DebugVariable = this.variableHandles.get(args.variablesReference)
+    if (!v) {
+      return
+    }
+    if (v.name == "registers") {
+      const debugVar = v.children.get(args.name)
+      if (debugVar) {
+        const reg = debugVar.register!
+        this.parseRegValue(reg, args.value)
+        if (reg.value != debugVar.value) {
+          this.socket!.send(`{"command":"setRegister","name":"${reg.name}","value":${reg.value}}`)
+        }
+        debugVar.value = reg.value
+        debugVar.valueStr = this.regToString(reg)
+        return {
+          value: debugVar.valueStr,
+          variablesReference: 0
+        }
+      }
+    }
+  }
+
+  //--------------------------------------------------------
+  // MARK: utils
 
   private regToString(reg: StackRegister): string {
     let valueStr = ""
@@ -492,40 +586,6 @@ export class LspDebugger {
       value &= 0xffff
     }
     reg.value = value
-  }
-
-  private findSourceFile(project: LspProject, sourcePath: string): SourceFile | undefined {
-    for (let module of project.modules) {
-      for (let sourceFile of module.sourceFiles) {
-        if (sourceFile.fullPath == sourcePath) {
-          return sourceFile
-        }
-      }
-    }
-  }
-
-  private findNearestLabel(objectDoc: ObjectDoc, address: number): Statement | undefined {
-    // let funcLine = objectDoc.findLineByAddress(address)
-    // if (funcLine >= 0) {
-    //   const sourceFile = this.lspServer.findSourceFile(objectDoc.name)
-    //   if (sourceFile) {
-    //     while (true) {
-    //       const objLine = objectDoc.objectLines[funcLine]
-    //       if (objLine.address != -1 && objLine.address != address) {
-    //         break
-    //       }
-    //       const statement = sourceFile.statements[funcLine]
-    //       if (statement.labelExp) {
-    //         return statement
-    //       }
-    //       funcLine -= 1
-    //       if (funcLine < 0) {
-    //         break
-    //       }
-    //     }
-    //   }
-    // }
-    return
   }
 }
 

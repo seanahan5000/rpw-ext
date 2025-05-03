@@ -87,7 +87,7 @@ export type StackEntry = {
   regs: StackRegister[]
   cycles: number
   dataAddress?: number
-  dataBytes?: string
+  dataString?: string
 }
 
 //------------------------------------------------------------------------------

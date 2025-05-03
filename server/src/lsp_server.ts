@@ -359,7 +359,7 @@ export class LspServer {
       }
       this.projects.push(project)
       this.mainProject = project
-      this.debugger.mainProject = project
+      this.debugger.startup(project)
     }
 
     this.isInitialized_resolve(true)

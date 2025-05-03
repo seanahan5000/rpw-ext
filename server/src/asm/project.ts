@@ -407,7 +407,7 @@ export class Project {
   //--------------------------------------------------------
 
   // given an address, find best object file that contains the address
-  public findSourceByAddress(address: number, dataRange?: DataRange): { sourceFile: SourceFile, line: number } | undefined {
+  public findSourceByAddress(address: number, dataRange?: DataRange): RangeMatch | undefined {
     const matchList: RangeMatch[] = []
     for (let module of this.modules) {
       for (let objectDoc of module.objectDocs) {
@@ -425,7 +425,7 @@ export class Project {
           }
         }
       }
-      return { sourceFile: bestMatch.sourceFile, line: bestMatch.sourceLine }
+      return bestMatch
     }
   }
 }
