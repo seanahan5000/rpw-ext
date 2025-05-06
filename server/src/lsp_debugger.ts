@@ -16,7 +16,6 @@ import { ObjectDoc, DataRange, RangeMatch } from "./asm/object_doc"
 //  - jump to cursor
 //  - step forward
 //  - add default key-combos for all stepping operations
-//  - fix breakpoints on dead lines
 //
 //  - read/write memory
 //  - watch variables
@@ -57,6 +56,32 @@ type StopNotification = RequestHeader & {
 }
 
 type SetRegisterRequest = RequestHeader & StackRegister
+
+type ReadMemoryRequest = RequestHeader & {
+  opBytes?: number[]    // instruction bytes, to determing addressing mode
+  opMode?: string       // addressing mode, ignoring opBytes
+  dataAddress?: number  // direct read address, ignoring opMode, opBytes
+  readOffset?: number   // offset applied after final address is computed
+  readLength: number    // number of bytes to read
+}
+
+type ReadMemoryResponse = RequestHeader & {
+  baseAddress?: number  // read address minus index reg
+  baseOffset?: number   // index register offset
+  dataAddress: number   // effective read address
+  dataLength: number    // number of bytes actually read
+  dataString: string    // actual data read in base64, possibly < readLength
+}
+
+type WriteMemoryRequest = RequestHeader & {
+  dataAddress: number     // direct write address
+  dataString: string      // bytes to write in base64
+  partialAllowed: boolean // can write just some of the bytes
+}
+
+type WriteMemoryResponse = RequestHeader & {
+  bytesWritten: number  // bytes successfully written
+}
 
 //------------------------------------------------------------------------------
 
@@ -133,6 +158,16 @@ export class LspDebugger {
     })
   }
 
+  // *** never seems to be called ***
+  public shutdown() {
+    if (this.socket) {
+      this.socket.close()
+    }
+    if (this.socketServer) {
+      this.socketServer.close()
+    }
+  }
+
   private async receiveMessage(message: any) {
     switch (message.command) {
 
@@ -144,6 +179,7 @@ export class LspDebugger {
       case "cpuStopped": {
         const msg = <StopNotification>message
         if (msg.reason == "breakpoint" && this.mainProject) {
+          // *** need to use dataString in msg? ***
           const result = this.mainProject.findSourceByAddress(msg.pc)
           if (!result) {
             // if breakpoint address is in file that isn't loaded,
@@ -195,8 +231,19 @@ export class LspDebugger {
         this.socket.send('{"command":"stepCpuOutOf"}')
         break
 
+      // *** step forward ***
+
+      case "breakpointLocations":
+        return this.onBreakpointLocations(<DebugProtocol.BreakpointLocationsArguments>params.arguments![1])
+
       case "setBreakpoints":
         return this.onSetBreakpoints(<DebugProtocol.SetBreakpointsArguments>params.arguments![1])
+
+      case "dataBreakpointInfo":
+        return this.onDataBreakpointInfo(<DebugProtocol.DataBreakpointInfoArguments>params.arguments![1])
+
+      case "setDataBreakpoints":
+        return this.onDataBreakpointsInfo(<DebugProtocol.SetDataBreakpointsArguments>params.arguments![1])
 
       case "stackTrace":
         return this.onStackTrace(<DebugProtocol.StackTraceArguments>params.arguments![1])
@@ -208,21 +255,37 @@ export class LspDebugger {
         return this.onVariables(<DebugProtocol.VariablesArguments>params.arguments[1])
 
       case "setVariable":
-        return this.onSetVariables(<DebugProtocol.SetVariableArguments>params.arguments[1])
+        return this.onSetVariable(<DebugProtocol.SetVariableArguments>params.arguments[1])
+
+      case "setExpression":
+        return this.onSetExpression(<DebugProtocol.SetExpressionArguments>params.arguments[1])
+
+      case "evaluate":
+        return this.onEvaluate(<DebugProtocol.EvaluateArguments>params.arguments[1])
+
+      case "readMemory":
+        return this.onReadMemory(<DebugProtocol.ReadMemoryArguments>params.arguments[1])
+
+      case "writeMemory":
+        return this.onWriteMemory(<DebugProtocol.WriteMemoryArguments>params.arguments[1])
+
+      case "gotoTargets":
+        return this.onGotoTargets(<DebugProtocol.GotoTargetsArguments>params.arguments[1])
+
+      case "goto":
+        return this.onGoto(<DebugProtocol.GotoArguments>params.arguments[1])
+
+      default:
+        console.log("IGNORED " + params.arguments[0])
+        break
     }
   }
 
   //--------------------------------------------------------
-  // MARK: setBreakpoints
+  // MARK: breakpoints
 
-  private findSourceFile(project: LspProject, sourcePath: string): SourceFile | undefined {
-    for (let module of project.modules) {
-      for (let sourceFile of module.sourceFiles) {
-        if (sourceFile.fullPath == sourcePath) {
-          return sourceFile
-        }
-      }
-    }
+  private onBreakpointLocations(args: DebugProtocol.BreakpointLocationsArguments) {
+    // ***
   }
 
   private onSetBreakpoints(args: DebugProtocol.SetBreakpointsArguments) {
@@ -321,12 +384,43 @@ export class LspDebugger {
     return { breakpoints }
   }
 
+  private onDataBreakpointInfo(args: DebugProtocol.DataBreakpointInfoArguments) {
+    // ***
+  }
+
+  private onDataBreakpointsInfo(args: DebugProtocol.SetDataBreakpointsArguments) {
+    // ***
+  }
+
+  private findSourceFile(project: LspProject, sourcePath: string): SourceFile | undefined {
+    for (let module of project.modules) {
+      for (let sourceFile of module.sourceFiles) {
+        if (sourceFile.fullPath == sourcePath) {
+          return sourceFile
+        }
+      }
+    }
+  }
+
   //--------------------------------------------------------
-  // MARK: stackTrace
+  // MARK: goto
+
+  private onGotoTargets(args: DebugProtocol.GotoTargetsArguments) {
+    // ***
+  }
+
+  private onGoto(args: DebugProtocol.GotoArguments) {
+    // ***
+  }
+
+  //--------------------------------------------------------
+  // MARK: stack
 
   private async onStackTrace(args: DebugProtocol.StackTraceArguments) {
 
     // *** make sure !this.responseProc ***
+
+    // TODO: respect args.format.hex
 
     const promise = new Promise((resolve, reject) => {
       this.responseProc = (responseMsg: any) => {
@@ -425,6 +519,8 @@ export class LspDebugger {
 
   private onVariables(args: DebugProtocol.VariablesArguments) {
 
+    // TODO: respect args.format.hex
+
     const variables: Variable[] = []
 
     const v: DebugVariable = this.variableHandles.get(args.variablesReference)
@@ -456,6 +552,9 @@ export class LspDebugger {
           value: debugVar.valueStr,
           variablesReference: 0
         }
+        if (reg.name == "PC" || reg.name == "SP") {
+          regVar.memoryReference = reg.value.toString(16).toUpperCase().padStart(4, "0")
+        }
         if (!topOfStack) {
           regVar.presentationHint = { attributes: ["readOnly"] }
         }
@@ -473,10 +572,7 @@ export class LspDebugger {
     return { variables }
   }
 
-  //--------------------------------------------------------
-  // MARK: setVariables
-
-  private onSetVariables(args: DebugProtocol.SetVariableArguments) {
+  private onSetVariable(args: DebugProtocol.SetVariableArguments) {
 
     const v: DebugVariable = this.variableHandles.get(args.variablesReference)
     if (!v) {
@@ -499,6 +595,138 @@ export class LspDebugger {
       }
     }
   }
+
+  //--------------------------------------------------------
+  // MARK: expressions
+
+	// interface EvaluateArguments {
+	// 	/** The expression to evaluate. */
+	// 	expression: string;
+	// 	/** Evaluate the expression in the scope of this stack frame. If not specified, the expression is evaluated in the global scope. */
+	// 	frameId?: number;
+	// 	/** The contextual line where the expression should be evaluated. In the 'hover' context, this should be set to the start of the expression being hovered. */
+	// 	line?: number;
+	// 	/** The contextual column where the expression should be evaluated. This may be provided if `line` is also provided.
+	//
+	// 		It is measured in UTF-16 code units and the client capability `columnsStartAt1` determines whether it is 0- or 1-based.
+	// 	*/
+	// 	column?: number;
+	// 	/** The contextual source in which the `line` is found. This must be provided if `line` is provided. */
+	// 	source?: Source;
+	// 	/** The context in which the evaluate request is used.
+	// 		Values:
+	// 		'watch': evaluate is called from a watch view context.
+	// 		'repl': evaluate is called from a REPL context.
+	// 		'hover': evaluate is called to generate the debug hover contents.
+	// 		This value should only be used if the corresponding capability `supportsEvaluateForHovers` is true.
+	// 		'clipboard': evaluate is called to generate clipboard contents.
+	// 		This value should only be used if the corresponding capability `supportsClipboardContext` is true.
+	// 		'variables': evaluate is called from a variables view context.
+	// 		etc.
+	// 	*/
+	// 	context?: 'watch' | 'repl' | 'hover' | 'clipboard' | 'variables' | string;
+	// 	/** Specifies details on how to format the result.
+	// 		The attribute is only honored by a debug adapter if the corresponding capability `supportsValueFormattingOptions` is true.
+	// 	*/
+	// 	format?: ValueFormat; (hex?: boolean)
+	// }
+
+  private onEvaluate(args: DebugProtocol.EvaluateArguments) {
+    if (args.context == "hover") {
+      // TODO: look at the current source/line/column
+      // TODO: be smart about hovering over entire expression,
+      //  not just the word VSCode selected.
+    }
+
+    // *** may need to go read memory from debugger
+      // *** special command to read indirect memory pointer?
+  }
+
+  private onSetExpression(args: DebugProtocol.SetExpressionArguments) {
+    // ***
+    console.log() // ***
+  }
+
+  //--------------------------------------------------------
+  // MARK: memory read/write
+
+  private async onReadMemory(args: DebugProtocol.ReadMemoryArguments) {
+
+    const promise = new Promise((resolve, reject) => {
+      this.responseProc = (responseMsg: any) => {
+        resolve(responseMsg)
+      }
+    })
+
+    const address = parseInt(args.memoryReference, 16)
+    if (isNaN(address)) {
+      return
+    }
+
+    const request: ReadMemoryRequest = {
+      command: "readMemory",
+      dataAddress: address,
+      readOffset: args.offset,
+      readLength: args.count
+    }
+
+    this.socket!.send(JSON.stringify(request))
+    const msgResponse = <ReadMemoryResponse>await promise
+
+    return {
+      address: msgResponse.dataAddress.toString(),
+      unreadableBytes: request.readLength - msgResponse.dataLength,
+      data: msgResponse.dataString
+    }
+  }
+
+
+  // interface WriteMemoryArguments {
+	// 	/** Memory reference to the base location to which data should be written. */
+	// 	memoryReference: string;
+	// 	/** Offset (in bytes) to be applied to the reference location before writing data. Can be negative. */
+	// 	offset?: number;
+	// 	/** Property to control partial writes. If true, the debug adapter should attempt to write memory even
+  //    if the entire memory region is not writable. In such a case the debug adapter should stop after hitting
+  //    the first byte of memory that cannot be written and return the number of bytes written in the response
+  //    via the `offset` and `bytesWritten` properties.
+	// 		If false or missing, a debug adapter should attempt to verify the region is writable before writing, and fail the response if it is not.
+	// 	*/
+	// 	allowPartial?: boolean;
+	// 	/** Bytes to write, encoded using base64. */
+	// 	data: string;
+	// }
+
+  private onWriteMemory(args: DebugProtocol.WriteMemoryArguments) {
+
+    console.log()   // ***
+
+		// const variable = this._variableHandles.get(Number(memoryReference));
+		// if (typeof variable === 'object') {
+		// 	const decoded = base64.toByteArray(data);
+		// 	variable.setMemory(decoded, offset);
+		// 	response.body = { bytesWritten: decoded.length };
+		// } else {
+		// 	response.body = { bytesWritten: 0 };
+		// }
+    //
+		// this.sendResponse(response);
+		// this.sendEvent(new InvalidatedEvent(['variables']))
+
+    // return {
+    //   offset?: Number,
+    //   bytesWritten?: number
+    // }
+  }
+
+  // interface WriteMemoryResponse extends Response {
+  // 	body?: {
+  // 		/** Property that should be returned when `allowPartial` is true to indicate the offset of the first byte of data successfully written. Can be negative. */
+  // 		offset?: number;
+  // 		/** Property that should be returned when `allowPartial` is true to indicate the number of bytes starting from address that were successfully written. */
+  // 		bytesWritten?: number;
+  // 	};
+  // }
 
   //--------------------------------------------------------
   // MARK: utils

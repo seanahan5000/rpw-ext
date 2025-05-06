@@ -198,6 +198,14 @@ export class LspServer {
     this.connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
 
     this.debugger = new LspDebugger(this, connection)
+
+    this.connection.onShutdown(() => {
+      this.debugger.shutdown()
+    })
+
+    this.connection.onExit(() => {
+      this.debugger.shutdown()
+    })
   }
 
   private getSourceFile(uri: string): SourceFile | undefined {
@@ -358,6 +366,7 @@ export class LspServer {
         throw new Error("Failed to load project")
       }
       this.projects.push(project)
+
       this.mainProject = project
       this.debugger.startup(project)
     }

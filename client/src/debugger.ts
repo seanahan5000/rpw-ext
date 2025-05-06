@@ -1,7 +1,7 @@
 
 import { DebugProtocol } from "@vscode/debugprotocol"
 import { DebugSession, InitializedEvent, StoppedEvent, BreakpointEvent, ContinuedEvent } from "@vscode/debugadapter"
-import { Thread, StackFrame, Scope, Source } from "@vscode/debugadapter"
+import { Thread } from "@vscode/debugadapter"
 import { client } from "./extension"
 import * as vsclnt from 'vscode-languageclient'
 
@@ -72,6 +72,14 @@ export class RpwDebugSession extends DebugSession {
     // TODO: enable/support this if stack trace loading is slow
     // response.body.supportsDelayedStackTraceLoading = true
 
+    response.body.supportsReadMemoryRequest = true
+    response.body.supportsWriteMemoryRequest = true
+
+    response.body.supportsEvaluateForHovers = true
+
+    // enables option to view values in hex
+    response.body.supportsValueFormattingOptions = true
+
     this.sendResponse(response)
     this.sendEvent(new InitializedEvent())
   }
@@ -100,20 +108,19 @@ export class RpwDebugSession extends DebugSession {
     this.sendResponse(response)
   }
 
-  // protected breakpointLocationsRequest(
-  //   response: DebugProtocol.BreakpointLocationsResponse,
-  //   args: DebugProtocol.BreakpointLocationsArguments,
-  //   request?: DebugProtocol.Request): void
-  // {
-  //   // TODO: enable/implement
-  //   this.sendResponse(response) // TODO: fill in details
-  // }
+  protected breakpointLocationsRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
 
-  protected async setBreakPointsRequest(
-    response: DebugProtocol.SetBreakpointsResponse,
-    args: DebugProtocol.SetBreakpointsArguments,
-    request?: DebugProtocol.Request): Promise<void>
-  {
+  protected async setBreakPointsRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected dataBreakpointInfoRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected setDataBreakpointsRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
@@ -127,82 +134,63 @@ export class RpwDebugSession extends DebugSession {
     this.sendResponse(response)
   }
 
-  protected stackTraceRequest(
-    response: DebugProtocol.StackTraceResponse,
-    args: DebugProtocol.StackTraceArguments,
-    request?: DebugProtocol.Request): void
-  {
+  protected stackTraceRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected scopesRequest(
-    response: DebugProtocol.ScopesResponse,
-    args: DebugProtocol.ScopesArguments,
-    request?: DebugProtocol.Request): void
-  {
+  protected scopesRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected variablesRequest(
-    response: DebugProtocol.VariablesResponse,
-    args: DebugProtocol.VariablesArguments,
-    request?: DebugProtocol.Request): void
-  {
+  protected variablesRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected setVariableRequest(
-    response: DebugProtocol.SetVariableResponse,
-    args: DebugProtocol.SetVariableArguments): void
-  {
+  protected setVariableRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  // *** set new PC?
-  protected gotoTargetsRequest(response: DebugProtocol.GotoTargetsResponse, args: DebugProtocol.GotoTargetsArguments, request?: DebugProtocol.Request): void {
-    // TODO: enable/implement
-    this.sendResponse(response) // TODO: fill in details
-  }
-
-  // *** what does this do? ***
-  protected gotoRequest(response: DebugProtocol.GotoResponse, args: DebugProtocol.GotoArguments, request?: DebugProtocol.Request): void {
-    // TODO: enable/implement
-    this.sendResponse(response)
-  }
-
-  protected pauseRequest(
-    response: DebugProtocol.PauseResponse,
-    args: DebugProtocol.PauseArguments,
-    request?: DebugProtocol.Request): void
-  {
+  protected setExpressionRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected continueRequest(
-    response: DebugProtocol.ContinueResponse,
-    args: DebugProtocol.ContinueArguments): void
-  {
+  protected evaluateRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected nextRequest(
-    response: DebugProtocol.NextResponse,
-    args: DebugProtocol.NextArguments): void
-  {
+  protected readMemoryRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected stepInRequest(
-    response: DebugProtocol.StepInResponse,
-    args: DebugProtocol.StepInArguments): void
-  {
+  protected writeMemoryRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
-  protected stepOutRequest(
-    response: DebugProtocol.StepOutResponse,
-    args: DebugProtocol.StepOutArguments): void
-  {
+  protected gotoTargetsRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected gotoRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected pauseRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected continueRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected nextRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected stepInRequest(response, args) {
+    this.forwardCommand(response, args)
+  }
+
+  protected stepOutRequest(response, args) {
     this.forwardCommand(response, args)
   }
 
@@ -213,6 +201,9 @@ export class RpwDebugSession extends DebugSession {
     })
     response.body = result
     this.sendResponse(response)
+
+    //*** if responding to writeMemory
+		// this.sendEvent(new InvalidatedEvent(['variables']))
   }
 }
 
