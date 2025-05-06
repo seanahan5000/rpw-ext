@@ -644,7 +644,7 @@ export class OpStatement extends Statement {
           // case OpMode.A:
           case OpMode.IMM:
             if (this.expression) {
-              asm.symUtils.markConstants(this.expression)
+              asm.symUtils?.markConstants(this.expression)
               const immValue = this.expression.resolve()
               if (immValue === undefined) {
                 if (this.expression instanceof exp.StringExpression) {
@@ -668,23 +668,23 @@ export class OpStatement extends Statement {
           case OpMode.ZP:
           case OpMode.ZPX:
           case OpMode.ZPY:
-            asm.symUtils.markZPage(this.expression)
+            asm.symUtils?.markZPage(this.expression)
             break
           case OpMode.ABS:
             if (opDef && opDef.fc) {
               if (this.opNameLC == "jmp") {
-                asm.symUtils.markCode(this.expression)
+                asm.symUtils?.markCode(this.expression)
                 break
               }
               if (this.opNameLC == "jsr" || this.opNameLC == "jsl") {
-                asm.symUtils.markSubroutine(this.expression)
+                asm.symUtils?.markSubroutine(this.expression)
                 break
               }
             }
             // fall through
           case OpMode.ABSX:
           case OpMode.ABSY:
-            asm.symUtils.markData(this.expression)
+            asm.symUtils?.markData(this.expression)
 
             // check for zpage demotion was prevented by a forward reference
             if (!this.forceLong) {
@@ -708,7 +708,7 @@ export class OpStatement extends Statement {
             break
           case OpMode.INDX:
           case OpMode.INDY:
-            asm.symUtils.markZPage(this.expression)
+            asm.symUtils?.markZPage(this.expression)
             const value = this.expression.resolve()
             if (value !== undefined) {
               if (value > 255) {
@@ -720,7 +720,7 @@ export class OpStatement extends Statement {
           case OpMode.REL:
           case OpMode.LREL:
             if (opDef && opDef.fc) {
-              asm.symUtils.markCode(this.expression)
+              asm.symUtils?.markCode(this.expression)
             }
             break
 
@@ -740,7 +740,7 @@ export class OpStatement extends Statement {
       }
 
       if (this.labelExp) {
-        asm.symUtils.markCode(this.labelExp)
+        asm.symUtils?.markCode(this.labelExp)
       }
 
       asm.writeByte(opDef.val)

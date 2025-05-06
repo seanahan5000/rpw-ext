@@ -298,7 +298,7 @@ export class Assembler {
   public conditional = new Conditional()
   public scopeState: ScopeState
   private syntaxStats: number[] = []
-  public symUtils = new SymbolUtils()
+  public symUtils?: SymbolUtils
 
   private lineRecords: LineRecord[] = []
 
@@ -331,6 +331,9 @@ export class Assembler {
     this.scopeState = new ScopeState(
       module.project.caseSensitive ?? this.syntaxDef.caseSensitiveSymbols,
       this.syntaxDef.scopeSeparator)
+
+    // can be set undefined externally
+    this.symUtils = new SymbolUtils()
   }
 
   public get syntax(): Syntax {
