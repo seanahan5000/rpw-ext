@@ -7,7 +7,7 @@ import { Expression, SymbolExpression} from "./expressions"
 export enum SymbolType {
   Variable    = 0,
   MacroName   = 1,
-  TypeName   = 2,  // struct, enum, define, etc.
+  TypeName    = 2,  // struct, enum, define, etc.
   NamedParam  = 3,  // named params to macros, structs, enums
 
   Simple      = 4,
