@@ -14,7 +14,7 @@ import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
 import { SyntaxNames } from "./asm/syntaxes/syntax_types"
-import { OpcodeDef, OpMode, isaSet65xx, Isa6502 } from "./isa65xx"
+import { OpcodeDef, OpMode, isaSet65xx } from "./isa65xx"
 
 import { LspDebugger } from "./lsp_debugger"
 
@@ -803,6 +803,21 @@ export class LspServer {
     if (statement) {
       const res = statement.findExpressionAt(params.position.character)
       if (res) {
+
+        if (this.debugger.isConnected()) {
+          if (statement instanceof OpStatement) {
+            if (res.expression != statement.opExp) {
+              let sourceFile = this.getSourceFile(params.textDocument.uri)
+              if (sourceFile) {
+                const debugStr = await this.debugger.buildDebugHover(sourceFile.fullPath, params.position.line)
+                if (debugStr) {
+                  return { contents: debugStr }
+                }
+              }
+            }
+          }
+        }
+
         if (res.expression instanceof SymbolExpression) {
           const hoverExp = res.expression
           // TODO: if hovering over macro invocation, show macro contents
@@ -838,146 +853,7 @@ export class LspServer {
           }
         } else if (statement instanceof OpStatement) {
           if (res.expression == statement.opExp) {
-            const opName = res.expression.getString()
-            const opNameLC = opName.toLowerCase()
-            const upperCase = (opName != opNameLC)
-            let opMatches: OpcodeDef[] = []
-
-            // TODO: how should this be chosen? get from statement?
-            // TODO: mechanism to enable 65c02 and 65816
-            const isa = isaSet65xx.getIsa("65816")
-
-            const opType = isa.opcodeByName.get(opNameLC)
-            opType?.forEach((value, key) => {
-              opMatches.push(value)
-            })
-
-            // add opcode description
-            hoverStr += isa.getDescByName(opNameLC) ?? ""
-
-            if (opMatches.length > 0) {
-
-              // add status flags affected
-              const flags = opMatches[0].sf
-              let affected = ""
-              if (flags) {
-                affected = flags.toUpperCase()
-              } else {
-                affected = "none"
-              }
-              hoverStr += "\nAffects: " + affected + "\n"
-
-              // sort opMatches by addressing mode
-
-              opMatches.sort((a, b): number => {
-                if (a.mode < b.mode) {
-                  return -1
-                }
-                if (a.mode > b.mode) {
-                  return 1
-                }
-                return 0
-              })
-
-              for (let opEntry of opMatches) {
-
-                // data bytes
-                let lineStr = opEntry.val.toString(16).padStart(2, "0").toUpperCase()
-                if (opEntry.bc == 2) {
-                  lineStr += " 12"
-                } else if (opEntry.bc == 3) {
-                  lineStr += " 34 12"
-                } else if (opEntry.bc == 4) {
-                  lineStr += " 56 34 12 "
-                }
-
-                lineStr = lineStr.padEnd(10, "\xA0")
-
-                // opcode
-                lineStr += (upperCase ? opEntry.name.toUpperCase() : opEntry.name) + " "
-
-                // addressing mode expression, if any
-                let opExp = ""
-                if (opEntry.bc == 2) {
-                  opExp = "$12"
-                } else if (opEntry.bc == 3) {
-                  opExp = "$1234"
-                } else if (opEntry.bc == 4) {
-                  opExp = "$123456"
-                }
-
-                switch (opEntry.mode) {
-                  case OpMode.NONE:     //
-                  case OpMode.A:        // a
-                    break
-                  case OpMode.IMM:      // #$FF
-                    lineStr += "#" + opExp
-                    break
-                  case OpMode.ZP:       // $FF
-                  case OpMode.ABS:      // $FFFF
-                  case OpMode.LABS:     // $FFFFFF
-                    lineStr += opExp
-                    break
-                  case OpMode.ZPX:      // $FF,X
-                  case OpMode.ABSX:     // $FFFF,X
-                  case OpMode.LABX:     // $FFFFFF,X
-                    lineStr += opExp + (upperCase ? ",X" : ",x")
-                    break
-                  case OpMode.ZPY:      // $FF,Y
-                  case OpMode.ABSY:     // $FFFF,Y
-                    lineStr += opExp + (upperCase ? ",Y" : ",y")
-                    break
-                  case OpMode.INDX:     // ($FF,X)
-                  case OpMode.AXI:      // ($FFFF,X)
-                    lineStr += "(" + opExp + (upperCase ? ",X)" : ",x)")
-                    break
-                  case OpMode.INDY:     // ($FF),Y
-                    lineStr += "(" + opExp + (upperCase ? "),Y" : "),y")
-                    break
-                  case OpMode.REL:      // *+-$FF
-                  case OpMode.LREL:     // *+-$FFFF
-                    lineStr += "*+-" + opExp
-                    break
-                  case OpMode.INZ:      // ($FF)
-                  case OpMode.IND:      // ($FFFF)
-                    lineStr += "(" + opExp + ")"
-                    break
-                  case OpMode.LIY:      // [$FF],Y
-                    lineStr += "[" + opExp + (upperCase ? "],Y" : "],y")
-                    break
-                  case OpMode.LIN:      // [$FF]
-                  case OpMode.ALI:      // [$FFFF]
-                    lineStr += "[" + opExp + "]"
-                    break
-                  case OpMode.STS:      // stack,S
-                    lineStr += opExp + (upperCase ? ",S" : ",s")
-                    break
-                  case OpMode.SIY:      // (stack,S),Y
-                    lineStr += "(" + opExp + (upperCase ? ",S),Y" : ",s),y")
-                    break
-                  case OpMode.SD:       // #$FF,#$FF
-                    // TODO:
-                    break
-
-                  // 65EL02-only
-                  case OpMode.STS:      // stack,R
-                    lineStr += opExp + (upperCase ? ",R" : ",r")
-                    break
-                  case OpMode.SIY:      // (stack,R),Y
-                    lineStr += "(" + opExp + (upperCase ? ",R),Y" : ",r),y")
-                    break
-                }
-
-                lineStr = lineStr.padEnd(22, "\xA0")
-
-                // cycle count
-                if (opEntry.cy) {
-                  lineStr += " ; " + opEntry.cy
-                }
-
-                hoverStr += lineStr + "\n"
-              }
-            }
+            hoverStr += this.buildOpcodeHover(statement.opExp)
           }
         } else if (statement.keywordDef) {
           const desc = statement.keywordDef.desc ?? ""
@@ -997,6 +873,152 @@ export class LspServer {
       return { contents: hoverStr }
     }
     return { contents: [] }
+  }
+
+  private buildOpcodeHover(expression: Expression): string {
+
+    const opName = expression.getString()
+    const opNameLC = opName.toLowerCase()
+    const upperCase = (opName != opNameLC)
+    let opMatches: OpcodeDef[] = []
+
+    // TODO: how should this be chosen? get from statement?
+    // TODO: mechanism to enable 65c02 and 65816
+    const isa = isaSet65xx.getIsa("65816")
+
+    const opType = isa.opcodeByName.get(opNameLC)
+    opType?.forEach((value, key) => {
+      opMatches.push(value)
+    })
+
+    // add opcode description
+    let opStr = isa.getDescByName(opNameLC) ?? ""
+
+    if (opMatches.length > 0) {
+
+      // add status flags affected
+      const flags = opMatches[0].sf
+      let affected = ""
+      if (flags) {
+        affected = flags.toUpperCase()
+      } else {
+        affected = "none"
+      }
+      opStr += "\nAffects: " + affected + "\n"
+
+      // sort opMatches by addressing mode
+
+      opMatches.sort((a, b): number => {
+        if (a.mode < b.mode) {
+          return -1
+        }
+        if (a.mode > b.mode) {
+          return 1
+        }
+        return 0
+      })
+
+      for (let opEntry of opMatches) {
+
+        // data bytes
+        let lineStr = opEntry.val.toString(16).padStart(2, "0").toUpperCase()
+        if (opEntry.bc == 2) {
+          lineStr += " 12"
+        } else if (opEntry.bc == 3) {
+          lineStr += " 34 12"
+        } else if (opEntry.bc == 4) {
+          lineStr += " 56 34 12 "
+        }
+
+        lineStr = lineStr.padEnd(10, "\xA0")
+
+        // opcode
+        lineStr += (upperCase ? opEntry.name.toUpperCase() : opEntry.name) + " "
+
+        // addressing mode expression, if any
+        let opExp = ""
+        if (opEntry.bc == 2) {
+          opExp = "$12"
+        } else if (opEntry.bc == 3) {
+          opExp = "$1234"
+        } else if (opEntry.bc == 4) {
+          opExp = "$123456"
+        }
+
+        switch (opEntry.mode) {
+          case OpMode.NONE:     //
+          case OpMode.A:        // a
+            break
+          case OpMode.IMM:      // #$FF
+            lineStr += "#" + opExp
+            break
+          case OpMode.ZP:       // $FF
+          case OpMode.ABS:      // $FFFF
+          case OpMode.LABS:     // $FFFFFF
+            lineStr += opExp
+            break
+          case OpMode.ZPX:      // $FF,X
+          case OpMode.ABSX:     // $FFFF,X
+          case OpMode.LABX:     // $FFFFFF,X
+            lineStr += opExp + (upperCase ? ",X" : ",x")
+            break
+          case OpMode.ZPY:      // $FF,Y
+          case OpMode.ABSY:     // $FFFF,Y
+            lineStr += opExp + (upperCase ? ",Y" : ",y")
+            break
+          case OpMode.INDX:     // ($FF,X)
+          case OpMode.AXI:      // ($FFFF,X)
+            lineStr += "(" + opExp + (upperCase ? ",X)" : ",x)")
+            break
+          case OpMode.INDY:     // ($FF),Y
+            lineStr += "(" + opExp + (upperCase ? "),Y" : "),y")
+            break
+          case OpMode.REL:      // *+-$FF
+          case OpMode.LREL:     // *+-$FFFF
+            lineStr += "*+-" + opExp
+            break
+          case OpMode.INZ:      // ($FF)
+          case OpMode.IND:      // ($FFFF)
+            lineStr += "(" + opExp + ")"
+            break
+          case OpMode.LIY:      // [$FF],Y
+            lineStr += "[" + opExp + (upperCase ? "],Y" : "],y")
+            break
+          case OpMode.LIN:      // [$FF]
+          case OpMode.ALI:      // [$FFFF]
+            lineStr += "[" + opExp + "]"
+            break
+          case OpMode.STS:      // stack,S
+            lineStr += opExp + (upperCase ? ",S" : ",s")
+            break
+          case OpMode.SIY:      // (stack,S),Y
+            lineStr += "(" + opExp + (upperCase ? ",S),Y" : ",s),y")
+            break
+          case OpMode.SD:       // #$FF,#$FF
+            // TODO:
+            break
+
+          // 65EL02-only
+          case OpMode.STS:      // stack,R
+            lineStr += opExp + (upperCase ? ",R" : ",r")
+            break
+          case OpMode.SIY:      // (stack,R),Y
+            lineStr += "(" + opExp + (upperCase ? ",R),Y" : ",r),y")
+            break
+        }
+
+        lineStr = lineStr.padEnd(22, "\xA0")
+
+        // cycle count
+        if (opEntry.cy) {
+          lineStr += " ; " + opEntry.cy
+        }
+
+        opStr += lineStr + "\n"
+      }
+    }
+
+    return opStr
   }
 
   async onDefinition(params: lsp.DefinitionParams, token?: lsp.CancellationToken): Promise<lsp.Definition | lsp.DefinitionLink[] | undefined> {

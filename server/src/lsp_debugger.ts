@@ -7,19 +7,17 @@ import { Handles, Breakpoint, StackFrame, Source, Scope, Variable } from "@vscod
 import { WebSocket, WebSocketServer } from "ws"
 import { LspServer, LspProject } from "./lsp_server"
 import { StackEntry, StackRegister } from "./shared/types"
-import { Statement, OpStatement, MacroInvokeStatement } from "./asm/statements"
-import { SourceFile } from "./asm/project"
+import { Statement, MacroInvokeStatement, OpStatement } from "./asm/statements"
 import { ObjectDoc, DataRange, RangeMatch } from "./asm/object_doc"
+import { evalOpExpression } from "./asm/assembler"
 
 // TODO:
 //  - show timing
-//  - jump to cursor
 //  - step forward
 //  - add default key-combos for all stepping operations
 //
 //  - read/write memory
 //  - watch variables
-//  - runtime hover + editor hover
 //
 //  ? split stack update
 //  - exceptions on handled errors
@@ -34,6 +32,7 @@ import { ObjectDoc, DataRange, RangeMatch } from "./asm/object_doc"
 
 type RequestHeader = {
   command: string
+  id?: number
 }
 
 type BreakpointEntry = {
@@ -58,11 +57,11 @@ type StopNotification = RequestHeader & {
 type SetRegisterRequest = RequestHeader & StackRegister
 
 type ReadMemoryRequest = RequestHeader & {
-  opBytes?: number[]    // instruction bytes, to determing addressing mode
-  opMode?: string       // addressing mode, ignoring opBytes
+  opBytes?: number[]    // instruction bytes, to determine addressing mode
   dataAddress?: number  // direct read address, ignoring opMode, opBytes
   readOffset?: number   // offset applied after final address is computed
-  readLength: number    // number of bytes to read
+  readLength?: number   // number of bytes to read (default 1)
+  indexed?: boolean     // split baseAddress and baseOffset in response
 }
 
 type ReadMemoryResponse = RequestHeader & {
@@ -89,7 +88,7 @@ type DebugVariableType = number | boolean | string | DebugVariable[]
 
 class DebugVariable {
 
-  public children = new Map<string,DebugVariable>()
+  public children = new Map<string, DebugVariable>()
   public register?: StackRegister
 
   constructor(
@@ -110,7 +109,12 @@ export class LspDebugger {
 
   private socketServer?: WebSocketServer
   private socket?: WebSocket
-  private responseProc?: any
+  private nextRequestId: number = 1
+
+  private pendingRequests = new Map<number, {
+    resolve: (message: RequestHeader) => void
+    reject: (reason?: any) => void
+  }>()
 
   private breakpoints = new Map<string, number[]>()
   private variableHandles = new Handles<DebugVariable>()
@@ -153,7 +157,7 @@ export class LspDebugger {
 
       this.socket.on("close", () => {
         this.socket = undefined
-        this.responseProc = undefined
+        this.cancelRequests()
       })
     })
   }
@@ -166,6 +170,35 @@ export class LspDebugger {
     if (this.socketServer) {
       this.socketServer.close()
     }
+  }
+
+  public isConnected(): boolean {
+    return this.socket?.readyState == WebSocket.OPEN
+  }
+
+  private sendCommand(command: string) {
+    if (this.socket?.readyState == WebSocket.OPEN) {
+      this.socket.send(`{"command":"${command}"}`)
+    }
+  }
+
+  private sendRequest(request: RequestHeader): Promise<any> {
+    return new Promise((resolve, reject) => {
+      request.id = this.nextRequestId++
+      this.pendingRequests.set(request.id, { resolve, reject })
+      if (this.socket?.readyState == WebSocket.OPEN) {
+        this.socket.send(JSON.stringify(request))
+      } else {
+        reject(new Error("Socket closed"))
+      }
+    })
+  }
+
+  private cancelRequests() {
+    for (const [_, pending] of this.pendingRequests) {
+      pending.reject(new Error("Socket closed"));
+    }
+    this.pendingRequests.clear();
   }
 
   private async receiveMessage(message: any) {
@@ -188,7 +221,7 @@ export class LspDebugger {
             // TODO: Invalidate cycle count numbers because will
             //  cause them to be inaccurate.
 
-            this.socket?.send(`{"command":"startCpu"}`)
+            this.sendCommand("startCpu")
             break
           }
         }
@@ -197,9 +230,10 @@ export class LspDebugger {
       }
 
       default: {
-        if (this.responseProc) {
-          this.responseProc(message)
-          this.responseProc = undefined
+        const pending = this.pendingRequests.get(message.id);
+        if (pending) {
+          pending.resolve(message)
+          this.pendingRequests.delete(message.id)
         }
         break
       }
@@ -216,19 +250,19 @@ export class LspDebugger {
 
       // translate from vscode to dbug commands
       case "pause":
-        this.socket.send('{"command":"stopCpu"}')
+        this.sendCommand("stopCpu")
         break
       case "continue":
-        this.socket.send('{"command":"startCpu"}')
+        this.sendCommand("startCpu")
         break
       case "next":
-        this.socket.send('{"command":"stepCpuOver"}')
+        this.sendCommand("stepCpuOver")
         break
       case "stepIn":
-        this.socket.send('{"command":"stepCpuInto"}')
+        this.sendCommand("stepCpuInto")
         break
       case "stepOut":
-        this.socket.send('{"command":"stepCpuOutOf"}')
+        this.sendCommand("stepCpuOutOf")
         break
 
       // *** step forward ***
@@ -288,16 +322,11 @@ export class LspDebugger {
     // ***
   }
 
-  private onSetBreakpoints(args: DebugProtocol.SetBreakpointsArguments) {
+  private async onSetBreakpoints(args: DebugProtocol.SetBreakpointsArguments) {
 
     let objectDoc: ObjectDoc | undefined
-    for (let module of this.mainProject!.modules) {
-      for (let doc of module.objectDocs) {
-        if (doc.sourceFile.fullPath == args.source.path!) {
-          objectDoc = doc
-          break
-        }
-      }
+    if (args.source.path) {
+      objectDoc = this.findObjectDoc(args.source.path)
     }
     if (!objectDoc) {
       return []
@@ -377,8 +406,7 @@ export class LspDebugger {
       request.entries.push({ address: entry[0] })
     }
 
-    this.socket!.send(JSON.stringify(request))
-    // TODO: await a response for sync purposes?
+    const response = await this.sendRequest(request)
 
     // DebugProtocol.SetBreakpointsResponse.body
     return { breakpoints }
@@ -392,25 +420,35 @@ export class LspDebugger {
     // ***
   }
 
-  private findSourceFile(project: LspProject, sourcePath: string): SourceFile | undefined {
-    for (let module of project.modules) {
-      for (let sourceFile of module.sourceFiles) {
-        if (sourceFile.fullPath == sourcePath) {
-          return sourceFile
-        }
-      }
-    }
-  }
-
   //--------------------------------------------------------
   // MARK: goto
 
   private onGotoTargets(args: DebugProtocol.GotoTargetsArguments) {
-    // ***
+
+    const targets: DebugProtocol.GotoTarget[] = []
+    if (args.source.path) {
+      const objectDoc = this.findObjectDoc(args.source.path)
+      if (objectDoc) {
+        const objectLine = objectDoc.getObjectLines(args.line - 1)[0]
+        if (objectLine?.dataBytes) {
+          targets.push({
+            id: objectLine.dataAddress!,
+            label: "",
+            line: args.line
+          })
+        }
+      }
+    }
+    return { targets }
   }
 
   private onGoto(args: DebugProtocol.GotoArguments) {
-    // ***
+    const request: SetRegisterRequest = {
+      command: "setRegister",
+      name: "PC",
+      value: args.targetId
+    }
+    this.sendRequest(request)
   }
 
   //--------------------------------------------------------
@@ -418,24 +456,18 @@ export class LspDebugger {
 
   private async onStackTrace(args: DebugProtocol.StackTraceArguments) {
 
-    // *** make sure !this.responseProc ***
-
     // TODO: respect args.format.hex
 
-    const promise = new Promise((resolve, reject) => {
-      this.responseProc = (responseMsg: any) => {
-        resolve(responseMsg)
-      }
-    })
-
-    this.socket!.send('{"command":"getStack"}')
-    const msgResponse = <StackResponse>await promise
+    const request: RequestHeader = {
+      command: "getStack"
+    }
+    const response: StackResponse = await this.sendRequest(request)
 
     this.variableHandles.reset()
     this.stackFrameHandles.reset()
 
     const outStackFrames: StackFrame[] = []
-    for (let entry of msgResponse.entries) {
+    for (let entry of response.entries) {
 
       const entryPC = entry.regs[0].value
       let dataRange: DataRange | undefined
@@ -466,7 +498,7 @@ export class LspDebugger {
       }
     }
 
-    return { stackFrames: outStackFrames, totalFrames: msgResponse.entries.length }
+    return { stackFrames: outStackFrames, totalFrames: response.entries.length }
   }
 
   private findProcLabel(pcRangeMatch: RangeMatch, procAddress: number):
@@ -529,12 +561,13 @@ export class LspDebugger {
     }
 
     const stackEntry = this.stackFrameHandles.get(v.value as number)
-    if (!stackEntry) {
-      return { variables }
-    }
-    const topOfStack = (stackEntry as any).topOfStack ?? false
+    const topOfStack = (stackEntry as any)?.topOfStack ?? false
 
     if (v.name == "registers") {
+
+      if (!stackEntry) {
+        return { variables }
+      }
 
       for (let i = 0; i < stackEntry.regs.length; i += 1) {
         // put PC, SP, and PS at end of variables
@@ -563,10 +596,10 @@ export class LspDebugger {
 
     } else if (v.name == "timing") {
 
-      // *** show timing numbers ***
+      // TODO: show timing numbers
 
       if (topOfStack) {
-        // *** delta cycles and delta ms -- always readonly ***
+        // TODO: delta cycles and delta ms -- always readonly
       }
     }
     return { variables }
@@ -584,7 +617,12 @@ export class LspDebugger {
         const reg = debugVar.register!
         this.parseRegValue(reg, args.value)
         if (reg.value != debugVar.value) {
-          this.socket!.send(`{"command":"setRegister","name":"${reg.name}","value":${reg.value}}`)
+          const request: SetRegisterRequest = {
+            command: "setRegister",
+            name: reg.name,
+            value: reg.value
+          }
+          this.sendRequest(request)
         }
         debugVar.value = reg.value
         debugVar.valueStr = this.regToString(reg)
@@ -631,16 +669,93 @@ export class LspDebugger {
 	// 	format?: ValueFormat; (hex?: boolean)
 	// }
 
-  private onEvaluate(args: DebugProtocol.EvaluateArguments) {
+  private findObjectDoc(fullPath: string): ObjectDoc | undefined {
+    for (let module of this.mainProject!.modules) {
+      for (let doc of module.objectDocs) {
+        if (doc.sourceFile.fullPath == fullPath) {
+          return doc
+        }
+      }
+    }
+  }
+
+  private async onEvaluate(args: DebugProtocol.EvaluateArguments) {
+    let opBytes: number[] | undefined
+
+    // hover is handled in lsp_server
     if (args.context == "hover") {
-      // TODO: look at the current source/line/column
-      // TODO: be smart about hovering over entire expression,
-      //  not just the word VSCode selected.
+      return
     }
 
-    // *** may need to go read memory from debugger
-      // *** special command to read indirect memory pointer?
+    // look for type name at end of expression and strip it off
+    let expStr = args.expression
+    let typeStr = ""
+    const n = expStr.indexOf(":")
+    if (n >= 0) {
+      typeStr = expStr.substring(n + 1)
+      expStr = expStr.substring(0, n)
+    }
+
+    opBytes = evalOpExpression(this.mainProject!, expStr)
+    if (!opBytes) {
+      return
+    }
+
+    const request: ReadMemoryRequest = {
+      command: "readMemory",
+      opBytes,
+      // TODO: get value size from opcode?
+      readLength: 1
+    }
+
+    const response: ReadMemoryResponse = await this.sendRequest(request)
+    const dataBytes = base64.toByteArray(response.dataString)
+
+    if (typeStr) {
+      // *** check for existing variable of same name? ***
+      return { result: "...", variablesReference }
+    } else {
+      const value = dataBytes[0]
+      const result = "$" + value.toString(16).toUpperCase().padStart(2, "0") +
+        " (#" + value.toString(10) + ")"
+      return { result, variablesReference: 0 }
+    }
   }
+
+	// interface EvaluateResponse extends Response {
+	// 	body: {
+	// 		/** The result of the evaluate request. */
+	// 		result: string;
+	// 		/** The type of the evaluate result.
+	// 			This attribute should only be returned by a debug adapter if the corresponding capability `supportsVariableType` is true.
+	// 		*/
+	// 		type?: string;
+	// 		/** Properties of an evaluate result that can be used to determine how to render the result in the UI. */
+	// 		presentationHint?: VariablePresentationHint;
+	// 		/** If `variablesReference` is > 0, the evaluate result is structured and its children can be retrieved by passing `variablesReference` to the `variables` request as long as execution remains suspended. See 'Lifetime of Object References' in the Overview section for details. */
+	// 		variablesReference: number;
+	// 		/** The number of named child variables.
+	// 			The client can use this information to present the variables in a paged UI and fetch them in chunks.
+	// 			The value should be less than or equal to 2147483647 (2^31-1).
+	// 		*/
+	// 		namedVariables?: number;
+	// 		/** The number of indexed child variables.
+	// 			The client can use this information to present the variables in a paged UI and fetch them in chunks.
+	// 			The value should be less than or equal to 2147483647 (2^31-1).
+	// 		*/
+	// 		indexedVariables?: number;
+	// 		/** A memory reference to a location appropriate for this result.
+	// 			For pointer type eval results, this is generally a reference to the memory address contained in the pointer.
+	// 			This attribute may be returned by a debug adapter if corresponding capability `supportsMemoryReferences` is true.
+	// 		*/
+	// 		memoryReference?: string;
+	// 		/** A reference that allows the client to request the location where the returned value is declared. For example, if a function pointer is returned, the adapter may be able to look up the function's location. This should be present only if the adapter is likely to be able to resolve the location.
+
+	// 			This reference shares the same lifetime as the `variablesReference`. See 'Lifetime of Object References' in the Overview section for details.
+	// 		*/
+	// 		valueLocationReference?: number;
+	// 	};
+	// }
 
   private onSetExpression(args: DebugProtocol.SetExpressionArguments) {
     // ***
@@ -651,12 +766,6 @@ export class LspDebugger {
   // MARK: memory read/write
 
   private async onReadMemory(args: DebugProtocol.ReadMemoryArguments) {
-
-    const promise = new Promise((resolve, reject) => {
-      this.responseProc = (responseMsg: any) => {
-        resolve(responseMsg)
-      }
-    })
 
     const address = parseInt(args.memoryReference, 16)
     if (isNaN(address)) {
@@ -670,13 +779,12 @@ export class LspDebugger {
       readLength: args.count
     }
 
-    this.socket!.send(JSON.stringify(request))
-    const msgResponse = <ReadMemoryResponse>await promise
+    const response: ReadMemoryResponse = await this.sendRequest(request)
 
     return {
-      address: msgResponse.dataAddress.toString(),
-      unreadableBytes: request.readLength - msgResponse.dataLength,
-      data: msgResponse.dataString
+      address: response.dataAddress.toString(),
+      unreadableBytes: request.readLength! - response.dataLength,
+      data: response.dataString
     }
   }
 
@@ -814,6 +922,78 @@ export class LspDebugger {
       value &= 0xffff
     }
     reg.value = value
+  }
+
+  public async buildDebugHover(sourcePath: string, line: number): Promise<string> {
+
+    let opBytes: number[] | undefined
+
+    const objectDoc = this.findObjectDoc(sourcePath)
+    if (objectDoc) {
+      const objectLine = objectDoc.getObjectLines(line)[0]
+      if (objectLine?.dataBytes) {
+        opBytes = objectLine.dataBytes
+      }
+    }
+    if (!opBytes) {
+      return ""
+    }
+
+    const request: ReadMemoryRequest = {
+      command: "readMemory",
+      opBytes,
+      indexed: true
+    }
+
+    const resp: ReadMemoryResponse = await this.sendRequest(request)
+    const dataBytes = base64.toByteArray(resp.dataString)
+    let dataLength = dataBytes.length
+    if (dataLength == 0) {
+      return ""
+    }
+
+    let address = resp.baseAddress ?? resp.dataAddress
+    const addrLen = resp.dataAddress < 0x100 ? 2 : 4
+    let rowWidth = 16
+    if (resp.baseOffset != undefined) {
+      if (resp.baseOffset < 8) {
+        rowWidth = 8
+        if (dataLength > 8) {
+          dataLength = 8
+        }
+      }
+    }
+
+    let str = ""
+    let rowCount = 0
+    for (let i = 0; i < dataLength; i += 1) {
+      if (rowCount == 0) {
+        str += address.toString(16).toUpperCase().padStart(addrLen, "0") + ":"
+      } else if (rowCount == 8 && rowWidth > 8) {
+        str += "\xa0"
+      }
+      str += " " + dataBytes[i].toString(16).toUpperCase().padStart(2, "0")
+      rowCount += 1
+      if (rowCount == rowWidth) {
+        str += "\n"
+        rowCount = 0
+      }
+      address += 1
+    }
+
+    if (dataLength == 1) {
+      str += " (#" + dataBytes[0].toString(10) + ")"
+    }
+    if (rowCount != 0) {
+      str += "\n"
+    }
+
+    if (resp.baseOffset !== undefined) {
+      const index = resp.baseOffset % 16
+      str += "".padEnd(addrLen + 1 + index * 3, "\xA0") + " ^^"
+    }
+
+    return "```\n" + str + "\n```"
   }
 }
 

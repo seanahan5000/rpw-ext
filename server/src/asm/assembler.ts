@@ -1,9 +1,9 @@
 
 import * as fs from 'fs'
-import { Module, SourceFile, SymbolMap } from "./project"
+import { Project, Module, SourceFile, SymbolMap } from "./project"
 import { Statement, ConditionalStatement, EquStatement, GenericStatement } from "./statements"
 import { TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
-import { ClosingBraceStatement } from "./statements"
+import { ClosingBraceStatement, OpStatement } from "./statements"
 import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
@@ -1689,4 +1689,88 @@ export class SymbolUtils {
 }
 
 // #endregion
+//------------------------------------------------------------------------------
+
+export class EvalAssembler extends Assembler {
+
+  public opBytes?: number[]
+  private modules: Module[]
+
+  constructor(modules: Module[]) {
+    super(modules[0])
+    this.symUtils = undefined
+    this.modules = modules
+  }
+
+  public override processSymbol_pass0(symExp: exp.SymbolExpression): void {
+    if (symExp.isDefinition) {
+      symExp.setError("No definitions allowed")
+      return
+    }
+
+    if (symExp.symbolType != SymbolType.Simple) {
+      symExp.setError("Only simple symbols")
+      return
+    }
+
+    symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+    let foundSym: Symbol | undefined
+
+    // search all modules for matching symbol
+    for (let module of this.modules) {
+      foundSym = module.symbolMap.get(symExp.fullName!)
+      if (foundSym) {
+        break
+      }
+    }
+    if (!foundSym) {
+      symExp.setError("Symbol not found")
+      return
+    }
+    symExp.symbol = foundSym
+    // NOTE: no foundSym.addReference call made
+  }
+
+  public override writeByte(value: number | undefined) {
+    if (!this.opBytes) {
+      this.opBytes = []
+    }
+    this.opBytes.push(value ?? -1)
+  }
+}
+
+// TODO: eventually could support .defines, built-in functions, etc.
+
+export function evalOpExpression(project: Project, expStr: string): number[] | undefined {
+
+  // TODO: scan for type information at end of expStr?
+  // TODO: how will extra type info get returned?
+
+  const asm = new EvalAssembler(project.modules)
+  const parser = new Parser()
+  const statement = parser.reparseStatement(" lda " + expStr, project.syntax)
+
+  if (!(statement instanceof OpStatement)) {
+    return
+  }
+
+  statement.PC = 0x1000
+  statement.preprocess(asm)
+  statement.pass1(asm)
+  statement.pass2(asm)
+
+  if (statement.hasAnyError()) {
+    return
+  }
+  if (!asm.opBytes) {
+    return
+  }
+  for (let i = 0; i < asm.opBytes.length; i += 1) {
+    if (asm.opBytes[i] < 0) {
+      return
+    }
+  }
+  return asm.opBytes
+}
+
 //------------------------------------------------------------------------------
