@@ -152,7 +152,7 @@ export class Tokenizer {
     this._syntaxDef = SyntaxDefs[this._syntax]
   }
 
-  protected setSourceLine(sourceLine: string) {
+  public setSourceLine(sourceLine: string) {
     this.sourceLine = sourceLine
     this.position = 0
   }
@@ -212,7 +212,7 @@ export class Tokenizer {
   skipWhitespace() {
     while (this.position < this.sourceLine.length) {
       const c = this.sourceLine[this.position]
-      if (c != " " && c != "\t") {
+      if (c != " " && c != "\t" && c != "\xA0") {
         break
       }
       this.position += 1

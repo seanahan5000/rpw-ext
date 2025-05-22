@@ -1283,7 +1283,7 @@ const DataRanges: number[][] = [
 
 // TODO: need to think about handling string constants in here
 
-class DataStatement extends Statement {
+export class DataStatement extends Statement {
 
   protected dataSize: number
   protected signType: string
@@ -1350,6 +1350,12 @@ class DataStatement extends Statement {
   }
 
   pass1(asm: Assembler): number {
+    return this.getSize()!
+  }
+
+  // this is needed for TypeDef.addField() layout computation
+  //  (valid after preprocess)
+  public override getSize(): number | undefined {
     return Math.max(this.args.length, 1) * this.dataSize
   }
 
@@ -1515,7 +1521,7 @@ export class StorageStatement extends Statement {
   }
 
   pass1(asm: Assembler): number {
-    return (this.countValue ?? 0) * (this.dataSize ?? 0)
+    return this.getSize()!
   }
 
   pass2(asm: Assembler): void {
@@ -1532,6 +1538,12 @@ export class StorageStatement extends Statement {
     // TODO: handle >= 16 bit patterns differently
     const count = (this.countValue ?? 0) * (this.dataSize ?? 0)
     asm.writeBytePattern(fillValue, count)
+  }
+
+  // this is needed for TypeDef.addField() layout computation
+  //  (valid after preprocess)
+  public override getSize(): number | undefined {
+    return (this.countValue ?? 0) * (this.dataSize ?? 0)
   }
 }
 
@@ -2943,40 +2955,52 @@ function stringToBytes(str: string): number[] {
 
 export class DummyStatement extends Statement {
 
-  postParse(parser: Parser) {
-    // TODO: put back in once Naja code is cleaned up
-    // if (this.opNameLC == "dummy") {
-    //   this.opExp?.setWarning("Use DUM instead")
-    // }
-  }
+  private isStruct: boolean = false
 
   public override preprocess(asm: Assembler): void {
 
-    // NOTE: With Merlin, the start of a dummy section implicitly
+    // NOTE: In Merlin, the start of a dummy section implicitly
     //  closes any currently active dummy section first.
-    // TODO: consider controlling this with a strict/lax switch
-    if (asm.module.project.syntax == Syntax.MERLIN) {
-      if (asm.isNested(NestingType.Struct)) {
-        asm.popNesting(true)
-      }
+    if (asm.isNested(NestingType.Struct)) {
+      asm.popNesting(true)
     }
-
-    asm.pushNesting(NestingType.Struct, () => {
-      asm.popSegment()
-    })
 
     // reference any symbols that may be needed to resolve orgValue
     super.preprocess(asm)
 
+    let orgValue: number | undefined
     const valueArg = this.args[0]
     if (valueArg) {
-      let orgValue = valueArg.resolve()
+      orgValue = valueArg.resolve()
       if (orgValue === undefined) {
         valueArg.setErrorWeak("Must resolve in first pass")
         orgValue = 0
       }
+    }
 
+    // If a the statement has a label and base address
+    //  of zero, treat as a named/scoped structure.
+    //  This is an addition beyond standard Merlin behavior.
+    if (this.labelExp && orgValue == 0) {
+      const labelStr = this.labelExp.getString()
+      asm.scopeState.pushScope(labelStr)
+      this.isStruct = true
+    }
+
+    if (orgValue != undefined) {
       asm.pushAndSetDummySegment(orgValue)
+    }
+
+    asm.pushNesting(NestingType.Struct, () => {
+      const size = asm.popSegment()
+      if (this.isStruct) {
+        asm.scopeState.popScope()
+        asm.endTypeDef(size)
+      }
+    })
+
+    if (this.isStruct) {
+      asm.startTypeDef(NestingType.Struct, this.labelExp)
     }
   }
 }

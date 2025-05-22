@@ -1,7 +1,8 @@
 
 import * as fs from 'fs'
 import { Project, Module, SourceFile, SymbolMap } from "./project"
-import { Statement, ConditionalStatement, EquStatement, GenericStatement } from "./statements"
+import { Statement, ConditionalStatement, EquStatement, GenericStatement, DummyStatement } from "./statements"
+import { DataStatement, StorageStatement } from "./statements"
 import { TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
 import { ClosingBraceStatement, OpStatement } from "./statements"
 import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
@@ -10,6 +11,7 @@ import { SymbolExpression } from "./expressions"
 import { SymbolType, SymbolFrom } from "./symbols"
 import { Parser } from "./parser"
 import { ObjectDoc } from "./object_doc"
+import { Token } from "./tokenizer"
 
 //------------------------------------------------------------------------------
 
@@ -191,10 +193,21 @@ type NestingEntry = {
 //------------------------------------------------------------------------------
 // MARK: TypeDef
 
+// TODO: Since typedefs hang off symbols and outlive the assembler,
+//  these should probably be moved elsewhere.
+
+export type FieldEntry = {
+  name: string,
+  offset: number,
+  size: number,
+  type?: string
+}
+
 export class TypeDef {
 
   public endLineIndex: number
   private size?: number
+  public fields?: FieldEntry[]
 
   constructor(
       public nestingType: NestingType,
@@ -211,6 +224,35 @@ export class TypeDef {
 
   public getSize(): number | undefined {
     return this.size
+  }
+
+  public addField(statement: Statement) {
+    if (this.nestingType == NestingType.Struct) {
+      const name = statement.labelExp?.getString()
+      const offset = statement.PC
+      const size = statement.getSize()
+      if (name != undefined && offset != undefined && size != undefined) {
+        let type: string | undefined
+        for (let child of statement.children) {
+          if (child instanceof Token) {
+            const str = child.getString().substring(1).trim()
+            if (str[0] == "{") {
+              try {
+                const obj = JSON.parse(str)
+                if (obj) {
+                  type = obj.type
+                }
+              } catch (e) {
+              }
+            }
+          }
+        }
+        if (!this.fields) {
+          this.fields = []
+        }
+        this.fields.push({ name, offset, size, type })
+      }
+    }
   }
 }
 
@@ -517,8 +559,21 @@ export class Assembler {
 
               // force a popScope after a DefineDefStatement because its scope
               //  only last for that line until its symbols have been processed
+              //
+              // TODO: why is this not just appended to preprocess?
               if (line.statement instanceof DefineDefStatement) {
                 line.statement.endPreprocess(this)
+              }
+
+              // collect struct field statements for later use by debugger
+              //  to format variables
+              if (this.typeDef) {
+                // TODO: will have to add eventual "TagStatement"
+                //  and any others that change struct layout
+                if (line.statement instanceof DataStatement ||
+                    line.statement instanceof StorageStatement) {
+                  this.typeDef.addField(line.statement)
+                }
               }
 
             } else {
@@ -1513,7 +1568,10 @@ export class Assembler {
     if (!this.typeDef) {
 
       const statement = this.curLine!.statement
-      if (statement instanceof TypeDefBeginStatement || statement instanceof DefineDefStatement) {
+      // TODO: clean this up
+      if (statement instanceof TypeDefBeginStatement ||
+          statement instanceof DefineDefStatement ||
+          statement instanceof DummyStatement) {
 
         this.typeStart = statement
         const fileIndex = this.module.getFileIndex(this.fileReader.state.file!)
@@ -1522,6 +1580,7 @@ export class Assembler {
 
         // attach typeDef to typeName symbol
         if (typeName?.symbol) {
+          // TODO: clean up need for any cast
           const anySym = (typeName.symbol as any)
           anySym.typeDef = this.typeDef
         }

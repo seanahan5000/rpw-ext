@@ -1,6 +1,6 @@
 
 import * as fs from 'fs'
-import { RpwProject, RpwSettings, RpwDefine } from "../shared/rpw_types"
+import { RpwProject, RpwSettings, RpwDefine, RpwBin } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
@@ -9,6 +9,7 @@ import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
 import { ObjectDoc, DataRange, RangeMatch } from "./object_doc"
+import { LspDebugger } from "../lsp_debugger"
 
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
@@ -79,6 +80,9 @@ export class Project {
   public includePaths: string[] = []
   public isTemporary = false
   public inWorkspace = false
+
+  // debugger-related
+  public entryPoint: number = 0
 
   constructor(defaultSettings: RpwSettings) {
     this.defaultSettings = defaultSettings
@@ -426,6 +430,187 @@ export class Project {
         }
       }
       return bestMatch
+    }
+  }
+
+  public async binLoadProject(dbg: LspDebugger) {
+
+    // loadProject should have already set this
+    if (!this.rpwProject) {
+      return
+    }
+
+    // load disk images
+    if (this.rpwProject.images) {
+      for (let imageEntry of this.rpwProject.images) {
+        if (imageEntry.enabled == undefined || imageEntry.enabled == true) {
+          const fullPath = this.binDir + "/" + imageEntry.name
+          const n = imageEntry.name.lastIndexOf(".")
+          const format = imageEntry.name.substring(n + 1).toLowerCase()
+          const drive = imageEntry.drive || 1
+          const writeProtected = imageEntry.readonly || false
+          dbg.setDiskImage(fullPath, drive - 1, format, writeProtected)
+        }
+      }
+    }
+
+    // preload binaries
+    if (this.rpwProject.preloads) {
+      for (let preload of this.rpwProject.preloads) {
+        if (preload.enabled == undefined || preload.enabled == true) {
+          if (preload.entryPoint) {
+            try {
+              this.entryPoint = parseInt(preload.entryPoint)
+            } catch (e: any) {
+              throw new Error(`Invalid preload entryPoint value: ${preload.entryPoint}`)
+            }
+          }
+          if (preload.bins) {
+            await this.processBins(dbg, preload.bins)
+          }
+
+          // load memory patches
+          if (preload.patches) {
+            for (let patch of preload.patches) {
+              if (!patch.address) {
+                throw new Error("Patch requires an address")
+              }
+              if (!patch.data) {
+                throw new Error(`Patch at ${patch.address} requires data`)
+              }
+
+              let patchAddr
+              try {
+                patchAddr = parseInt(patch.address)
+              } catch (e: any) {
+                throw new Error(`Invalid patch address: ${patch.address}`)
+              }
+
+              const patchVals = []
+              for (let patchValStr of patch.data) {
+                try {
+                  patchVals.push(parseInt(patchValStr))
+                } catch (e: any) {
+                  throw new Error(`Invalid patch ${patch.address} value ${patchValStr}`)
+                }
+              }
+              await dbg.writeMemory(patchAddr, 0, patchVals)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private processBinName(bin: string | RpwBin): RpwBin {
+    let fullName: string
+    let nameStr: string
+    let addrStr: string | undefined
+    let bankNum = 0
+
+    if (typeof bin == "string") {
+      fullName = bin
+      nameStr = bin
+    } else {
+      if (!bin.name) {
+        throw new Error("bin missing name")
+      }
+      fullName = bin.name
+      nameStr = bin.name
+      addrStr = bin.address
+      bankNum = bin.bank ?? 0
+    }
+
+    // parse name suffixes
+    if (addrStr == undefined) {
+
+      // process <name>#<type><address>
+      let n = nameStr.lastIndexOf("#")
+      if (n > 0) {
+        addrStr = nameStr.substring(n + 1)
+        if (addrStr.length == 6) {
+          const typeStr = addrStr.substring(0, 2)
+          try {
+            if (parseInt(typeStr, 16) != 6) {
+              throw new Error(`bin suffix type ${typeStr} not supported -- only 06`)
+            }
+          } catch (e: any) {
+            throw new Error(`Invalid bin suffix type: ${typeStr}`)
+          }
+          addrStr = addrStr.substring(2)
+          nameStr = nameStr.substring(0, n)
+        } else {
+          addrStr = undefined
+        }
+      }
+
+      // process <name>.<address>[.<bank>]
+      if (addrStr == undefined) {
+        n = nameStr.lastIndexOf(".")
+        if (n > 0) {
+          addrStr = nameStr.substring(n + 1)
+          nameStr = nameStr.substring(0, n)
+          if (addrStr.length == 1) {
+            if (addrStr == "1" || addrStr == "2") {
+              bankNum = parseInt(addrStr)
+              n = nameStr.lastIndexOf(".")
+              if (n > 0) {
+                addrStr = nameStr.substring(n + 1)
+                nameStr = nameStr.substring(0, n)
+              }
+            } else {
+              throw new Error(`Invalid bank value ${addrStr}`)
+            }
+          }
+        }
+      }
+
+      if (addrStr == undefined) {
+        throw new Error("bin is missing address")
+      }
+      if (addrStr.length != 4) {
+        throw new Error("bin has possibly bad address -- length should be 4")
+      }
+    }
+
+    // prove that addrStr is a valid number
+    if (!addrStr.startsWith("0x")) {
+      addrStr = "0x" + addrStr
+    }
+    let addrNum: number
+    try {
+      addrNum = parseInt(addrStr)
+    } catch (e: any) {
+      throw new Error(`Invalid address value: ${addrStr}`)
+    }
+
+    if (addrNum == 0xd000 && !bankNum) {
+      throw new Error("Address 0xD000 must have a bank number")
+    }
+
+    return { name: fullName, address: addrStr, bank: bankNum }
+  }
+
+  private async processBins(dbg: LspDebugger, bins: (string | RpwBin)[]) {
+    for (let bin of bins) {
+      const rpwBin = this.processBinName(bin)
+      const fullPath = this.binDir + "/" + rpwBin.name
+      if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
+        const binBytes = fs.readFileSync(fullPath)
+        // if (!this.firstBinData) {
+        //   this.firstBinData = binBytes
+        //   this.firstBinAddress = rpwBin.address
+        // }
+        let binAddr
+        try {
+          binAddr = parseInt(rpwBin.address!)
+        } catch (e: any) {
+          throw new Error(`Invalid patch address: ${rpwBin.address!}`)
+        }
+        await dbg.writeMemory(binAddr, rpwBin.bank!, binBytes)
+      } else {
+        // TODO: report error?
+      }
     }
   }
 }

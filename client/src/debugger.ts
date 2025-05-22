@@ -66,15 +66,13 @@ export class RpwDebugSession extends DebugSession {
     response.body.supportsConfigurationDoneRequest = true
     response.body.supportsGotoTargetsRequest = true
     response.body.supportsSetVariable = true
-    // response.body.supportsDelayedStackTraceLoading = true
-    // response.body.supportsBreakpointLocationsRequest = true
+    response.body.supportsBreakpointLocationsRequest = true
 
     // TODO: enable/support this if stack trace loading is slow
     // response.body.supportsDelayedStackTraceLoading = true
 
     response.body.supportsReadMemoryRequest = true
     response.body.supportsWriteMemoryRequest = true
-
     response.body.supportsEvaluateForHovers = true
 
     // enables option to view values in hex
