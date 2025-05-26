@@ -223,13 +223,16 @@ export class ObjectDoc {
       }
     }
     if (!curRange) {
-      // NOTE: byteCount is passed in as pre offset to compensate
-      //  for bytes already added to segment dataArray
-      curRange = new ObjectRange(line.lineNumber, line.statement.segment!, byteCount)
-      this.objectRanges.push(curRange)
+      // TODO: this segment check is only needed to cover for anonymous enums until fixed
+      if (line.statement.segment) {
+        // NOTE: byteCount is passed in as pre offset to compensate
+        //  for bytes already added to segment dataArray
+        curRange = new ObjectRange(line.lineNumber, line.statement.segment, byteCount)
+        this.objectRanges.push(curRange)
+      }
     }
 
-    curRange.addLine(line.statement.PC, byteCount, line.isHidden ?? false)
+    curRange?.addLine(line.statement.PC, byteCount, line.isHidden ?? false)
   }
 
   public finalize() {
