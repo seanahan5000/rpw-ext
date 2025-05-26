@@ -2936,6 +2936,7 @@ export class TextStatement extends Statement {
   }
 }
 
+
 export class NajaTextStatement extends TextStatement {
 
   private najaMapping?: number[]
@@ -2946,29 +2947,49 @@ export class NajaTextStatement extends TextStatement {
 
   protected override getMapping(): number[] {
     if (!this.najaMapping) {
-      this.najaMapping = new Array(128)
-
-      for (let i = 0; i < 10; i += 1) {
-        this.najaMapping[0x30 + i] = 0x00 + i // numbers
-      }
-
-      this.najaMapping[0x20] = 0x0A           // space
-      this.najaMapping[0x5F] = 0x0A           // space (underscore)
-
-      for (let i = 0; i < 26; i += 1) {
-        this.najaMapping[0x41 + i] = 0x0B + i // letters
-      }
-
-      const symbols = "!\"%\'*+,-./:<=>?"     // symbols
-      for (let i = 0; i < symbols.length; i += 1) {
-        this.najaMapping[symbols.charCodeAt(i)] = 0x25 + i
-      }
-
-      this.najaMapping[0x0A] = 0x8B           // \n
+      this.najaMapping = NajaTextStatement.buildMapping()
     }
     return this.najaMapping
   }
+
+  // TODO: temporarily static/separate for debugger use
+  public static buildMapping(): number[] {
+    const mapping = new Array(128)
+
+    for (let i = 0; i < 10; i += 1) {
+      mapping[0x30 + i] = 0x00 + i // numbers
+    }
+
+    mapping[0x20] = 0x0A           // space
+    mapping[0x5F] = 0x0A           // space (underscore)
+
+    for (let i = 0; i < 26; i += 1) {
+      mapping[0x41 + i] = 0x0B + i // letters
+    }
+
+    const symbols = "!\"%\'*+,-./:<=>?"     // symbols
+    for (let i = 0; i < symbols.length; i += 1) {
+      mapping[symbols.charCodeAt(i)] = 0x25 + i
+    }
+
+    mapping[0x0A] = 0x8B           // \n
+    return mapping
+  }
+
+  // TODO: temporarily static/separate for debugger use
+  public static buildUnmapping(): string[] {
+    const mapping = NajaTextStatement.buildMapping()
+    const unmapping: string[] = new Array(256)
+    for (let i = 0; i < 256; i += 1) {
+      let char = String.fromCharCode(i)
+      let mapped = mapping[i]
+      // *** handle escaped characters
+      unmapping[mapped] = char
+    }
+    return unmapping
+  }
 }
+
 
 function stringToBytes(str: string): number[] {
   const bytes: number[] = []

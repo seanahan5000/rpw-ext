@@ -15,19 +15,18 @@ import { Symbol, TypeDef, FieldEntry } from "./asm/symbols"
 import { Parser } from "./asm/parser"
 import { TokenType } from "./asm/tokenizer"
 
+// TODO: temporary hack
+import { NajaTextStatement } from "./asm/statements"
+
 // TODO:
 //  - show timing
 //  - step forward
 //  - add default key-combos for all stepping operations
 //
-//  - enum type references
-//  - underline index field in a structure
-//  * show address for (CHARDL),Y, for example
-//  * array of structures
-//  * finish write memory
-//  * naja text display
-//    ? use different name
-//  ? naja text editing
+//  ? enum type references
+//  ? underline index field in a structure
+//  ? array of structures
+//  ? text string editing
 //  - modifying code memory doesn't cause red bytes in disassembly
 //
 //  ? split stack update
@@ -112,7 +111,7 @@ type SetDiskImageRequest = RequestHeader & {
 
 function valueToString(value: number, typeSize: number): string {
   let valStr = "$" + value.toString(16).toUpperCase().padStart(typeSize * 2, "0")
-  if (typeSize == 1 || typeSize == 2) {
+  if (typeSize == 1) {
     valStr += (" (#" + value.toString()) + ")"
   }
   return valStr
@@ -135,6 +134,25 @@ function underlineString(input: string): string {
 
 function deunderlineString(input: string): string {
   return input.replace("\u0332", "")
+}
+
+// TODO: clean up this hack
+function buildTextString(dataBytes: Uint8Array | number[]): string {
+  let result = "\""
+  const unmapping = NajaTextStatement.buildUnmapping()
+  for (let i = 0; i < dataBytes.length; i += 1) {
+    const unmapped = unmapping[dataBytes[i]]
+    result += unmapped ?? "."
+  }
+  result += "\""
+  return result
+}
+
+function isSimpleType(typeName: string): boolean {
+  return typeName == "byte" ||
+    typeName == "word" ||
+    typeName == "long" ||
+    typeName == "text"
 }
 
 //------------------------------------------------------------------------------
@@ -266,7 +284,7 @@ class StructVariable extends DebugVariable {
         const subAddress = address + field.offset
         const subDataBytes = dataBytes.subarray(field.offset, field.offset + field.size)
 
-        if (field.typeName) {
+        if (field.typeName && !isSimpleType(field.typeName)) {
           const subType = dbg.findTypeDef(field.typeName)
           if (subType && subType.size != undefined) {
             const structVar = new StructVariable(dbg, subType, subAddress, subDataBytes)
@@ -290,12 +308,6 @@ class StructVariable extends DebugVariable {
 }
 
 class FieldVariable extends DebugVariable {
-
-  public static isSimple(field: FieldEntry): boolean {
-    return field.typeName == "byte" ||
-      field.typeName == "word" ||
-      field.typeName == "long"
-  }
 
   // NOTE: address and dataBytes have been adjust to start of field
   constructor(protected field: FieldEntry, address: number, dataBytes: Uint8Array) {
@@ -321,25 +333,33 @@ class FieldVariable extends DebugVariable {
 
   private updateValueStr(dataBytes: Uint8Array | number[]) {
     this.valueStr = ""
+
     if (this.field.typeName) {
+
+      if (this.field.typeName == "text") {
+        this.valueStr = buildTextString(dataBytes)
+        return
+      }
+
       let typeSize = 1
       if (this.field.typeName == "word") {
         typeSize = 2
       } else if (this.field.typeName == "long") {
         typeSize = 3
       }
-      this.valueStr = dataToString(dataBytes, 0, typeSize)
-    } else if (this.field.size == 1) {
-      this.valueStr = dataToString(dataBytes, 0, 1)
-    } else {
-      // TODO: add an array var as child of the field
-      this.valueStr = ""
-      for (let i = 0; i < this.field.size; i += 1) {
-        if (i > 0) {
-          this.valueStr += " "
-        }
-        this.valueStr += dataBytes[i].toString(16).toUpperCase().padStart(2, "0")
+      if (typeSize == this.field.size) {
+        this.valueStr = dataToString(dataBytes, 0, typeSize)
+        return
       }
+    }
+
+    // TODO: add an array var as child of the field
+    this.valueStr = ""
+    for (let i = 0; i < this.field.size; i += 1) {
+      if (i > 0) {
+        this.valueStr += " "
+      }
+      this.valueStr += dataBytes[i].toString(16).toUpperCase().padStart(2, "0")
     }
   }
 }
@@ -440,32 +460,25 @@ class RegistersVariable extends DebugVariable {
         index -= stackEntry.regs.length
       }
       const reg = stackEntry.regs[index]
-      // *** pass address for SP and PC ***
-      this.addChild(new RegisterVariable(reg))
-
-      // let regVar: DebugProtocol.Variable = {
-      //   name: debugVar.name,
-      //   value: debugVar.valueStr,
-      //   variablesReference: 0
-      // }
-      // if (reg.name == "PC" || reg.name == "SP") {
-      //   regVar.memoryReference = reg.value.toString(16).toUpperCase().padStart(4, "0")
-      // }
-      // if (!topOfStack) {
-      //   regVar.presentationHint = { attributes: ["readOnly"] }
-      // }
-      // variables.push(regVar)
+      this.addChild(new RegisterVariable(reg, isTop))
     }
   }
 }
 
-class RegisterVariable extends DebugVariable {
-  private reg: StackRegister
 
-  constructor(reg: StackRegister) {
+class RegisterVariable extends DebugVariable {
+
+  constructor(private reg: StackRegister, private isTop: boolean) {
     super(reg.name)
-    this.reg = reg
     this.updateValueStr()
+  }
+
+  public override buildVariable(): DebugProtocol.Variable {
+    let result = super.buildVariable()
+    if (!this.isTop) {
+      result.presentationHint = { attributes: ["readOnly"] }
+    }
+    return result
   }
 
   protected override setValue(dbg: LspDebugger, valueStr: string) {
@@ -483,11 +496,16 @@ class RegisterVariable extends DebugVariable {
 
     this.updateValueStr()
 
+    let memoryReference: string | undefined
+    if (this.name == "PC" || this.name == "SP") {
+      memoryReference = this.reg.value.toString(16).toUpperCase().padStart(4, "0")
+    }
+
     // DebugProtocol.SetVariableResponse.body
     return {
       value: this.valueStr,
-      variablesReference: 0
-      // *** memory reference ***
+      variablesReference: 0,
+      memoryReference
     }
   }
 
@@ -654,7 +672,7 @@ export class LspDebugger {
       case "cpuStopped": {
         const msg = <StopNotification>message
         if (msg.reason == "breakpoint" && this.mainProject) {
-          // *** need to use dataString in msg? ***
+          // TODO: need to use dataString in msg?
           const result = this.mainProject.findSourceByAddress(msg.pc)
           if (!result) {
             // if breakpoint address is in file that isn't loaded,
@@ -730,7 +748,7 @@ export class LspDebugger {
         this.sendCommand("stepCpuOutOf")
         break
 
-      // *** step forward ***
+      // TODO: step forward
 
       case "breakpointLocations":
         return this.onBreakpointLocations(<DebugProtocol.BreakpointLocationsArguments>params.arguments![1])
@@ -993,7 +1011,7 @@ export class LspDebugger {
           const statement = sourceFile.statements[i]
           if (statement.labelExp && statement.PC !== undefined) {
             if (!statement.labelExp.isLocalType() && !statement.labelExp.isVariableType()) {
-              // *** should PC be coming from an ObjectLine? ***
+              // TODO: should PC be coming from an ObjectLine?
               return { statement, baseAddress: statement.PC }
             }
           }
@@ -1111,9 +1129,9 @@ export class LspDebugger {
       let token = parser.getNextToken()
       if (token && token.getString() != "[") {
         typeName = token.getString()
-        typeDef = this.findTypeDef(typeName)
-        if (!typeDef) {
-          if (typeName != "byte" && typeName != "word" && typeName != "long") {
+        if (!isSimpleType(typeName)) {
+          typeDef = this.findTypeDef(typeName)
+          if (!typeDef) {
             parseError = true
           }
         }
@@ -1201,12 +1219,12 @@ export class LspDebugger {
         const dataBytes = base64.toByteArray(response.dataString)
 
         const structVar = new StructVariable(this, typeDef, response.dataAddress, dataBytes)
-        const result = "$" + response.dataAddress.toString(16).toUpperCase().padStart(response.dataAddress < 0x100 ? 2 : 4, "0") + ": { }"
+        const result = "{ }"
         return { result, variablesReference: structVar.handle }
       }
     } else {
       let typeSize
-      if (typeName == "byte") {
+      if (typeName == "byte" || typeName == "text") {
         typeSize = 1
       } else if (typeName == "word") {
         typeSize = 2
@@ -1243,19 +1261,25 @@ export class LspDebugger {
         if (rows == undefined) {
           rows = Math.floor(dataBytes.length / columns!)
         }
+
         const arrayVar = new ArrayVariable(rows, columns!, typeSize, response.dataAddress, response.indexAddress, dataBytes)
         varRef = this.variableHandles.create(arrayVar)
       }
 
       const offset = (response.indexAddress ?? response.dataAddress) - response.dataAddress
-      const result = dataToString(dataBytes, offset, typeSize)
+
+      let result = ""
+      if (typeName == "text") {
+        result = buildTextString(dataBytes)
+      } else {
+        result = dataToString(dataBytes, offset, typeSize)
+      }
       return { result, variablesReference: varRef }
     }
   }
 
   private onSetExpression(args: DebugProtocol.SetExpressionArguments) {
-    // ***
-    console.log() // ***
+    // TODO: need to implement this?
   }
 
   //--------------------------------------------------------
@@ -1284,51 +1308,27 @@ export class LspDebugger {
     }
   }
 
+  private async onWriteMemory(args: DebugProtocol.WriteMemoryArguments) {
 
-  // interface WriteMemoryArguments {
-	// 	/** Memory reference to the base location to which data should be written. */
-	// 	memoryReference: string;
-	// 	/** Offset (in bytes) to be applied to the reference location before writing data. Can be negative. */
-	// 	offset?: number;
-	// 	/** Property to control partial writes. If true, the debug adapter should attempt to write memory even
-  //    if the entire memory region is not writable. In such a case the debug adapter should stop after hitting
-  //    the first byte of memory that cannot be written and return the number of bytes written in the response
-  //    via the `offset` and `bytesWritten` properties.
-	// 		If false or missing, a debug adapter should attempt to verify the region is writable before writing, and fail the response if it is not.
-	// 	*/
-	// 	allowPartial?: boolean;
-	// 	/** Bytes to write, encoded using base64. */
-	// 	data: string;
-	// }
+    const address = parseInt(args.memoryReference, 16)
+    if (isNaN(address)) {
+      return { bytesWritten: 0 }
+    }
 
-  private onWriteMemory(args: DebugProtocol.WriteMemoryArguments) {
+    const request: WriteMemoryRequest = {
+      command: "writeMemory",
+      dataAddress: address + (args.offset ?? 0),
+      dataBank: 0,
+      dataString: args.data,
+      partialAllowed: args.allowPartial ?? false
+    }
 
-		// const variable = this._variableHandles.get(Number(memoryReference));
-		// if (typeof variable === 'object') {
-		// 	const decoded = base64.toByteArray(data);
-		// 	variable.setMemory(decoded, offset);
-		// 	response.body = { bytesWritten: decoded.length };
-		// } else {
-		// 	response.body = { bytesWritten: 0 };
-		// }
-    //
-		// this.sendResponse(response);
-		// this.sendEvent(new InvalidatedEvent(['variables']))
-
-    // return {
-    //   offset?: Number,
-    //   bytesWritten?: number
-    // }
+    const response: WriteMemoryResponse = await this.sendRequest(request)
+    return {
+      offset: args.offset ?? 0,
+      bytesWritten: response.bytesWritten
+    }
   }
-
-  // interface WriteMemoryResponse extends Response {
-  // 	body?: {
-  // 		/** Property that should be returned when `allowPartial` is true to indicate the offset of the first byte of data successfully written. Can be negative. */
-  // 		offset?: number;
-  // 		/** Property that should be returned when `allowPartial` is true to indicate the number of bytes starting from address that were successfully written. */
-  // 		bytesWritten?: number;
-  // 	};
-  // }
 
   //--------------------------------------------------------
   // MARK: buildDebugHover
@@ -1398,7 +1398,7 @@ export class LspDebugger {
       address += 1
     }
 
-    if (dataLength == 1 || dataLength == 2) {
+    if (dataLength == 1) {
       str += " (#" + dataBytes[0].toString(10) + ")"
     }
     if (rowCount != 0) {
