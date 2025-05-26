@@ -53,11 +53,10 @@ export class SizeofFunction extends FunctionExpression {
     if (!(arg instanceof SymbolExpression)) {
       throw "ASSERT: .sizeof should have parsed a symbol argument"
     }
+    if (arg.symbol?.typeDef) {
+      return arg.symbol.typeDef.size
+    }
     if (arg.symbol) {
-      const typeDef = (arg.symbol as any).typeDef
-      if (typeDef) {
-        return typeDef.getSize()
-      }
       // TODO: Need to find symbol definition and
       //  return the size of its line.
       // this.setError("Symbol is not a sized type")

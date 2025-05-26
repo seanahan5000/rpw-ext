@@ -1,9 +1,9 @@
 
 import * as exp from "./expressions"
-import { Assembler, NestingType, TypeDef, LoopVar, Conditional, Segment } from "./assembler"
+import { Assembler, NestingType, LoopVar, Conditional, Segment } from "./assembler"
 import { Parser } from "./parser"
 import { SymbolUtils } from "./assembler"
-import { SymbolType, SymbolFrom } from "./symbols"
+import { SymbolType, SymbolFrom, TypeDef } from "./symbols"
 import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
 import { KeywordDef } from "./syntaxes/syntax_types"
@@ -124,6 +124,7 @@ export abstract class Statement extends exp.Expression {
     // }
   }
 
+  // collect any information that can be known after parsing but before pass1
   postParse(parser: Parser) {
   }
 
@@ -1338,6 +1339,18 @@ export class DataStatement extends Statement {
         // TODO: only allow no dataElements if inside a .struct
       }
     }
+
+    if (asm.inTypeDef()) {
+      let typeName: string | undefined
+      if (this.dataSize == 1) {
+        typeName = "byte"
+      } else if (this.dataSize == 2) {
+        typeName = "word"
+      } else if (this.dataSize == 3) {
+        typeName = "long"
+      }
+      asm.addTypeDefField(typeName)
+    }
   }
 
   postProcessSymbols(symUtils: SymbolUtils) {
@@ -1353,8 +1366,7 @@ export class DataStatement extends Statement {
     return this.getSize()!
   }
 
-  // this is needed for TypeDef.addField() layout computation
-  //  (valid after preprocess)
+  // required for structure field entries
   public override getSize(): number | undefined {
     return Math.max(this.args.length, 1) * this.dataSize
   }
@@ -1518,6 +1530,10 @@ export class StorageStatement extends Statement {
       // assume if count isn't found, must be Merlin "\\"
       this.countValue = -(this.PC ?? 0) & 0xFF
     }
+
+    if (asm.inTypeDef()) {
+      asm.addTypeDefField("byte")
+    }
   }
 
   pass1(asm: Assembler): number {
@@ -1540,12 +1556,67 @@ export class StorageStatement extends Statement {
     asm.writeBytePattern(fillValue, count)
   }
 
-  // this is needed for TypeDef.addField() layout computation
-  //  (valid after preprocess)
+  // required for structure field entries
   public override getSize(): number | undefined {
     return (this.countValue ?? 0) * (this.dataSize ?? 0)
   }
 }
+
+//   CA65:  .tag <type-ref>
+
+export class TagStatement extends Statement {
+
+  public typeName?: exp.SymbolExpression
+  public typeRef?: TypeDef
+
+  postParse(parser: Parser): void {
+    if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
+      const symbol = this.labelExp.symbol
+      if (symbol) {
+        symbol.isData = true
+      }
+    }
+
+    const name = this.findArg("type-ref")
+    if (name instanceof exp.SymbolExpression) {
+      this.typeName = name
+    }
+  }
+
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    if (this.typeName?.symbol) {
+      // TODO: clean up this casting
+      const obj = this.typeName.symbol as any
+      this.typeRef = obj.typeDef as TypeDef
+    }
+
+    if (asm.inTypeDef()) {
+      asm.addTypeDefField(this.typeName?.getString())
+    }
+  }
+
+  pass1(asm: Assembler): number {
+    let typeSize = this.typeRef?.size
+    if (typeSize == undefined) {
+      this.setError("Size must be resolve in first pass")
+      typeSize = 0
+    }
+    return typeSize
+  }
+
+  pass2(asm: Assembler): void {
+    // TODO: always write zeros?
+    asm.writeBytePattern(0, this.typeRef?.size ?? 0)
+  }
+
+  // required for structure field entries
+  public override getSize(): number | undefined {
+    return this.typeRef?.size
+  }
+}
+
 
 // MERLIN:  n/a
 //   DASM:  [.]ALIGN <boundary> [, <fill>]

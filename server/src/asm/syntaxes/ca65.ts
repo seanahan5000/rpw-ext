@@ -128,7 +128,7 @@ export class Ca65Syntax extends SyntaxDef {
                         desc:   "Define word sized data with the hi and lo bytes swapped" } ],
       [ ".word",      { create: () => { return new stm.DataStatement_U16() },
                         params: "[<expression>[, <expression> ...]]",
-                        desc:   "yyy" } ],
+                        desc:   "Define word sized data" } ],
       [ ".addr",      { create: () => { return new stm.DataStatement_U16() },
                         params: "[<expression>[, <expression> ...]]",
                         desc:   "Define word sized data" } ],
@@ -151,10 +151,9 @@ export class Ca65Syntax extends SyntaxDef {
       [ ".res",       { create: () => { return new stm.StorageStatement(1) },
                         params: "<count>[, <fill>]",
                         desc:   "Reserve storage" } ],
-      [ ".tag",       { // TODO
-                        params: "<name>",
+      [ ".tag",       { create: () => { return new stm.TagStatement() },
+                        params: "<type-ref>",
                         desc:   "Allocate space for a struct or union" } ],
-
       [ ".align",     { create: () => { return new stm.AlignStatement() },
                         params: "<boundary>",
                         desc:   "Align data to a given boundary" } ],

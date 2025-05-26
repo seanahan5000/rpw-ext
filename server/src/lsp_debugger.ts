@@ -9,8 +9,8 @@ import { LspServer, LspProject } from "./lsp_server"
 import { StackEntry, StackRegister } from "./shared/types"
 import { Statement, MacroInvokeStatement, OpStatement } from "./asm/statements"
 import { ObjectDoc, DataRange, RangeMatch } from "./asm/object_doc"
-import { evalOpExpression, TypeDef, FieldEntry } from "./asm/assembler"
-import { Symbol } from "./asm/symbols"
+import { evalOpExpression } from "./asm/assembler"
+import { Symbol, TypeDef, FieldEntry } from "./asm/symbols"
 
 import { Parser } from "./asm/parser"
 import { TokenType } from "./asm/tokenizer"
@@ -20,23 +20,22 @@ import { TokenType } from "./asm/tokenizer"
 //  - step forward
 //  - add default key-combos for all stepping operations
 //
+//  - enum type references
+//  - underline index field in a structure
+//  * show address for (CHARDL),Y, for example
+//  * array of structures
+//  * finish write memory
+//  * naja text display
+//    ? use different name
+//  ? naja text editing
+//  - modifying code memory doesn't cause red bytes in disassembly
+//
 //  ? split stack update
 //  - exceptions on handled errors
 //    - (stack tracking, for example)
 //  ? runtime completions
 //  - data breakpoints
 //  ? conditional breakpoints
-//
-//  - naja text display
-//    ? use different name
-//  ? naja text editing
-//  - support .tag in structures
-//  - nested structures
-//  - enum type references
-//  - check out of range memory accesses
-//  - underline index field in a structure
-//  - array of structures
-//  - modifying code memory doesn't cause red bytes in disassembly
 
 //------------------------------------------------------------------------------
 
@@ -162,9 +161,9 @@ class DebugVariable {
   public setNamedValue(dbg: LspDebugger, name: string, valueStr: string) {
     if (this.children) {
       const v = this.children.get(name)
-      return v?.setValue(dbg, valueStr)
+      v?.setValue(dbg, valueStr)
     } else {
-      return this.setValue(dbg, valueStr)
+      this.setValue(dbg, valueStr)
     }
   }
 
@@ -254,17 +253,45 @@ class DebugVariable {
 
 class StructVariable extends DebugVariable {
 
-  constructor(typeDef: TypeDef, address: number, dataBytes: Uint8Array) {
+  public handle: number
+
+  constructor(dbg: LspDebugger, typeDef: TypeDef, address: number, dataBytes: Uint8Array) {
     super("struct", address)
+
+    this.handle = dbg.variableHandles.create(this)
+
     if (typeDef.fields) {
       for (let field of typeDef.fields) {
+        if (field.typeName) {
+          const subType = dbg.findTypeDef(field.typeName)
+          if (subType && subType.size != undefined) {
+            const subDataBytes = dataBytes.subarray(field.offset, field.offset + subType.size)
+            const structVar = new StructVariable(dbg, subType, address + field.offset, subDataBytes)
+            structVar.name = field.name
+            structVar.valueStr = "{ }"
+            this.addChild(structVar)
+            continue
+          }
+        }
         this.addChild(new FieldVariable(field, address, dataBytes))
       }
     }
   }
+
+  public override buildVariable(): DebugProtocol.Variable {
+    let result = super.buildVariable()
+    result.variablesReference = this.handle
+    return result
+  }
 }
 
 class FieldVariable extends DebugVariable {
+
+  public static isSimple(field: FieldEntry): boolean {
+    return field.typeName == "byte" ||
+      field.typeName == "word" ||
+      field.typeName == "long"
+  }
 
   // NOTE: address and dataBytes are relative to start of parent structure
   constructor(protected field: FieldEntry, address: number, dataBytes: Uint8Array) {
@@ -290,8 +317,14 @@ class FieldVariable extends DebugVariable {
 
   private updateValueStr(dataBytes: Uint8Array | number[]) {
     this.valueStr = ""
-    if (this.field.type) {
-      // TODO: handle field as sub structure
+    if (this.field.typeName) {
+      let typeSize = 1
+      if (this.field.typeName == "word") {
+        typeSize = 2
+      } else if (this.field.typeName == "long") {
+        typeSize = 3
+      }
+      this.valueStr = dataToString(dataBytes, this.field.offset, typeSize)
     } else if (this.field.size == 1) {
       this.valueStr = dataToString(dataBytes, this.field.offset, 1)
     } else {
@@ -523,7 +556,7 @@ export class LspDebugger {
   }>()
 
   private breakpoints = new Map<string, number[]>()
-  private variableHandles = new Handles<DebugVariable | StructVariable>()
+  public variableHandles = new Handles<DebugVariable>()
   private stackFrameHandles = new Handles<StackEntry>()
 
   constructor(private lspServer: LspServer, private connection: lsp.Connection ) {
@@ -992,7 +1025,6 @@ export class LspDebugger {
   // MARK: variables
 
   private onVariables(args: DebugProtocol.VariablesArguments) {
-    // TODO: respect args.format.hex?
     const v = this.variableHandles.get(args.variablesReference)
     return { variables: v?.buildChildVariables() ?? [] }
   }
@@ -1011,6 +1043,16 @@ export class LspDebugger {
         if (doc.sourceFile.fullPath == fullPath) {
           return doc
         }
+      }
+    }
+  }
+
+  public findTypeDef(typeName: string): TypeDef | undefined {
+    let foundSym: Symbol | undefined
+    for (let module of this.mainProject!.modules) {
+      foundSym = module.symbolMap.get(typeName)
+      if (foundSym) {
+        return foundSym.typeDef
       }
     }
   }
@@ -1055,18 +1097,12 @@ export class LspDebugger {
       // get optional type name
       let token = parser.getNextToken()
       if (token && token.getString() != "[") {
-        let foundSym: Symbol | undefined
         typeName = token.getString()
-        for (let module of this.mainProject!.modules) {
-          foundSym = module.symbolMap.get(typeName)
-          if (foundSym) {
-            break
+        typeDef = this.findTypeDef(typeName)
+        if (!typeDef) {
+          if (typeName != "byte" && typeName != "word" && typeName != "long") {
+            parseError = true
           }
-        }
-        if (foundSym) {
-          typeDef = (foundSym as any)?.typeDef
-        } else if (typeName != "byte" && typeName != "word" && typeName != "long") {
-          parseError = true
         }
         token = parser.getNextToken()
       }
@@ -1147,13 +1183,12 @@ export class LspDebugger {
         }
       } else {
         // "typeDef"
-        request.typeSize = typeDef.getSize()
+        request.typeSize = typeDef.size
         const response: ReadMemoryResponse = await this.sendRequest(request)
         const dataBytes = base64.toByteArray(response.dataString)
 
-        const structVar = new StructVariable(typeDef, response.dataAddress, dataBytes)
-        const varRef = this.variableHandles.create(structVar)
-        return { result: "{ }", variablesReference: varRef }
+        const structVar = new StructVariable(this, typeDef, response.dataAddress, dataBytes)
+        return { result: "{ }", variablesReference: structVar.handle }
       }
     } else {
       let typeSize

@@ -66,6 +66,9 @@ export class Symbol {
   //  and symbol has been added to map.
   public fullName?: string
 
+  // valid if symbol is a structure definition
+  public typeDef?: TypeDef
+
   constructor(definition: SymbolExpression, from: SymbolFrom) {
     this.definition = definition
     this.from = from
@@ -388,6 +391,41 @@ export class ScopeState {
 
   public popZone() {
     this.zoneName = this.zoneStack.pop()
+  }
+}
+
+//------------------------------------------------------------------------------
+
+export type FieldEntry = {
+  name: string,
+  offset: number,
+  size: number,
+  typeName?: string
+}
+
+export class TypeDef {
+
+  public endLineIndex: number
+  public size?: number
+  public fields?: FieldEntry[]
+
+  constructor(
+      public fileIndex: number,
+      public startLineIndex: number,
+      public params: string[]) {
+    this.endLineIndex = startLineIndex
+  }
+
+  public endDefinition(endLineIndex: number, size: number) {
+    this.endLineIndex = endLineIndex
+    this.size = size
+  }
+
+  public addField(name: string, offset: number, size: number, typeName?: string) {
+    if (!this.fields) {
+      this.fields = []
+    }
+    this.fields.push({ name, offset, size, typeName })
   }
 }
 

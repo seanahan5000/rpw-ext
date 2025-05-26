@@ -2,13 +2,12 @@
 import * as fs from 'fs'
 import { Project, Module, SourceFile, SymbolMap } from "./project"
 import { Statement, ConditionalStatement, EquStatement, GenericStatement, DummyStatement } from "./statements"
-import { DataStatement, StorageStatement } from "./statements"
 import { TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
 import { ClosingBraceStatement, OpStatement } from "./statements"
 import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
-import { SymbolType, SymbolFrom } from "./symbols"
+import { SymbolType, SymbolFrom, TypeDef } from "./symbols"
 import { Parser } from "./parser"
 import { ObjectDoc } from "./object_doc"
 import { Token } from "./tokenizer"
@@ -188,72 +187,6 @@ type NestingEntry = {
   type: NestingType
   statement: Statement
   bracePopProc?: () => void
-}
-
-//------------------------------------------------------------------------------
-// MARK: TypeDef
-
-// TODO: Since typedefs hang off symbols and outlive the assembler,
-//  these should probably be moved elsewhere.
-
-export type FieldEntry = {
-  name: string,
-  offset: number,
-  size: number,
-  type?: string
-}
-
-export class TypeDef {
-
-  public endLineIndex: number
-  private size?: number
-  public fields?: FieldEntry[]
-
-  constructor(
-      public nestingType: NestingType,
-      public fileIndex: number,
-      public startLineIndex: number,
-      public params: string[]) {
-    this.endLineIndex = startLineIndex
-  }
-
-  public endDefinition(endLineIndex: number, size: number) {
-    this.endLineIndex = endLineIndex
-    this.size = size
-  }
-
-  public getSize(): number | undefined {
-    return this.size
-  }
-
-  public addField(statement: Statement) {
-    if (this.nestingType == NestingType.Struct) {
-      const name = statement.labelExp?.getString()
-      const offset = statement.PC
-      const size = statement.getSize()
-      if (name != undefined && offset != undefined && size != undefined) {
-        let type: string | undefined
-        for (let child of statement.children) {
-          if (child instanceof Token) {
-            const str = child.getString().substring(1).trim()
-            if (str[0] == "{") {
-              try {
-                const obj = JSON.parse(str)
-                if (obj) {
-                  type = obj.type
-                }
-              } catch (e) {
-              }
-            }
-          }
-        }
-        if (!this.fields) {
-          this.fields = []
-        }
-        this.fields.push({ name, offset, size, type })
-      }
-    }
-  }
 }
 
 //------------------------------------------------------------------------------
@@ -564,18 +497,6 @@ export class Assembler {
               if (line.statement instanceof DefineDefStatement) {
                 line.statement.endPreprocess(this)
               }
-
-              // collect struct field statements for later use by debugger
-              //  to format variables
-              if (this.typeDef) {
-                // TODO: will have to add eventual "TagStatement"
-                //  and any others that change struct layout
-                if (line.statement instanceof DataStatement ||
-                    line.statement instanceof StorageStatement) {
-                  this.typeDef.addField(line.statement)
-                }
-              }
-
             } else {
               line.statement.enabled = false
             }
@@ -1576,13 +1497,11 @@ export class Assembler {
         this.typeStart = statement
         const fileIndex = this.module.getFileIndex(this.fileReader.state.file!)
         const startLineIndex = this.curLine!.lineNumber + 1
-        this.typeDef = new TypeDef(nestingType, fileIndex, startLineIndex, typeParams ?? [])
+        this.typeDef = new TypeDef(fileIndex, startLineIndex, typeParams ?? [])
 
         // attach typeDef to typeName symbol
         if (typeName?.symbol) {
-          // TODO: clean up need for any cast
-          const anySym = (typeName.symbol as any)
-          anySym.typeDef = this.typeDef
+          typeName.symbol.typeDef = this.typeDef
         }
 
         // NOTE: Scope state management handled in the statement
@@ -1612,6 +1531,38 @@ export class Assembler {
       //  so it can be done differently based on syntax.
     }
   }
+
+  public addTypeDefField(typeName?: string) {
+    this.checkPass(0)
+    if (this.typeDef && this.topNestingType() ==  NestingType.Struct) {
+
+      const statement = this.curLine!.statement
+      const name = statement.labelExp?.getString()
+      const offset = statement.PC
+      const size = statement.getSize()
+      if (name != undefined && offset != undefined && size != undefined) {
+
+        // look for comment that overrides the field type
+        for (let child of statement.children) {
+          if (child instanceof Token) {
+            const str = child.getString().substring(1).trim()
+            if (str[0] == "{") {
+              try {
+                const obj = JSON.parse(str)
+                if (obj) {
+                  typeName = obj.type
+                }
+              } catch (e) {
+              }
+            }
+          }
+        }
+
+        this.typeDef.addField(name, offset, size, typeName)
+      }
+    }
+  }
+
   // #endregion
   //------------------------------------
 }

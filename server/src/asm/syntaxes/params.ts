@@ -220,6 +220,9 @@ class TermParam extends Param {
     if (this.termType == "type-name") {
       return this.addSymbolExpression(parser, "type name", true, SymbolType.TypeName)
     }
+    if (this.termType == "type-ref") {
+      return this.addSymbolExpression(parser, "type name", false, SymbolType.TypeName)
+    }
     if (this.termType == "type-param") {
       return this.addSymbolExpression(parser, "named param", true, SymbolType.NamedParam)
     }
