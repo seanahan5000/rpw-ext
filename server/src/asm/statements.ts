@@ -1586,10 +1586,11 @@ export class TagStatement extends Statement {
   public override preprocess(asm: Assembler): void {
     super.preprocess(asm)
 
-    if (this.typeName?.symbol) {
-      // TODO: clean up this casting
-      const obj = this.typeName.symbol as any
-      this.typeRef = obj.typeDef as TypeDef
+    this.typeRef = this.typeName?.symbol?.typeDef
+
+    // connect the type/layout to the symbol so debugger knows its format
+    if (this.labelExp?.symbol) {
+      this.labelExp.symbol.typeRef = this.typeRef
     }
 
     if (asm.inTypeDef()) {

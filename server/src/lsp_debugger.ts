@@ -112,7 +112,7 @@ type SetDiskImageRequest = RequestHeader & {
 
 function valueToString(value: number, typeSize: number): string {
   let valStr = "$" + value.toString(16).toUpperCase().padStart(typeSize * 2, "0")
-  if (typeSize == 1) {
+  if (typeSize == 1 || typeSize == 2) {
     valStr += (" (#" + value.toString()) + ")"
   }
   return valStr
@@ -262,18 +262,22 @@ class StructVariable extends DebugVariable {
 
     if (typeDef.fields) {
       for (let field of typeDef.fields) {
+
+        const subAddress = address + field.offset
+        const subDataBytes = dataBytes.subarray(field.offset, field.offset + field.size)
+
         if (field.typeName) {
           const subType = dbg.findTypeDef(field.typeName)
           if (subType && subType.size != undefined) {
-            const subDataBytes = dataBytes.subarray(field.offset, field.offset + subType.size)
-            const structVar = new StructVariable(dbg, subType, address + field.offset, subDataBytes)
+            const structVar = new StructVariable(dbg, subType, subAddress, subDataBytes)
             structVar.name = field.name
-            structVar.valueStr = "{ }"
+            structVar.valueStr = "$" + subAddress.toString(16).toUpperCase().padStart(address < 0x100 ? 2 : 4, "0") + ": { }"
             this.addChild(structVar)
             continue
           }
         }
-        this.addChild(new FieldVariable(field, address, dataBytes))
+
+        this.addChild(new FieldVariable(field, subAddress, subDataBytes))
       }
     }
   }
@@ -293,9 +297,9 @@ class FieldVariable extends DebugVariable {
       field.typeName == "long"
   }
 
-  // NOTE: address and dataBytes are relative to start of parent structure
+  // NOTE: address and dataBytes have been adjust to start of field
   constructor(protected field: FieldEntry, address: number, dataBytes: Uint8Array) {
-    super(field.name, address + field.offset)
+    super(field.name, address)
     this.updateValueStr(dataBytes)
   }
 
@@ -324,9 +328,9 @@ class FieldVariable extends DebugVariable {
       } else if (this.field.typeName == "long") {
         typeSize = 3
       }
-      this.valueStr = dataToString(dataBytes, this.field.offset, typeSize)
+      this.valueStr = dataToString(dataBytes, 0, typeSize)
     } else if (this.field.size == 1) {
-      this.valueStr = dataToString(dataBytes, this.field.offset, 1)
+      this.valueStr = dataToString(dataBytes, 0, 1)
     } else {
       // TODO: add an array var as child of the field
       this.valueStr = ""
@@ -334,7 +338,7 @@ class FieldVariable extends DebugVariable {
         if (i > 0) {
           this.valueStr += " "
         }
-        this.valueStr += dataBytes[this.field.offset + i].toString(16).toUpperCase().padStart(2, "0")
+        this.valueStr += dataBytes[i].toString(16).toUpperCase().padStart(2, "0")
       }
     }
   }
@@ -1086,6 +1090,15 @@ export class LspDebugger {
     let typeName: string | undefined
     let typeDef: TypeDef | undefined
 
+    // see if expStr is a symbol with a typeRef
+    for (let module of this.mainProject!.modules) {
+      const foundSym = module.symbolMap.get(expStr)
+      if (foundSym) {
+        typeDef = foundSym.typeRef
+        break
+      }
+    }
+
     if (typeStr) {
 
       let parseError = false
@@ -1188,7 +1201,8 @@ export class LspDebugger {
         const dataBytes = base64.toByteArray(response.dataString)
 
         const structVar = new StructVariable(this, typeDef, response.dataAddress, dataBytes)
-        return { result: "{ }", variablesReference: structVar.handle }
+        const result = "$" + response.dataAddress.toString(16).toUpperCase().padStart(response.dataAddress < 0x100 ? 2 : 4, "0") + ": { }"
+        return { result, variablesReference: structVar.handle }
       }
     } else {
       let typeSize
@@ -1384,7 +1398,7 @@ export class LspDebugger {
       address += 1
     }
 
-    if (dataLength == 1) {
+    if (dataLength == 1 || dataLength == 2) {
       str += " (#" + dataBytes[0].toString(10) + ")"
     }
     if (rowCount != 0) {

@@ -69,6 +69,9 @@ export class Symbol {
   // valid if symbol is a structure definition
   public typeDef?: TypeDef
 
+  // valid if this symbol references a location whose type/layout is this typeDef
+  public typeRef?: TypeDef
+
   constructor(definition: SymbolExpression, from: SymbolFrom) {
     this.definition = definition
     this.from = from
