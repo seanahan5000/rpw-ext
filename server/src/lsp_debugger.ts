@@ -38,6 +38,8 @@ import { NajaTextStatement } from "./asm/statements"
 
 //------------------------------------------------------------------------------
 
+// TODO: think about versioning
+
 // NOTE: duplicated in dbug_vsc.ts
 
 type RequestHeader = {
@@ -100,10 +102,15 @@ type WriteMemoryResponse = RequestHeader & {
   bytesWritten: number  // bytes successfully written
 }
 
+type WriteRamRequest = RequestHeader & {
+  dataAddress: number     // direct write address
+  dataString: string      // bytes to write in base64
+}
+
 type SetDiskImageRequest = RequestHeader & {
-  fullPath: string
+  fullPath?: string     // no path means set drive as empty
+  dataString: string    // disk contents in base64
   driveIndex: number
-  format: string
   writeProtected: boolean
 }
 
@@ -701,24 +708,32 @@ export class LspDebugger {
   }
 
   // direct writeMemory method for loading project binaries
-  public async writeMemory(address: number, bank: number, data: Uint8Array | number[]) {
+  public async writeRam(address: number, data: Uint8Array | number[]) {
     if (Array.isArray(data)) {
       data = new Uint8Array(data)
     }
-    const request: WriteMemoryRequest =  {
-      command: "writeMemory",
+    const request: WriteRamRequest =  {
+      command: "writeRam",
       dataAddress: address,
-      dataBank: bank,
-      dataString: base64.fromByteArray(data),
-      partialAllowed: false
+      dataString: base64.fromByteArray(data)
     }
     await this.sendRequest(request)
   }
 
-  public async setDiskImage(fullPath: string, driveIndex: number, format: string, writeProtected: boolean) {
+  public async setDiskImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {
+    const dataString = base64.fromByteArray(data)
     const request: SetDiskImageRequest = {
       command: "setDiskImage",
-      fullPath,driveIndex, format, writeProtected
+      fullPath, dataString, driveIndex, writeProtected
+    }
+    await this.sendRequest(request)
+  }
+
+  public async setEntryPoint(entryPoint: number) {
+    const request: SetRegisterRequest = {
+      command: "setRegister",
+      name: "PC",
+      value: entryPoint
     }
     await this.sendRequest(request)
   }
@@ -750,15 +765,17 @@ export class LspDebugger {
 
       // TODO: step forward
 
+      case "launch":
+        return this.onLaunch(<DebugProtocol.LaunchRequestArguments>params.arguments![1])
+      case "attach":
+        return this.onAttach(<DebugProtocol.AttachRequestArguments>params.arguments![1])
+
       case "breakpointLocations":
         return this.onBreakpointLocations(<DebugProtocol.BreakpointLocationsArguments>params.arguments![1])
-
       case "setBreakpoints":
         return this.onSetBreakpoints(<DebugProtocol.SetBreakpointsArguments>params.arguments![1])
-
       case "dataBreakpointInfo":
         return this.onDataBreakpointInfo(<DebugProtocol.DataBreakpointInfoArguments>params.arguments![1])
-
       case "setDataBreakpoints":
         return this.onDataBreakpointsInfo(<DebugProtocol.SetDataBreakpointsArguments>params.arguments![1])
 
@@ -782,13 +799,11 @@ export class LspDebugger {
 
       case "readMemory":
         return this.onReadMemory(<DebugProtocol.ReadMemoryArguments>params.arguments[1])
-
       case "writeMemory":
         return this.onWriteMemory(<DebugProtocol.WriteMemoryArguments>params.arguments[1])
 
       case "gotoTargets":
         return this.onGotoTargets(<DebugProtocol.GotoTargetsArguments>params.arguments[1])
-
       case "goto":
         return this.onGoto(<DebugProtocol.GotoArguments>params.arguments[1])
 
@@ -796,6 +811,21 @@ export class LspDebugger {
         console.log("IGNORED " + params.arguments[0])
         break
     }
+  }
+
+  //--------------------------------------------------------
+  // MARK: launch/attach
+
+  private async onLaunch(args: DebugProtocol.LaunchRequestArguments) {
+    await this.sendRequest({ command: "hardReset" })
+    await this.mainProject?.binLoadProject(this)
+    await this.sendRequest({ command: "launch" })
+    // TODO: continue or break on launch?
+  }
+
+  private async onAttach(args: DebugProtocol.AttachRequestArguments) {
+    await this.sendRequest({ command: "attach" })
+    // TODO: continue or break on attach?
   }
 
   //--------------------------------------------------------

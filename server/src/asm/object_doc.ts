@@ -172,7 +172,7 @@ class ObjectRange {
       if (offset < minOffset) {
         break
       }
-      return i - 1
+      return this.startLine + i - 1
     }
   }
 }

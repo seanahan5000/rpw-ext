@@ -82,7 +82,12 @@ export class RpwDebugSession extends DebugSession {
     this.sendEvent(new InitializedEvent())
   }
 
-  protected configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse, args: DebugProtocol.ConfigurationDoneArguments): void {
+  // NOTE: VSCode sends this after all breakpoints and
+  //  other setup have been completed after launch.
+  protected configurationDoneRequest(
+      response: DebugProtocol.ConfigurationDoneResponse,
+      args: DebugProtocol.ConfigurationDoneArguments): void {
+
     super.configurationDoneRequest(response, args)
 
     // notify the launchRequest that configuration has finished
@@ -92,17 +97,33 @@ export class RpwDebugSession extends DebugSession {
   }
 
   protected async launchRequest(
-    response: DebugProtocol.LaunchResponse,
-    args: DebugProtocol.LaunchRequestArguments,
-    request?: DebugProtocol.Request) {
+      response: DebugProtocol.LaunchResponse,
+      args: DebugProtocol.LaunchRequestArguments,
+      request?: DebugProtocol.Request) {
 
-    // TODO: is this really needed?
+    const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
+      command: "rpw65.debugger",
+      arguments: [ "launch" ]
+    })
+
+    // NOTE: This wait for all initial configuration
+    //  (breakpoints, etc.) to be completed
     await this.configurationDone.wait(1000)
 
     // TODO: could check for failed compile first and return error
 
-    // *** send resetCpu? attach?
+    this.sendResponse(response)
+  }
 
+  protected async attachRequest(
+      response: DebugProtocol.AttachResponse,
+      args: DebugProtocol.AttachRequestArguments,
+      request?: DebugProtocol.Request) {
+
+    const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
+      command: "rpw65.debugger",
+      arguments: [ "attach" ]
+    })
     this.sendResponse(response)
   }
 

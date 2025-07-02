@@ -81,9 +81,6 @@ export class Project {
   public isTemporary = false
   public inWorkspace = false
 
-  // debugger-related
-  public entryPoint: number = 0
-
   constructor(defaultSettings: RpwSettings) {
     this.defaultSettings = defaultSettings
     this.settingsChanged()
@@ -435,6 +432,8 @@ export class Project {
 
   public async binLoadProject(dbg: LspDebugger) {
 
+    let entryPoint: number | undefined
+
     // loadProject should have already set this
     if (!this.rpwProject) {
       return
@@ -445,11 +444,14 @@ export class Project {
       for (let imageEntry of this.rpwProject.images) {
         if (imageEntry.enabled == undefined || imageEntry.enabled == true) {
           const fullPath = this.binDir + "/" + imageEntry.name
-          const n = imageEntry.name.lastIndexOf(".")
-          const format = imageEntry.name.substring(n + 1).toLowerCase()
-          const drive = imageEntry.drive || 1
+          const drive = imageEntry.drive ?? 1
           const writeProtected = imageEntry.readonly || false
-          dbg.setDiskImage(fullPath, drive - 1, format, writeProtected)
+          if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
+            const binBytes = fs.readFileSync(fullPath)
+            dbg.setDiskImage(fullPath, binBytes, drive - 1, writeProtected)
+          } else {
+            // TODO: report error?
+          }
         }
       }
     }
@@ -460,7 +462,7 @@ export class Project {
         if (preload.enabled == undefined || preload.enabled == true) {
           if (preload.entryPoint) {
             try {
-              this.entryPoint = parseInt(preload.entryPoint)
+              entryPoint = parseInt(preload.entryPoint)
             } catch (e: any) {
               throw new Error(`Invalid preload entryPoint value: ${preload.entryPoint}`)
             }
@@ -494,11 +496,15 @@ export class Project {
                   throw new Error(`Invalid patch ${patch.address} value ${patchValStr}`)
                 }
               }
-              await dbg.writeMemory(patchAddr, 0, patchVals)
+              await dbg.writeRam(patchAddr, patchVals)
             }
           }
         }
       }
+    }
+
+    if (entryPoint != undefined) {
+      dbg.setEntryPoint(entryPoint)
     }
   }
 
@@ -607,7 +613,10 @@ export class Project {
         } catch (e: any) {
           throw new Error(`Invalid patch address: ${rpwBin.address!}`)
         }
-        await dbg.writeMemory(binAddr, rpwBin.bank!, binBytes)
+        if (binAddr >= 0xD000 && binAddr <= 0xDFFF && rpwBin.bank == 2) {
+          binAddr -= 0x1000
+        }
+        await dbg.writeRam(binAddr, binBytes)
       } else {
         // TODO: report error?
       }
