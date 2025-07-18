@@ -9,7 +9,7 @@ import { RpwProject, RpwSettings, RpwSettingsDefaults } from "./shared/rpw_types
 import { Project, Module, SourceFile } from "./asm/project"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
-import { Statement, OpStatement } from "./asm/statements"
+import { Statement, OpStatement, ImportExportStatement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
@@ -702,6 +702,11 @@ export class LspServer {
                       + " = " + value.toString(10)
                       + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
                       + ", %" + value.toString(2).padStart(8, "0")
+                  }
+                } else if (defExp.isWeak && hoverExp != defExp) {
+                  const defStatement = defExp.sourceFile.statements[defExp.lineNumber]
+                  if (defStatement && defStatement instanceof ImportExportStatement) {
+                    hoverStr += defStatement.sourceLine
                   }
                 } else if (hoverExp.symbol.isZPage) {
                   const value = hoverExp.resolve()
