@@ -698,7 +698,7 @@ export class LspServer {
                 if (hoverExp.symbol.isConstant) {
                   const value = hoverExp.resolve()
                   if (value != undefined) {
-                    hoverStr += hoverExp.getSimpleName()
+                    hoverStr += hoverExp.getSimpleName().asString
                       + " = " + value.toString(10)
                       + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
                       + ", %" + value.toString(2).padStart(8, "0")
@@ -706,7 +706,7 @@ export class LspServer {
                 } else if (hoverExp.symbol.isZPage) {
                   const value = hoverExp.resolve()
                   if (value != undefined) {
-                    hoverStr += hoverExp.getSimpleName()
+                    hoverStr += hoverExp.getSimpleName().asString
                       + " = $" + value.toString(16).padStart(2, "0").toUpperCase()
                   }
                 }
