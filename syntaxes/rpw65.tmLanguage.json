@@ -4,6 +4,9 @@
   "name": "rpw65",
   "patterns": [
     {
+      "include": "#comments"
+    },
+    {
       "include": "#keywords-acme"
     },
     {
@@ -29,9 +32,6 @@
     },
     {
       "include": "#mnemonics-65816"
-    },
-    {
-      "include": "#comments"
     },
     {
       "include": "#strings"
