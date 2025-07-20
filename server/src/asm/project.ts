@@ -116,6 +116,7 @@ export class Project {
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
     this.binDir = this.buildFullDirName(rpwProject.binDir)
+    this.includePaths = rpwProject.includePaths?.map((dir) => this.buildFullDirName(dir)) ?? []
 
     if (rpwProject.defines) {
       for (let define of rpwProject.defines) {
