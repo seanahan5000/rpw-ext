@@ -59,6 +59,7 @@ export type RpwProject = {
   projectName?: string          // default: <name>.rpw-project
   srcDir?: string
   binDir?: string
+  includePaths?: string[]
   defines?: RpwDefine[]
   includes?: string[]
   modules?: RpwModule[]

@@ -169,6 +169,45 @@ export class LspServer {
     this.connection.onRenameRequest(this.onRename.bind(this))
     this.connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
     this.connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
+
+    this.connection.onNotification('rpw65.projectInfo', async (projectInfo) => {
+      await this.isInitialized
+
+      if (!this.defaultSettings) {
+        this.defaultSettings = this.buildRpwSettings()
+      }
+
+      // build a project file
+      const rpwProject: RpwProject = {
+        projectName: projectInfo.name,
+        // srcDir: projectInfo.srcDir,
+        // binDir: projectInfo.buildDir,
+        includePaths: projectInfo.includePaths,
+        defines: projectInfo.defines.map((define: string) => {
+          const [name, value] = define.split('=', 2)
+          return { name, value }
+        }),
+        includes: projectInfo.includes,
+        modules: projectInfo.sources.map((src: string) => ({ src })),
+      }
+
+      const project = new LspProject(this, await this.defaultSettings)
+      const isTemporary = false
+      const inWorkspace = true
+      project.loadProject(projectInfo.rootDir, rpwProject, isTemporary, inWorkspace)
+      project.update()
+
+      // clean-up empty temporary projects
+      while (true) {
+        const index = this.projects.findIndex((prj) => prj.isTemporary && prj.modules.length === 0)
+        if (index < 0) {
+          break
+        }
+        this.projects.splice(index, 1)
+      }
+
+      this.projects.push(project)
+    });
   }
 
   private getSourceFile(uri: string): SourceFile | undefined {

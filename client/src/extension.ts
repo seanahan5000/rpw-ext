@@ -56,6 +56,69 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
 	client.onNotification("rpw.syntaxChanged", () => { updateStatusItem() })
+
+	let projectInfo: Record<string, any> | undefined = undefined
+	let clientRunning = false
+	const trySendProjectInfo = () => {
+		if (projectInfo && clientRunning) {
+			client.sendNotification('rpw65.projectInfo', projectInfo);
+		}
+	}
+	
+	const cmakeExt = vscode.extensions.getExtension('ms-vscode.cmake-tools')
+	if (cmakeExt) {
+		cmakeExt.activate().then(async (cmake) => {
+			const api = cmake?.getApi()
+			if (api) {
+				const activeFolderPath = api.getActiveFolderPath()
+				const activeProjectUri = vscode.Uri.file(activeFolderPath)
+				const activeProject = await api.getProject(activeProjectUri)
+				activeProject?.onCodeModelChanged(() => {
+					const configuration = activeProject.codeModel.configurations.find((config) => config.name === activeProject.project.activeVariant.value)
+					if (configuration) {
+						const project = configuration.projects.find((project) => project.sourceDirectory === activeFolderPath)
+						if (project) {
+							const target = project.targets.find((target) => target.name === project.name && target.sourceDirectory === project.sourceDirectory)
+							if (target) {
+								projectInfo = {
+									name: project.name,
+									rootDir: project.sourceDirectory,
+									includePaths: [],
+									artifacts: target.artifacts,
+									type: target.type,
+									sources: [],
+									defines: [],
+									includes: [],
+								}
+								for (const fileGroup of target.fileGroups) {
+									if (!fileGroup.isGenerated && fileGroup.sources?.length > 0) {
+										if (fileGroup.language === 'ASM')
+											projectInfo.sources.push(...fileGroup.sources)
+										else if (fileGroup.language === undefined)
+											projectInfo.includes.push(...fileGroup.sources)
+									}
+									if (fileGroup.defines?.length > 0) {
+										projectInfo.defines.push(...fileGroup.defines)
+									}
+									if (fileGroup.includePath?.length > 0) {
+										projectInfo.includePaths.push(...fileGroup.includePath.map(({path}) => path))
+									}
+								}
+								projectInfo.includePaths = [...new Set(projectInfo.includePaths)] // remove duplicates
+								trySendProjectInfo()
+							}
+						}
+					}
+				})
+			}
+		})
+	}
+	client.onDidChangeState(async (state) => {
+		if (state.newState === vsclnt.State.Running) {
+			clientRunning = true
+			trySendProjectInfo()
+		}
+  })
 }
 
 export function deactivate(): Thenable<void> | undefined {
