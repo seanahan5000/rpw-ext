@@ -1,6 +1,6 @@
 
 import * as fs from 'fs'
-import { RpwProject, RpwSettings, RpwDefine } from "../shared/rpw_types"
+import { RpwProject, RpwSettings, RpwDefine, RpwBin } from "../shared/rpw_types"
 import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
@@ -8,6 +8,8 @@ import { Parser } from "./parser"
 import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
+import { ObjectDoc, DataRange, RangeMatch } from "./object_doc"
+import { LspDebugger } from "../lsp_debugger"
 
 function fixBackslashes(inString: string): string {
   return inString.replace(/\\/g, '/')
@@ -16,19 +18,6 @@ function fixBackslashes(inString: string): string {
 export type SymbolMap = Map<string, Symbol>
 
 //------------------------------------------------------------------------------
-
-export type LineRecord = {
-  sourceFile: SourceFile,
-  lineNumber: number,
-  // TODO: startColumn? endColumn?
-  statement: Statement
-  isHidden?: boolean
-  bytes?: (number | undefined)[]
-
-  // lines records generate from this macroInvoke statement
-  children?: LineRecord[]
-}
-
 
 export class SourceFile {
 
@@ -327,10 +316,17 @@ export class Project {
         }
       }
 
-      // complete final pass of assembly
+      // complete final passes of assembly
+
       for (let module of this.modules) {
+        // write all output data
         module.update_pass2()
       }
+
+      for (let module of this.modules) {
+        module.update_finalize()
+      }
+
       break
     }
   }
@@ -395,7 +391,7 @@ export class Project {
   }
 
   // NOTE: only returns first match
-  findSourceFile(fullPath: string): SourceFile | undefined {
+  public findSourceFile(fullPath: string): SourceFile | undefined {
     // NOTE: shared files are included in each module's files,
     //  so no need to search this.sharedFiles
     for (let module of this.modules) {
@@ -403,6 +399,226 @@ export class Project {
         if (sourceFile.fullPath == fullPath) {
           return sourceFile
         }
+      }
+    }
+  }
+
+  //--------------------------------------------------------
+  // Debugger-related functionality
+  //--------------------------------------------------------
+
+  // given an address, find best object file that contains the address
+  public findSourceByAddress(address: number, dataRange?: DataRange): RangeMatch | undefined {
+    const matchList: RangeMatch[] = []
+    for (let module of this.modules) {
+      for (let objectDoc of module.objectDocs) {
+        matchList.push(...objectDoc.findRanges(address, dataRange))
+      }
+    }
+    if (matchList.length > 0) {
+      let bestMatch = matchList[0]
+      if (matchList.length > 1 && dataRange) {
+        for (let i = 1; i < matchList.length; i += 1) {
+          const match = matchList[i]
+          if (match.matchCount > bestMatch.matchCount) {
+            // TODO: look at match.sourceFile.calcLoadedPercent(dataRange)?
+            bestMatch = match
+          }
+        }
+      }
+      return bestMatch
+    }
+  }
+
+  public async binLoadProject(dbg: LspDebugger) {
+
+    let entryPoint: number | undefined
+
+    // loadProject should have already set this
+    if (!this.rpwProject) {
+      return
+    }
+
+    // load disk images
+    if (this.rpwProject.images) {
+      for (let imageEntry of this.rpwProject.images) {
+        if (imageEntry.enabled == undefined || imageEntry.enabled == true) {
+          const fullPath = this.binDir + "/" + imageEntry.name
+          const drive = imageEntry.drive ?? 1
+          const writeProtected = imageEntry.readonly || false
+          if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
+            const binBytes = fs.readFileSync(fullPath)
+            dbg.setDiskImage(fullPath, binBytes, drive - 1, writeProtected)
+          } else {
+            // TODO: report error?
+          }
+        }
+      }
+    }
+
+    // preload binaries
+    if (this.rpwProject.preloads) {
+      for (let preload of this.rpwProject.preloads) {
+        if (preload.enabled == undefined || preload.enabled == true) {
+          if (preload.entryPoint) {
+            try {
+              entryPoint = parseInt(preload.entryPoint)
+            } catch (e: any) {
+              throw new Error(`Invalid preload entryPoint value: ${preload.entryPoint}`)
+            }
+          }
+          if (preload.bins) {
+            await this.processBins(dbg, preload.bins)
+          }
+
+          // load memory patches
+          if (preload.patches) {
+            for (let patch of preload.patches) {
+              if (!patch.address) {
+                throw new Error("Patch requires an address")
+              }
+              if (!patch.data) {
+                throw new Error(`Patch at ${patch.address} requires data`)
+              }
+
+              let patchAddr
+              try {
+                patchAddr = parseInt(patch.address)
+              } catch (e: any) {
+                throw new Error(`Invalid patch address: ${patch.address}`)
+              }
+
+              const patchVals = []
+              for (let patchValStr of patch.data) {
+                try {
+                  patchVals.push(parseInt(patchValStr))
+                } catch (e: any) {
+                  throw new Error(`Invalid patch ${patch.address} value ${patchValStr}`)
+                }
+              }
+              await dbg.writeRam(patchAddr, patchVals)
+            }
+          }
+        }
+      }
+    }
+
+    if (entryPoint != undefined) {
+      dbg.setEntryPoint(entryPoint)
+    }
+  }
+
+  private processBinName(bin: string | RpwBin): RpwBin {
+    let fullName: string
+    let nameStr: string
+    let addrStr: string | undefined
+    let bankNum = 0
+
+    if (typeof bin == "string") {
+      fullName = bin
+      nameStr = bin
+    } else {
+      if (!bin.name) {
+        throw new Error("bin missing name")
+      }
+      fullName = bin.name
+      nameStr = bin.name
+      addrStr = bin.address
+      bankNum = bin.bank ?? 0
+    }
+
+    // parse name suffixes
+    if (addrStr == undefined) {
+
+      // process <name>#<type><address>
+      let n = nameStr.lastIndexOf("#")
+      if (n > 0) {
+        addrStr = nameStr.substring(n + 1)
+        if (addrStr.length == 6) {
+          const typeStr = addrStr.substring(0, 2)
+          try {
+            if (parseInt(typeStr, 16) != 6) {
+              throw new Error(`bin suffix type ${typeStr} not supported -- only 06`)
+            }
+          } catch (e: any) {
+            throw new Error(`Invalid bin suffix type: ${typeStr}`)
+          }
+          addrStr = addrStr.substring(2)
+          nameStr = nameStr.substring(0, n)
+        } else {
+          addrStr = undefined
+        }
+      }
+
+      // process <name>.<address>[.<bank>]
+      if (addrStr == undefined) {
+        n = nameStr.lastIndexOf(".")
+        if (n > 0) {
+          addrStr = nameStr.substring(n + 1)
+          nameStr = nameStr.substring(0, n)
+          if (addrStr.length == 1) {
+            if (addrStr == "1" || addrStr == "2") {
+              bankNum = parseInt(addrStr)
+              n = nameStr.lastIndexOf(".")
+              if (n > 0) {
+                addrStr = nameStr.substring(n + 1)
+                nameStr = nameStr.substring(0, n)
+              }
+            } else {
+              throw new Error(`Invalid bank value ${addrStr}`)
+            }
+          }
+        }
+      }
+
+      if (addrStr == undefined) {
+        throw new Error("bin is missing address")
+      }
+      if (addrStr.length != 4) {
+        throw new Error("bin has possibly bad address -- length should be 4")
+      }
+    }
+
+    // prove that addrStr is a valid number
+    if (!addrStr.startsWith("0x")) {
+      addrStr = "0x" + addrStr
+    }
+    let addrNum: number
+    try {
+      addrNum = parseInt(addrStr)
+    } catch (e: any) {
+      throw new Error(`Invalid address value: ${addrStr}`)
+    }
+
+    if (addrNum == 0xd000 && !bankNum) {
+      throw new Error("Address 0xD000 must have a bank number")
+    }
+
+    return { name: fullName, address: addrStr, bank: bankNum }
+  }
+
+  private async processBins(dbg: LspDebugger, bins: (string | RpwBin)[]) {
+    for (let bin of bins) {
+      const rpwBin = this.processBinName(bin)
+      const fullPath = this.binDir + "/" + rpwBin.name
+      if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
+        const binBytes = fs.readFileSync(fullPath)
+        // if (!this.firstBinData) {
+        //   this.firstBinData = binBytes
+        //   this.firstBinAddress = rpwBin.address
+        // }
+        let binAddr
+        try {
+          binAddr = parseInt(rpwBin.address!)
+        } catch (e: any) {
+          throw new Error(`Invalid patch address: ${rpwBin.address!}`)
+        }
+        if (binAddr >= 0xD000 && binAddr <= 0xDFFF && rpwBin.bank == 2) {
+          binAddr -= 0x1000
+        }
+        await dbg.writeRam(binAddr, binBytes)
+      } else {
+        // TODO: report error?
       }
     }
   }
@@ -418,6 +634,7 @@ export class Module {
   public saveName?: string
 
   private asm?: Assembler
+
   public symbolMap = new Map<string, Symbol>
   public importMap = new Map<string, Symbol>
   public exportMap = new Map<string, Symbol>
@@ -425,8 +642,8 @@ export class Module {
   // list of files used to assemble this module, in include order
   public sourceFiles: SourceFile[] = []
 
-  // list of all statements for the module, in assembly order, including macro expansions
-  public lineRecords: LineRecord[] = []
+  // list of pseudo documents that map object data to source file lines
+  public objectDocs: ObjectDoc[] = []
 
   constructor(project: Project, srcPath: string, srcName: string, saveName?: string) {
     this.project = project
@@ -442,65 +659,19 @@ export class Module {
       this.sourceFiles.push(...startingFiles)
     }
 
-    this.lineRecords = []
-
     this.symbolMap = new Map(startingMap)
     this.importMap = new Map<string, Symbol>
     this.exportMap = new Map<string, Symbol>
+    this.objectDocs = []
 
     this.asm = new Assembler(this)
-    this.lineRecords = this.asm.assemble_pass01(fileNames, syntaxStats)
+    this.asm.assemble_pass01(fileNames, syntaxStats)
   }
-
-  static dumpFile = false
 
   public update_pass2() {
 
-    this.asm?.assemble_pass2(this.lineRecords)
-
-    // TODO: debug code, to be removed
-    if (Module.dumpFile) {
-
-      console.log(this.srcName)
-
-      // if (this.srcName == "xxx")
-      {
-        for (let line of this.lineRecords) {
-          let str = "  "
-          if (!line.statement?.enabled) {
-            str = "X "
-          } else if (line.isHidden) {
-            str = "* "
-          }
-
-          if (line.bytes?.length) {
-
-            str += line.statement?.PC?.toString(16).padStart(4, "0").toUpperCase() + ": "
-
-            for (let i = 0; i < 3; i += 1) {
-              if (!line.bytes || i >= line.bytes.length) {
-                str += "  "
-              } else {
-                if (line.bytes[i] === undefined) {
-                  str += "??"
-                } else {
-                  str += line.bytes[i]!.toString(16).padStart(2, "0").toUpperCase()
-                }
-              }
-              if (line.bytes.length <= 3 || i < 2) {
-                str += " "
-              } else {
-                str += "+"
-              }
-            }
-          } else {
-            str = str.padEnd(2 + 6 + 9, " ")
-          }
-          str += line.statement?.sourceLine ?? ""
-          console.log(str)
-        }
-      }
-    }
+    this.asm?.assemble_pass2()
+    this.asm = undefined
 
     // link up all symbols
     // TODO: move to assembler?
@@ -524,6 +695,12 @@ export class Module {
     // for (let i = 0; i < this.lineRecords.length; i += 1) {
     //   this.lineRecords[i].statement?.postParse()
     // }
+  }
+
+  public update_finalize() {
+    for (let objectDoc of this.objectDocs) {
+      objectDoc.finalize()
+    }
   }
 
   public getBinFilePath(extFileName: string): string {
@@ -608,6 +785,14 @@ export class Module {
       }
     }
     return -1
+  }
+
+  public findObjectDoc(sourceFile: SourceFile): ObjectDoc | undefined {
+    for (let objectDoc of this.objectDocs) {
+      if (objectDoc.sourceFile == sourceFile) {
+        return objectDoc
+      }
+    }
   }
 }
 

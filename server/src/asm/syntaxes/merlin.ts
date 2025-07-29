@@ -28,7 +28,7 @@ export class MerlinSyntax extends SyntaxDef {
   public allowIndentedAssignment = false
   public allowLineContinuation = false
   public stringEscapeChars = "\\'\"tnr"
-  public scopeSeparator = ""
+  public scopeSeparator = "."
   public defaultOrg = 0x8000
 
   constructor() {

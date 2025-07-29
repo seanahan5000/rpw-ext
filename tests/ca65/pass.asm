@@ -79,6 +79,29 @@ DrawCircle
 DrawRectangle
 DrawHexagon
 
+@:              bne @-
+ @:             bne @-
+                bne @+
+@:
+@loop1:         bne @loop1
+ @loop2:        bne @loop2
+
+:
+                bne :++
+:
+                bne :-
+                bne :--
+:
+
+                ; sizing prefixes
+                lda f:$123456,x         ; 24 bit
+                lda a:$1000,x           ; 16 bit
+                lda z:$00,x             ;  8 bit
+
+; symbols starting with "." allowed if ending with ":"
+.label1:
+ .label2:
+
 _Clear          .addr   $0D00, $AF13, _Clear
                 .align  256
 Msg:            .asciiz "Hello world"
@@ -167,6 +190,12 @@ arg2            =   1
                 ; .endif
                 ; .ifnref arg2
                 ; .endif
+
+                .enum ; anonymous
+value1 = 1
+                value2
+value3
+                .endenum
 
                 .enum my_enum
                     ; no_error (implicit numbering)

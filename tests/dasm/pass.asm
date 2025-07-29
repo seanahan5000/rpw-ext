@@ -47,6 +47,7 @@ STACKBASE SET STACKBASE-{2}
                 ; include .\ pass.inc  ;*** escaped space
 
 symbol1         equ $1000
+SYMBOL1         equ $1111               ; case sensitive
 symbol2         =   $2000
 symbol3         eqm $3000
 symbol4         set $4000
@@ -56,9 +57,12 @@ symbol4         set $4000
                 lda [$ff,x]
                 jmp [$ffff]
 
+                lda #-1                 ; allowed per docs
+
                 dc  0,1,2,3
                 dc.b -1,1,2,3,<symbol1
                 dc.b #<symbol1
+                dc.b #1
                 dc.w $ffff
                 dc.l $7fffffff
                 dc.s "test"
@@ -76,6 +80,7 @@ symbol4         set $4000
                 dc.s "\x1F"
 
                 byte $ff
+                .byte $ff
                 word 100,1000,10000,symbol1
                 long $7fffffff
                 dc.b #<my_sub
@@ -121,6 +126,7 @@ wait            = 1
 
                 seg
                 seg.u
+                .byte                   ; no size required inside seg.u
                 seg my_seg
 
                 align 256

@@ -19,6 +19,7 @@ export enum OpMode {
   // 65C02-only
   INZ,      // ($FF)
   AXI,      // ($FFFF,X)
+  ZP_REL,   // $FF,*+-$FF
 
   // 65816-only
   LIN,      // [$FF]
@@ -34,6 +35,8 @@ export enum OpMode {
   // 65EL02-only
   STR,      // stack,R
   RIY,      // (stack,R),Y
+
+  ILLEGAL,
 }
 
 // TODO: use these somewhere?
@@ -59,11 +62,10 @@ export type OpcodeDef = {
 
 export type OpcodeType = Map<OpMode, OpcodeDef> // mode
 type OpcodeByName = Map<string, OpcodeType>     // name
-type OpcodeByValue = Map<number, OpcodeDef>     // value
 
-class Isa {
+export class Isa {
   public opcodeByName: OpcodeByName = new Map<string, OpcodeType>()
-  protected opcodeByValue: OpcodeByValue = new Map<number, OpcodeDef>()
+  public opcodes: OpcodeDef[] = new Array(256)
 
   constructor() {
   }
@@ -80,11 +82,7 @@ class Isa {
     return this.opcodeByName.get(name)?.get(opMode)
   }
 
-  public findByValue(value: number): OpcodeDef | undefined {
-    return this.opcodeByValue.get(value)
-  }
-
-  protected BuildOpcodes(ops: OpcodeDef[]) {
+  protected BuildOpcodes(ops: OpcodeDef[], addIllegals = false) {
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i]
       const opName = op.name
@@ -94,7 +92,16 @@ class Isa {
         this.opcodeByName.set(opName, type)
       }
       type.set(op.mode, op)
-      this.opcodeByValue.set(op.val, op)
+      this.opcodes[op.val] = op
+    }
+    if (addIllegals) {
+      for (let i = 0; i < this.opcodes.length; i += 1) {
+        if (this.opcodes[i] === undefined) {
+          this.opcodes[i] = {
+            val: i, name: "???", mode: OpMode.ILLEGAL, bc: 1, sf: "", cy: "2"
+          }
+        }
+      }
     }
   }
 }
@@ -105,18 +112,54 @@ abstract class IsaSet {
 
 //------------------------------------------------------------------------------
 
-class Isa6502 extends Isa {
+export class Isa6502 extends Isa {
   constructor() {
     super()
-    this.BuildOpcodes(Isa6502.opDefs6502)
+    this.BuildOpcodes(Isa6502.opDefs6502, true)
   }
 
   public getDescByName(name: string): string {
     return Isa6502.opDescs6502.get(name) ?? ""
   }
 
+  public isIllegal(opByte: number): boolean {
+    return this.opcodes[opByte].mode == OpMode.ILLEGAL
+  }
+
+  public isFlowControl(opByte: number): boolean {
+    return this.opcodes[opByte].fc ?? false
+  }
+
+  public isStepOver(opByte: number): boolean {
+    return this.opcodes[opByte].name == "jsr"
+  }
+
+  // used for StepOut
+  public isReturn(opByte: number): boolean {
+    return opByte == 0x60 // rts
+      || opByte == 0x40   // rti
+      // TODO: put in subclass ISA
+      || opByte == 0x6B   // rtl
+  }
+
+  // used for coverage marking as branch target
+  public isBranch(opByte: number): boolean {
+    const opDef = Isa6502.opDefs6502[opByte]
+    return opDef.mode == OpMode.REL && (opDef.fc ?? false)
+  }
+
+  // used for StepOver and coverage marking as call target
+  public isCall(opByte: number): boolean {
+    return this.opcodes[opByte].name == "jsr"
+  }
+
+  // used for coverage marking as jump target
+  public isJump(opByte: number): boolean {
+    return this.opcodes[opByte].name == "jmp"
+  }
+
   // TODO: get rid of "*" on cycle counts here
-  private static opDefs6502 = [
+  public static opDefs6502 = [
     { val: 0x00, name: "brk", mode: OpMode.NONE, bc: 1, sf: "b",    cy: "7*",   fc: true },
     { val: 0x01, name: "ora", mode: OpMode.INDX, bc: 2, sf: "nz",   cy: "6"     },
     { val: 0x05, name: "ora", mode: OpMode.ZP,   bc: 2, sf: "nz",   cy: "3"     },
@@ -234,7 +277,7 @@ class Isa6502 extends Isa {
     { val: 0xC1, name: "cmp", mode: OpMode.INDX, bc: 2, sf: "nzc",  cy: "6"     },
     { val: 0xC4, name: "cpy", mode: OpMode.ZP,   bc: 2, sf: "nzc",  cy: "3"     },
     { val: 0xC5, name: "cmp", mode: OpMode.ZP,   bc: 2, sf: "nzc",  cy: "3"     },
-    { val: 0xC6, name: "dec", mode: OpMode.ZP,   bc: 2, sf: "nz",   cy: "4"     },
+    { val: 0xC6, name: "dec", mode: OpMode.ZP,   bc: 2, sf: "nz",   cy: "5"     },  // *** cy: 5 for 6502, 4 for 65c02
     { val: 0xC8, name: "iny", mode: OpMode.NONE, bc: 1, sf: "nz",   cy: "2"     },
     { val: 0xC9, name: "cmp", mode: OpMode.IMM,  bc: 2, sf: "nzc",  cy: "2"     },
     { val: 0xCA, name: "dex", mode: OpMode.NONE, bc: 1, sf: "nz",   cy: "2"     },
@@ -333,7 +376,7 @@ class Isa6502 extends Isa {
 
 //------------------------------------------------------------------------------
 
-class Isa65C02 extends Isa6502 {
+export class Isa65C02 extends Isa6502 {
   constructor() {
     super()
     this.BuildOpcodes(Isa65C02.ops65C02)
@@ -368,7 +411,7 @@ class Isa65C02 extends Isa6502 {
     { val: 0x7C, name: "jmp", mode: OpMode.AXI,  bc: 3, sf: "",     cy: "6",    fc: true },
     { val: 0x80, name: "bra", mode: OpMode.REL,  bc: 2, sf: "",     cy: "2/3+", fc: true },
     { val: 0x89, name: "bit", mode: OpMode.IMM,  bc: 2, sf: "z",    cy: "2"     },
-    { val: 0x92, name: "sta", mode: OpMode.INZ,  bc: 2, sf: "nz",   cy: "5"     },
+    { val: 0x92, name: "sta", mode: OpMode.INZ,  bc: 2, sf: "",     cy: "5"     },
     { val: 0x9C, name: "stz", mode: OpMode.ABS,  bc: 3, sf: "",     cy: "4"     },
     { val: 0x9E, name: "stz", mode: OpMode.ABSX, bc: 3, sf: "",     cy: "5"     },
     { val: 0xB2, name: "lda", mode: OpMode.INZ,  bc: 2, sf: "nz",   cy: "5"     },
@@ -378,6 +421,91 @@ class Isa65C02 extends Isa6502 {
     { val: 0xDB, name: "stp", mode: OpMode.NONE, bc: 1, sf: "",     cy: "3"     },
     { val: 0xF2, name: "sbc", mode: OpMode.INZ,  bc: 2, sf: "nzc",  cy: "5*"    },
     { val: 0xFA, name: "plx", mode: OpMode.NONE, bc: 1, sf: "nz",   cy: "4"     },
+
+    // cycle count changed when addressing bug fixed
+    { val: 0x6C, name: "jmp", mode: OpMode.IND,  bc: 3, sf: "",     cy: "6",   fc: true },
+
+    { val: 0x07, name: "rmb0", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x17, name: "rmb1", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x27, name: "rmb2", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x37, name: "rmb3", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x47, name: "rmb4", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x57, name: "rmb5", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x67, name: "rmb6", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x77, name: "rmb7", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x87, name: "smb0", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0x97, name: "smb1", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0xa7, name: "smb2", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0xb7, name: "smb3", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0xc7, name: "smb4", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0xd7, name: "smb5", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0xe7, name: "smb6", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+    { val: 0xf7, name: "smb7", mode: OpMode.ZP,  bc: 2, sf: "",     cy: "5"     },
+
+    { val: 0x0f, name: "bbr0", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x1f, name: "bbr1", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x2f, name: "bbr2", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x3f, name: "bbr3", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x4f, name: "bbr4", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x5f, name: "bbr5", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x6f, name: "bbr6", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x7f, name: "bbr7", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x8f, name: "bbs0", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0x9f, name: "bbs1", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0xaf, name: "bbs2", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0xbf, name: "bbs3", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0xcf, name: "bbs4", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0xdf, name: "bbs5", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0xef, name: "bbs6", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    { val: 0xff, name: "bbs7", mode: OpMode.ZP_REL, bc: 3, sf: "",  cy: "5*",   fc: true },
+    // + 1 cycle for branch taken, + 1 for branch crossing page
+
+    { val: 0x02, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0x22, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0x42, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0x62, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0x82, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0xc2, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0xe2, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0x44, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0x54, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0xd4, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+    { val: 0xf4, name: "nop",  mode: OpMode.ZP,     bc: 2, sf: "",  cy: "2"     },
+
+    { val: 0x5c, name: "nop",  mode: OpMode.ABS,    bc: 3, sf: "",  cy: "8"     },
+    { val: 0xdc, name: "nop",  mode: OpMode.ABS,    bc: 3, sf: "",  cy: "4"     },
+    { val: 0xfc, name: "nop",  mode: OpMode.ABS,    bc: 3, sf: "",  cy: "4"     },
+
+    { val: 0x03, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x13, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x23, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x33, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x43, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x53, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x63, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x73, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x83, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x93, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xa3, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xb3, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xc3, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xd3, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xe3, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xf3, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x0b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x1b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x2b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x3b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x4b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x5b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x6b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x7b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x8b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0x9b, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xab, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xbb, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xeb, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
+    { val: 0xfb, name: "nop1",  mode: OpMode.NONE,  bc: 1, sf: "",  cy: "1"     },
   ]
 
   // TODO: add aliases?
@@ -390,6 +518,47 @@ class Isa65C02 extends Isa6502 {
     [ "stz", "Store Zero" ],
     [ "trb", "Test and Reset Bits" ],
     [ "tsb", "Test and Set Bits" ],
+
+    [ "stp", "Stop" ],
+    [ "wai", "Wait for interrupt" ],
+
+    [ "rmb0", "Reset Memory Bit" ],
+    [ "rmb1", "Reset Memory Bit" ],
+    [ "rmb2", "Reset Memory Bit" ],
+    [ "rmb3", "Reset Memory Bit" ],
+    [ "rmb4", "Reset Memory Bit" ],
+    [ "rmb5", "Reset Memory Bit" ],
+    [ "rmb6", "Reset Memory Bit" ],
+    [ "rmb7", "Reset Memory Bit" ],
+
+    [ "smb0", "Set Memory Bit" ],
+    [ "smb1", "Set Memory Bit" ],
+    [ "smb2", "Set Memory Bit" ],
+    [ "smb3", "Set Memory Bit" ],
+    [ "smb4", "Set Memory Bit" ],
+    [ "smb5", "Set Memory Bit" ],
+    [ "smb6", "Set Memory Bit" ],
+    [ "smb7", "Set Memory Bit" ],
+
+    [ "bbr0", "Branch on Bit Reset" ],
+    [ "bbr1", "Branch on Bit Reset" ],
+    [ "bbr2", "Branch on Bit Reset" ],
+    [ "bbr3", "Branch on Bit Reset" ],
+    [ "bbr4", "Branch on Bit Reset" ],
+    [ "bbr5", "Branch on Bit Reset" ],
+    [ "bbr6", "Branch on Bit Reset" ],
+    [ "bbr7", "Branch on Bit Reset" ],
+
+    [ "bbs0", "Branch on Bit Set" ],
+    [ "bbs1", "Branch on Bit Set" ],
+    [ "bbs2", "Branch on Bit Set" ],
+    [ "bbs3", "Branch on Bit Set" ],
+    [ "bbs4", "Branch on Bit Set" ],
+    [ "bbs5", "Branch on Bit Set" ],
+    [ "bbs6", "Branch on Bit Set" ],
+    [ "bbs7", "Branch on Bit Set" ],
+
+    [ "nop1", "No Operation, 1 byte, 1 cycle" ],
   ])
 }
 

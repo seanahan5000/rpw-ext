@@ -1,9 +1,9 @@
 
 import * as exp from "./expressions"
-import { Assembler, NestingType, TypeDef, LoopVar, Conditional, Segment } from "./assembler"
+import { Assembler, NestingType, LoopVar, Conditional, Segment } from "./assembler"
 import { Parser } from "./parser"
 import { SymbolUtils } from "./assembler"
-import { SymbolType, SymbolFrom } from "./symbols"
+import { SymbolType, SymbolFrom, TypeDef } from "./symbols"
 import { Syntax, Op } from "./syntaxes/syntax_types"
 import { Node, Token, TokenType } from "./tokenizer"
 import { KeywordDef } from "./syntaxes/syntax_types"
@@ -124,6 +124,7 @@ export abstract class Statement extends exp.Expression {
     // }
   }
 
+  // collect any information that can be known after parsing but before pass1
   postParse(parser: Parser) {
   }
 
@@ -644,7 +645,7 @@ export class OpStatement extends Statement {
           // case OpMode.A:
           case OpMode.IMM:
             if (this.expression) {
-              asm.symUtils.markConstants(this.expression)
+              asm.symUtils?.markConstants(this.expression)
               const immValue = this.expression.resolve()
               if (immValue === undefined) {
                 if (this.expression instanceof exp.StringExpression) {
@@ -668,23 +669,23 @@ export class OpStatement extends Statement {
           case OpMode.ZP:
           case OpMode.ZPX:
           case OpMode.ZPY:
-            asm.symUtils.markZPage(this.expression)
+            asm.symUtils?.markZPage(this.expression)
             break
           case OpMode.ABS:
             if (opDef && opDef.fc) {
               if (this.opNameLC == "jmp") {
-                asm.symUtils.markCode(this.expression)
+                asm.symUtils?.markCode(this.expression)
                 break
               }
               if (this.opNameLC == "jsr" || this.opNameLC == "jsl") {
-                asm.symUtils.markSubroutine(this.expression)
+                asm.symUtils?.markSubroutine(this.expression)
                 break
               }
             }
             // fall through
           case OpMode.ABSX:
           case OpMode.ABSY:
-            asm.symUtils.markData(this.expression)
+            asm.symUtils?.markData(this.expression)
 
             // check for zpage demotion was prevented by a forward reference
             if (!this.forceLong) {
@@ -708,7 +709,7 @@ export class OpStatement extends Statement {
             break
           case OpMode.INDX:
           case OpMode.INDY:
-            asm.symUtils.markZPage(this.expression)
+            asm.symUtils?.markZPage(this.expression)
             const value = this.expression.resolve()
             if (value !== undefined) {
               if (value > 255) {
@@ -720,7 +721,7 @@ export class OpStatement extends Statement {
           case OpMode.REL:
           case OpMode.LREL:
             if (opDef && opDef.fc) {
-              asm.symUtils.markCode(this.expression)
+              asm.symUtils?.markCode(this.expression)
             }
             break
 
@@ -740,7 +741,7 @@ export class OpStatement extends Statement {
       }
 
       if (this.labelExp) {
-        asm.symUtils.markCode(this.labelExp)
+        asm.symUtils?.markCode(this.labelExp)
       }
 
       asm.writeByte(opDef.val)
@@ -1283,7 +1284,7 @@ const DataRanges: number[][] = [
 
 // TODO: need to think about handling string constants in here
 
-class DataStatement extends Statement {
+export class DataStatement extends Statement {
 
   protected dataSize: number
   protected signType: string
@@ -1338,6 +1339,18 @@ class DataStatement extends Statement {
         // TODO: only allow no dataElements if inside a .struct
       }
     }
+
+    if (asm.inTypeDef()) {
+      let typeName: string | undefined
+      if (this.dataSize == 1) {
+        typeName = "byte"
+      } else if (this.dataSize == 2) {
+        typeName = "word"
+      } else if (this.dataSize == 3) {
+        typeName = "long"
+      }
+      asm.addTypeDefField(typeName)
+    }
   }
 
   postProcessSymbols(symUtils: SymbolUtils) {
@@ -1350,6 +1363,11 @@ class DataStatement extends Statement {
   }
 
   pass1(asm: Assembler): number {
+    return this.getSize()!
+  }
+
+  // required for structure field entries
+  public override getSize(): number | undefined {
     return Math.max(this.args.length, 1) * this.dataSize
   }
 
@@ -1512,10 +1530,14 @@ export class StorageStatement extends Statement {
       // assume if count isn't found, must be Merlin "\\"
       this.countValue = -(this.PC ?? 0) & 0xFF
     }
+
+    if (asm.inTypeDef()) {
+      asm.addTypeDefField("byte")
+    }
   }
 
   pass1(asm: Assembler): number {
-    return (this.countValue ?? 0) * (this.dataSize ?? 0)
+    return this.getSize()!
   }
 
   pass2(asm: Assembler): void {
@@ -1533,7 +1555,69 @@ export class StorageStatement extends Statement {
     const count = (this.countValue ?? 0) * (this.dataSize ?? 0)
     asm.writeBytePattern(fillValue, count)
   }
+
+  // required for structure field entries
+  public override getSize(): number | undefined {
+    return (this.countValue ?? 0) * (this.dataSize ?? 0)
+  }
 }
+
+//   CA65:  .tag <type-ref>
+
+export class TagStatement extends Statement {
+
+  public typeName?: exp.SymbolExpression
+  public typeRef?: TypeDef
+
+  postParse(parser: Parser): void {
+    if (this.labelExp && this.labelExp instanceof exp.SymbolExpression) {
+      const symbol = this.labelExp.symbol
+      if (symbol) {
+        symbol.isData = true
+      }
+    }
+
+    const name = this.findArg("type-ref")
+    if (name instanceof exp.SymbolExpression) {
+      this.typeName = name
+    }
+  }
+
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    this.typeRef = this.typeName?.symbol?.typeDef
+
+    // connect the type/layout to the symbol so debugger knows its format
+    if (this.labelExp?.symbol) {
+      this.labelExp.symbol.typeRef = this.typeRef
+    }
+
+    if (asm.inTypeDef()) {
+      asm.addTypeDefField(this.typeName?.getString())
+    }
+  }
+
+  pass1(asm: Assembler): number {
+    let typeSize = this.typeRef?.size
+    if (typeSize == undefined) {
+      this.setError("Size must be resolve in first pass")
+      typeSize = 0
+    }
+    return typeSize
+  }
+
+  pass2(asm: Assembler): void {
+    // TODO: always write zeros?
+    asm.writeBytePattern(0, this.typeRef?.size ?? 0)
+  }
+
+  // required for structure field entries
+  public override getSize(): number | undefined {
+    return this.typeRef?.size
+  }
+}
+
 
 // MERLIN:  n/a
 //   DASM:  [.]ALIGN <boundary> [, <fill>]
@@ -1687,12 +1771,10 @@ function scanHex(hexString: string, buffer: number[]) {
 class FileStatement extends Statement {
 
   protected fileName?: exp.FileNameExpression
+  protected fileNameStr: string = ""
 
   postParse(parser: Parser) {
     this.fileName = this.findArg("filename")
-  }
-
-  protected cleanFileName(): string | undefined {
     if (this.fileName) {
       let fileNameStr = this.fileName.getString() || ""
       if (fileNameStr.length > 0) {
@@ -1708,7 +1790,7 @@ class FileStatement extends Statement {
             }
           }
         }
-        return fileNameStr
+        this.fileNameStr = fileNameStr
       }
     }
   }
@@ -1728,13 +1810,9 @@ export class IncludeStatement extends FileStatement {
   public override preprocess(asm: Assembler): void {
     super.preprocess(asm)
 
-    // TODO: share more of this code
-    if (this.fileName) {
-      const fileNameStr = this.cleanFileName()
-      if (fileNameStr) {
-        if (!asm.includeFile(fileNameStr)) {
-          this.fileName.setError("File not found")
-        }
+    if (this.fileName && this.fileNameStr) {
+      if (!asm.includeFile(this.fileNameStr)) {
+        this.fileName.setError("File not found")
       }
     }
   }
@@ -1754,18 +1832,21 @@ export class BlockIncludeStatement extends IncludeStatement {
 
 export class SaveStatement extends FileStatement {
 
-  public pass2(asm: Assembler): void {
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
 
-    // TODO: share more of this code
     if (this.fileName) {
-      const fileNameStr = this.cleanFileName()
-      if (fileNameStr) {
-        if (!asm.writeFile(fileNameStr)) {
-          this.fileName.setError("File not found")
-        }
+      asm.saveSegment(this.fileNameStr)
+    }
+  }
+
+  public pass2(asm: Assembler): void {
+    if (this.fileName) {
+      if (!asm.writeFile(this.fileNameStr)) {
+        this.fileName.setError("File not found")
       }
     }
-}
+  }
 }
 
 
@@ -2855,6 +2936,7 @@ export class TextStatement extends Statement {
   }
 }
 
+
 export class NajaTextStatement extends TextStatement {
 
   private najaMapping?: number[]
@@ -2865,29 +2947,49 @@ export class NajaTextStatement extends TextStatement {
 
   protected override getMapping(): number[] {
     if (!this.najaMapping) {
-      this.najaMapping = new Array(128)
-
-      for (let i = 0; i < 10; i += 1) {
-        this.najaMapping[0x30 + i] = 0x00 + i // numbers
-      }
-
-      this.najaMapping[0x20] = 0x0A           // space
-      this.najaMapping[0x5F] = 0x0A           // space (underscore)
-
-      for (let i = 0; i < 26; i += 1) {
-        this.najaMapping[0x41 + i] = 0x0B + i // letters
-      }
-
-      const symbols = "!\"%\'*+,-./:<=>?"     // symbols
-      for (let i = 0; i < symbols.length; i += 1) {
-        this.najaMapping[symbols.charCodeAt(i)] = 0x25 + i
-      }
-
-      this.najaMapping[0x0A] = 0x8B           // \n
+      this.najaMapping = NajaTextStatement.buildMapping()
     }
     return this.najaMapping
   }
+
+  // TODO: temporarily static/separate for debugger use
+  public static buildMapping(): number[] {
+    const mapping = new Array(128)
+
+    for (let i = 0; i < 10; i += 1) {
+      mapping[0x30 + i] = 0x00 + i // numbers
+    }
+
+    mapping[0x20] = 0x0A           // space
+    mapping[0x5F] = 0x0A           // space (underscore)
+
+    for (let i = 0; i < 26; i += 1) {
+      mapping[0x41 + i] = 0x0B + i // letters
+    }
+
+    const symbols = "!\"%\'*+,-./:<=>?"     // symbols
+    for (let i = 0; i < symbols.length; i += 1) {
+      mapping[symbols.charCodeAt(i)] = 0x25 + i
+    }
+
+    mapping[0x0A] = 0x8B           // \n
+    return mapping
+  }
+
+  // TODO: temporarily static/separate for debugger use
+  public static buildUnmapping(): string[] {
+    const mapping = NajaTextStatement.buildMapping()
+    const unmapping: string[] = new Array(256)
+    for (let i = 0; i < 256; i += 1) {
+      let char = String.fromCharCode(i)
+      let mapped = mapping[i]
+      // *** handle escaped characters
+      unmapping[mapped] = char
+    }
+    return unmapping
+  }
 }
+
 
 function stringToBytes(str: string): number[] {
   const bytes: number[] = []
@@ -2946,40 +3048,52 @@ function stringToBytes(str: string): number[] {
 
 export class DummyStatement extends Statement {
 
-  postParse(parser: Parser) {
-    // TODO: put back in once Naja code is cleaned up
-    // if (this.opNameLC == "dummy") {
-    //   this.opExp?.setWarning("Use DUM instead")
-    // }
-  }
+  private isStruct: boolean = false
 
   public override preprocess(asm: Assembler): void {
 
-    // NOTE: With Merlin, the start of a dummy section implicitly
+    // NOTE: In Merlin, the start of a dummy section implicitly
     //  closes any currently active dummy section first.
-    // TODO: consider controlling this with a strict/lax switch
-    if (asm.module.project.syntax == Syntax.MERLIN) {
-      if (asm.isNested(NestingType.Struct)) {
-        asm.popNesting(true)
-      }
+    if (asm.isNested(NestingType.Struct)) {
+      asm.popNesting(true)
     }
-
-    asm.pushNesting(NestingType.Struct, () => {
-      asm.popSegment()
-    })
 
     // reference any symbols that may be needed to resolve orgValue
     super.preprocess(asm)
 
+    let orgValue: number | undefined
     const valueArg = this.args[0]
     if (valueArg) {
-      let orgValue = valueArg.resolve()
+      orgValue = valueArg.resolve()
       if (orgValue === undefined) {
         valueArg.setErrorWeak("Must resolve in first pass")
         orgValue = 0
       }
+    }
 
+    // If a the statement has a label and base address
+    //  of zero, treat as a named/scoped structure.
+    //  This is an addition beyond standard Merlin behavior.
+    if (this.labelExp && orgValue == 0) {
+      const labelStr = this.labelExp.getString()
+      asm.scopeState.pushScope(labelStr)
+      this.isStruct = true
+    }
+
+    if (orgValue != undefined) {
       asm.pushAndSetDummySegment(orgValue)
+    }
+
+    asm.pushNesting(NestingType.Struct, () => {
+      const size = asm.popSegment()
+      if (this.isStruct) {
+        asm.scopeState.popScope()
+        asm.endTypeDef(size)
+      }
+    })
+
+    if (this.isStruct) {
+      asm.startTypeDef(NestingType.Struct, this.labelExp)
     }
   }
 }

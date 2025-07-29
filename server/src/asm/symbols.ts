@@ -7,7 +7,7 @@ import { Expression, SymbolExpression} from "./expressions"
 export enum SymbolType {
   Variable    = 0,
   MacroName   = 1,
-  TypeName   = 2,  // struct, enum, define, etc.
+  TypeName    = 2,  // struct, enum, define, etc.
   NamedParam  = 3,  // named params to macros, structs, enums
 
   Simple      = 4,
@@ -65,6 +65,12 @@ export class Symbol {
   // Name is assigned later, after scope information is processed
   //  and symbol has been added to map.
   public fullName?: string
+
+  // valid if symbol is a structure definition
+  public typeDef?: TypeDef
+
+  // valid if this symbol references a location whose type/layout is this typeDef
+  public typeRef?: TypeDef
 
   constructor(definition: SymbolExpression, from: SymbolFrom) {
     this.definition = definition
@@ -388,6 +394,41 @@ export class ScopeState {
 
   public popZone() {
     this.zoneName = this.zoneStack.pop()
+  }
+}
+
+//------------------------------------------------------------------------------
+
+export type FieldEntry = {
+  name: string,
+  offset: number,
+  size: number,
+  typeName?: string
+}
+
+export class TypeDef {
+
+  public endLineIndex: number
+  public size?: number
+  public fields?: FieldEntry[]
+
+  constructor(
+      public fileIndex: number,
+      public startLineIndex: number,
+      public params: string[]) {
+    this.endLineIndex = startLineIndex
+  }
+
+  public endDefinition(endLineIndex: number, size: number) {
+    this.endLineIndex = endLineIndex
+    this.size = size
+  }
+
+  public addField(name: string, offset: number, size: number, typeName?: string) {
+    if (!this.fields) {
+      this.fields = []
+    }
+    this.fields.push({ name, offset, size, typeName })
   }
 }
 

@@ -1,14 +1,32 @@
 
 import * as fs from 'fs'
-import { Module, SourceFile, LineRecord, SymbolMap } from "./project"
-import { Statement, ConditionalStatement, EquStatement, GenericStatement } from "./statements"
+import { Project, Module, SourceFile, SymbolMap } from "./project"
+import { Statement, ConditionalStatement, EquStatement, GenericStatement, DummyStatement } from "./statements"
 import { TypeDefBeginStatement, DefineDefStatement, MacroInvokeStatement } from "./statements"
-import { ClosingBraceStatement } from "./statements"
+import { ClosingBraceStatement, OpStatement } from "./statements"
 import { Syntax, SyntaxDef } from "./syntaxes/syntax_types"
 import { Symbol, ScopeState } from "./symbols"
 import { SymbolExpression } from "./expressions"
-import { SymbolType, SymbolFrom } from "./symbols"
+import { SymbolType, SymbolFrom, TypeDef } from "./symbols"
 import { Parser } from "./parser"
+import { ObjectDoc } from "./object_doc"
+import { Token } from "./tokenizer"
+
+//------------------------------------------------------------------------------
+
+export type LineRecord = {
+  sourceFile: SourceFile,
+  lineNumber: number,
+  // TODO: startColumn? endColumn?
+  statement: Statement
+  isHidden?: boolean
+
+  // *** this will go away once file dumper updated ***
+  bytes?: (number | undefined)[]
+
+  // lines records generate from this macroInvoke statement
+  children?: LineRecord[]
+}
 
 //------------------------------------------------------------------------------
 // MARK: FileReader
@@ -172,32 +190,6 @@ type NestingEntry = {
 }
 
 //------------------------------------------------------------------------------
-// MARK: TypeDef
-
-export class TypeDef {
-
-  public endLineIndex: number
-  private size?: number
-
-  constructor(
-      public nestingType: NestingType,
-      public fileIndex: number,
-      public startLineIndex: number,
-      public params: string[]) {
-    this.endLineIndex = startLineIndex
-  }
-
-  public endDefinition(endLineIndex: number, size: number) {
-    this.endLineIndex = endLineIndex
-    this.size = size
-  }
-
-  public getSize(): number | undefined {
-    return this.size
-  }
-}
-
-//------------------------------------------------------------------------------
 // MARK: LoopState
 
 export type LoopVar = {
@@ -231,7 +223,15 @@ export class Segment {
   public startPC?: number
   public curPC?: number
   public nextPC?: number
-  public fileBytes: (number | undefined)[] = []
+
+  // only valid while building segment
+  public dataArray?: (number | undefined)[] = []
+
+  // optionally valid after pass2, before finalize
+  public refBytes?: Uint8Array
+
+  // valid after finalize
+  public dataBytes?: Uint8Array
 
   constructor(name: string, addressing: string, isInitialized: boolean, startPC?: number) {
     this.name = name
@@ -241,6 +241,24 @@ export class Segment {
     if (startPC !== undefined) {
       this.curPC = startPC
     }
+  }
+
+  // called by ObjectRange.finalize
+  public finalize() {
+    if (this.dataArray && !this.dataBytes) {
+      // TODO: what happens if dataArray has undefined values?
+      this.dataBytes = new Uint8Array(this.dataArray! as Array<number>)
+      this.dataArray = undefined
+    }
+  }
+
+  // Base address of segment should always be available
+  //  by the time this is called.
+  public get address(): number | undefined {
+    // if (this.startPC === undefined) {
+    //   throw "ASSERT: Segment address not defined"
+    // }
+    return this.startPC
   }
 }
 
@@ -255,7 +273,9 @@ export class Assembler {
   public conditional = new Conditional()
   public scopeState: ScopeState
   private syntaxStats: number[] = []
-  public symUtils = new SymbolUtils()
+  public symUtils?: SymbolUtils
+
+  private lineRecords: LineRecord[] = []
 
   private nestingStack: NestingEntry[] = []
   private nestingCounts: number[] = new Array(NestingType.Count).fill(0)
@@ -277,8 +297,6 @@ export class Assembler {
 
   private curLine?: LineRecord
 
-  private statementBytes: (number | undefined)[] = []
-
   private pass: number = -1
 
   //---------------------------------------------------
@@ -288,6 +306,9 @@ export class Assembler {
     this.scopeState = new ScopeState(
       module.project.caseSensitive ?? this.syntaxDef.caseSensitiveSymbols,
       this.syntaxDef.scopeSeparator)
+
+    // can be set undefined externally
+    this.symUtils = new SymbolUtils()
   }
 
   public get syntax(): Syntax {
@@ -308,9 +329,9 @@ export class Assembler {
   // #region Pass 01
   //---------------------------------------------------
 
-  public assemble_pass01(fileNames: string[], syntaxStats: number[]): LineRecord[] {
+  public assemble_pass01(fileNames: string[], syntaxStats: number[]) {
 
-    const lineRecords: LineRecord[] = []
+    this.lineRecords = []
     this.syntaxStats = syntaxStats
 
     this.segMap = new Map<string, Segment>()
@@ -327,7 +348,7 @@ export class Assembler {
 
     this.pass = 0
 
-    this.setSegment("code", "absolute", true, this.module.project.syntaxDef.defaultOrg)
+    this.setSegment("code", "absolute", true, undefined/* ***this.module.project.syntaxDef.defaultOrg*/)
     this.curSeg = this.curSeg!
 
     for (let fileName of fileNames) {
@@ -336,7 +357,7 @@ export class Assembler {
 
       // parse all the statements of the initial file and set fileReader state
       if (!this.includeFile(fileName)) {
-        return lineRecords
+        return
       }
 
       // NOTE: All vars/params must be resolved/set by end of preprocess (pass 0).
@@ -471,10 +492,11 @@ export class Assembler {
 
               // force a popScope after a DefineDefStatement because its scope
               //  only last for that line until its symbols have been processed
+              //
+              // TODO: why is this not just appended to preprocess?
               if (line.statement instanceof DefineDefStatement) {
                 line.statement.endPreprocess(this)
               }
-
             } else {
               line.statement.enabled = false
             }
@@ -490,19 +512,23 @@ export class Assembler {
                 this.curSeg.curPC = this.curSeg.nextPC
                 this.curSeg.nextPC = undefined
               } else {
-                // Once statements start trying to use the current PC
-                //  default to 0 and advance that.  (This shows up when
-                //  a new segment is created and then immediately used.)
-                if (this.curSeg.curPC === undefined) {
-                  this.curSeg.curPC = 0
-                  line.statement.PC = 0
+                if (advancePC != 0) {   // *** just a hack right now ***
+                  // Once statements start trying to use the current PC
+                  //  default to 0 and advance that.  (This shows up when
+                  //  a new segment is created and then immediately used.)
+                  // *** may need to be assembler-specific ***
+                  if (this.curSeg.curPC === undefined) {
+                    // *** should use default PC here ***
+                    this.curSeg.curPC = 0
+                    line.statement.PC = 0
+                  }
+                  this.curSeg.curPC += advancePC
                 }
-                this.curSeg.curPC += advancePC
               }
             }
           }
 
-          lineRecords.push(this.curLine)
+          this.lineRecords.push(this.curLine)
 
           // if macroInvoke active, also attach new lines to invoker
           if (this.macroInvokeState?.line) {
@@ -554,7 +580,29 @@ export class Assembler {
     // }
 
     this.pass = -1
-    return lineRecords
+  }
+
+  // replace named parameters with their current values
+  private expandStatement(statement: Statement): string {
+    this.checkPass(0)
+
+    let result = statement.sourceLine
+    if (this.macroInvokeState) {
+      statement.forEachExpressionBack((expression: exp.Expression) => {
+        if (expression instanceof exp.SymbolExpression) {
+          if (expression.symbolType == SymbolType.NamedParam) {
+            const range = expression.getRange()
+            if (range) {
+              const newStr = this.macroInvokeState!.varMap.get(expression.getSimpleName().asString)
+              if (newStr !== undefined) {
+                result = result.slice(0, range.start) + newStr + result.slice(range.end)
+              }
+            }
+          }
+        }
+      })
+    }
+    return result
   }
 
   // #endregion
@@ -562,20 +610,28 @@ export class Assembler {
   // #region Pass 2
   //---------------------------------------------------
 
-  public assemble_pass2(lineRecords: LineRecord[]) {
+  // only valid during pass 2
+  private statementBytes: (number | undefined)[] = []
+  private curObjDoc?: ObjectDoc
+
+  // debug-only
+  static dumpFile = false
+
+  public assemble_pass2() {
     this.pass = 2
 
     this.statementBytes = []
+    this.curObjDoc = undefined
 
-    for (let line of lineRecords) {
+    for (let line of this.lineRecords) {
 
-      if (!line.statement) {
-        continue
-      }
+      this.curLine = line
+      this.curSeg = line.statement.segment
 
       // *** would linking of forward references still be needed?
       // *** maybe still process symbol references (not definitions)
       if (!line.statement.enabled) {
+        this.addObjectLine(line, 0)
         continue
       }
 
@@ -622,19 +678,25 @@ export class Assembler {
       // *** error on final resolve failure ***
 
       // only call write pass if current segment is initialized (has data)
-      if (line.statement?.segment?.isInitialized) {
+      if (line.statement.segment?.isInitialized) {
 
         line.statement.pass2(this)
 
+        // NOTE: bytes have already been added to current segment
+        this.addObjectLine(line, this.statementBytes.length)
+
         if (this.statementBytes.length) {
+          // *** this will go away once file dumper is converted ***
           line.bytes = this.statementBytes
           this.statementBytes = []
         }
+      } else {
+        this.addObjectLine(line, 0)
       }
     }
 
     // walk each macro invoke statement and collect errors from their children
-    for (let line of lineRecords) {
+    for (let line of this.lineRecords) {
       if (!line.isHidden && line.statement?.enabled) {
         if (line.statement instanceof MacroInvokeStatement) {
           this.collectErrors(line)
@@ -646,66 +708,102 @@ export class Assembler {
       this.writeFile(this.module.saveName)
     }
 
+    this.curSeg = undefined
+    this.curLine = undefined
+
+    // TODO: debug code, to be removed
+    if (Assembler.dumpFile) {
+
+      console.log(this.module.srcName)
+
+      // if (this.srcName == "xxx")
+      {
+        for (let line of this.lineRecords) {
+          let str = "  "
+          if (!line.statement?.enabled) {
+            str = "X "
+          } else if (line.isHidden) {
+            str = "* "
+          }
+
+          if (line.bytes?.length) {
+
+            str += line.statement?.PC?.toString(16).padStart(4, "0").toUpperCase() + ": "
+
+            for (let i = 0; i < 3; i += 1) {
+              if (!line.bytes || i >= line.bytes.length) {
+                str += "  "
+              } else {
+                if (line.bytes[i] === undefined) {
+                  str += "??"
+                } else {
+                  str += line.bytes[i]!.toString(16).padStart(2, "0").toUpperCase()
+                }
+              }
+              if (line.bytes.length <= 3 || i < 2) {
+                str += " "
+              } else {
+                str += "+"
+              }
+            }
+          } else {
+            str = str.padEnd(2 + 6 + 9, " ")
+          }
+          str += line.statement?.sourceLine ?? ""
+          console.log(str)
+        }
+      }
+    }
+
     this.pass = -1
+
+    // TODO: parent/child relationship between statements is lost here
+    this.lineRecords = []
   }
 
-  // #endregion
-  //--------------------------------------------------------
-  // #region Writing
-  // write callbacks for pass 2
-  //--------------------------------------------------------
+  private addObjectLine(line: LineRecord, byteCount: number) {
+    if (!this.curObjDoc || (this.curObjDoc.sourceFile != line.sourceFile && !line.isHidden)) {
+      this.curObjDoc = undefined
+      for (let objectDoc of this.module.objectDocs) {
+        if (objectDoc.sourceFile == line.sourceFile) {
+          this.curObjDoc = objectDoc
+          break
+        }
+      }
+      if (!this.curObjDoc) {
+        this.curObjDoc = new ObjectDoc(line.sourceFile)
+        this.module.objectDocs.push(this.curObjDoc)
+      }
+    }
+    this.curObjDoc.addLine(line, byteCount)
+  }
 
   public writeByte(value: number | undefined) {
-    if (!this.curSeg?.fileBytes) {
+    if (!this.curSeg?.dataArray) {
       throw "ASSERT: writeByte called without a segment"
     }
     this.checkPass(2)
-    this.curSeg.fileBytes.push(value)
+    this.curSeg.dataArray.push(value)
     this.statementBytes.push(value)
   }
 
   public writeBytes(values: (number | undefined)[]) {
-    if (!this.curSeg?.fileBytes) {
+    if (!this.curSeg?.dataArray) {
       throw "ASSERT: writeBytes called without a segment"
     }
     this.checkPass(2)
-    this.curSeg.fileBytes.push(...values)
+    this.curSeg.dataArray.push(...values)
     this.statementBytes.push(...values)
   }
 
   public writeBytePattern(value: number | undefined, count: number) {
-    if (!this.curSeg?.fileBytes) {
+    if (!this.curSeg?.dataArray) {
       throw "ASSERT: writeBytePattern called without a segment"
     }
     this.checkPass(2)
     const bytes = new Array(count).fill(value)
-    this.curSeg.fileBytes.push(...bytes)
+    this.curSeg.dataArray.push(...bytes)
     this.statementBytes.push(...bytes)
-  }
-
-  //--------------------------------------------------------
-
-  // replace named parameters with their current values
-  private expandStatement(statement: Statement): string {
-    this.checkPass(0)
-
-    let result = statement.sourceLine
-    if (this.macroInvokeState) {
-      statement.forEachExpressionBack((expression: exp.Expression) => {
-        if (expression instanceof exp.SymbolExpression) {
-          if (expression.symbolType == SymbolType.NamedParam) {
-            const range = expression.getRange()
-            if (range) {
-              const newStr = this.macroInvokeState!.varMap.get(expression.getSimpleName().asString)
-              if (newStr !== undefined) {
-                result = result.slice(0, range.start) + newStr + result.slice(range.end)
-              }
-            }
-          }
-        }
-      })
-    }
-    return result
   }
 
   //--------------------------------------------------------
@@ -941,6 +1039,20 @@ export class Assembler {
     }
 
     this.curSeg = nextSeg
+  }
+
+  public saveSegment(cleanFileName: string) {
+    this.checkPass(0)
+
+    // rename the current code segment after a save (MERLIN-only)
+    if (this.curSeg) {
+      this.segMap.delete(this.curSeg.name)
+      this.segMap.set(cleanFileName.toLowerCase(), this.curSeg)
+    }
+
+    // start a new code segment after the save
+    // NOTE: SaveStatement.segment has already been set to previous segment
+    this.setSegment("code", "absolute", true, this.curSeg?.curPC)
   }
 
   public pushAndSetMacroSegment() {
@@ -1246,16 +1358,18 @@ export class Assembler {
     if (Assembler.verifyOnWrite) {
       console.log(`Checking ${binFileName}`)
 
-      for (let i = 0; i < this.curSeg.fileBytes.length; i += 1) {
-        if (this.curSeg.fileBytes[i] === undefined) {
-          const addrStr = i.toString(16).padStart(4, "0").toUpperCase()
-          this.curSeg.fileBytes[i] = 0xEE
-          console.log(`Undefined data at ${addrStr}`)
+      if (this.curSeg.dataArray) {
+        for (let i = 0; i < this.curSeg.dataArray.length; i += 1) {
+          if (this.curSeg.dataArray[i] === undefined) {
+            const addrStr = i.toString(16).padStart(4, "0").toUpperCase()
+            this.curSeg.dataArray[i] = 0xEE
+            console.log(`Undefined data at ${addrStr}`)
+          }
         }
       }
     }
 
-    const buffer = new Uint8Array(<number[]>this.curSeg.fileBytes)
+    const buffer = new Uint8Array(<number[]>this.curSeg.dataArray)
 
     // TODO: eventually write out final data
     // fs.writeFileSync(binFileName + "_new", buffer, { encoding: null, flag: "w" })
@@ -1284,7 +1398,11 @@ export class Assembler {
       }
     }
 
-    this.curSeg.fileBytes = []
+    if (fs.existsSync(binFileName)) {
+      this.curSeg.refBytes = fs.readFileSync(binFileName)
+    }
+
+    this.curSeg.finalize()
     return true
   }
 
@@ -1371,17 +1489,19 @@ export class Assembler {
     if (!this.typeDef) {
 
       const statement = this.curLine!.statement
-      if (statement instanceof TypeDefBeginStatement || statement instanceof DefineDefStatement) {
+      // TODO: clean this up
+      if (statement instanceof TypeDefBeginStatement ||
+          statement instanceof DefineDefStatement ||
+          statement instanceof DummyStatement) {
 
         this.typeStart = statement
         const fileIndex = this.module.getFileIndex(this.fileReader.state.file!)
         const startLineIndex = this.curLine!.lineNumber + 1
-        this.typeDef = new TypeDef(nestingType, fileIndex, startLineIndex, typeParams ?? [])
+        this.typeDef = new TypeDef(fileIndex, startLineIndex, typeParams ?? [])
 
         // attach typeDef to typeName symbol
         if (typeName?.symbol) {
-          const anySym = (typeName.symbol as any)
-          anySym.typeDef = this.typeDef
+          typeName.symbol.typeDef = this.typeDef
         }
 
         // NOTE: Scope state management handled in the statement
@@ -1411,6 +1531,38 @@ export class Assembler {
       //  so it can be done differently based on syntax.
     }
   }
+
+  public addTypeDefField(typeName?: string) {
+    this.checkPass(0)
+    if (this.typeDef && this.topNestingType() ==  NestingType.Struct) {
+
+      const statement = this.curLine!.statement
+      const name = statement.labelExp?.getString()
+      const offset = statement.PC
+      const size = statement.getSize()
+      if (name != undefined && offset != undefined && size != undefined) {
+
+        // look for comment that overrides the field type
+        for (let child of statement.children) {
+          if (child instanceof Token) {
+            const str = child.getString().substring(1).trim()
+            if (str[0] == "{") {
+              try {
+                const obj = JSON.parse(str)
+                if (obj) {
+                  typeName = obj.type
+                }
+              } catch (e) {
+              }
+            }
+          }
+        }
+
+        this.typeDef.addField(name, offset, size, typeName)
+      }
+    }
+  }
+
   // #endregion
   //------------------------------------
 }
@@ -1547,4 +1699,88 @@ export class SymbolUtils {
 }
 
 // #endregion
+//------------------------------------------------------------------------------
+
+export class EvalAssembler extends Assembler {
+
+  public opBytes?: number[]
+  private modules: Module[]
+
+  constructor(modules: Module[]) {
+    super(modules[0])
+    this.symUtils = undefined
+    this.modules = modules
+  }
+
+  public override processSymbol_pass0(symExp: exp.SymbolExpression): void {
+    if (symExp.isDefinition) {
+      symExp.setError("No definitions allowed")
+      return
+    }
+
+    if (symExp.symbolType != SymbolType.Simple) {
+      symExp.setError("Only simple symbols")
+      return
+    }
+
+    symExp.fullName = this.scopeState.setSymbolExpression(symExp)
+    let foundSym: Symbol | undefined
+
+    // search all modules for matching symbol
+    for (let module of this.modules) {
+      foundSym = module.symbolMap.get(symExp.fullName!)
+      if (foundSym) {
+        break
+      }
+    }
+    if (!foundSym) {
+      symExp.setError("Symbol not found")
+      return
+    }
+    symExp.symbol = foundSym
+    // NOTE: no foundSym.addReference call made
+  }
+
+  public override writeByte(value: number | undefined) {
+    if (!this.opBytes) {
+      this.opBytes = []
+    }
+    this.opBytes.push(value ?? -1)
+  }
+}
+
+// TODO: eventually could support .defines, built-in functions, etc.
+
+export function evalOpExpression(project: Project, expStr: string): number[] | undefined {
+
+  // TODO: scan for type information at end of expStr?
+  // TODO: how will extra type info get returned?
+
+  const asm = new EvalAssembler(project.modules)
+  const parser = new Parser()
+  const statement = parser.reparseStatement(" lda " + expStr, project.syntax)
+
+  if (!(statement instanceof OpStatement)) {
+    return
+  }
+
+  statement.PC = 0x1000
+  statement.preprocess(asm)
+  statement.pass1(asm)
+  statement.pass2(asm)
+
+  if (statement.hasAnyError()) {
+    return
+  }
+  if (!asm.opBytes) {
+    return
+  }
+  for (let i = 0; i < asm.opBytes.length; i += 1) {
+    if (asm.opBytes[i] < 0) {
+      return
+    }
+  }
+  return asm.opBytes
+}
+
 //------------------------------------------------------------------------------

@@ -1,5 +1,15 @@
 # RPW 65 Changelog
 
+### [2.0.0] - 2025-07-29
+
+#### Added:
+* Full debugger support for connecting to RPW A2 emulator
+* Support for showing code bytes and cycle counts next to source code
+
+#### Fixed:
+* All [from smokku]: Disable variable tabs when inline suggestion is visible
+* All [from smokku]: Parse comments before keywords in rpw65.tmLanguage
+
 ### [1.5.3] - 2025-04-30
 
 #### Added:
