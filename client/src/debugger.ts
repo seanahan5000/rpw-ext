@@ -116,7 +116,7 @@ export class RpwDebugSession extends DebugSession {
     client.onNotification("rpw65.debuggerError", (params) => {
       let error = "Debugger error"
       if (params?.error) {
-        error += ": " + params.error
+        error = "Debugger: " + params.error
       }
       vscode.window.showErrorMessage(error)
       this.sendEvent(new TerminatedEvent())

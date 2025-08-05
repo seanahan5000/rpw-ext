@@ -1,5 +1,17 @@
 # RPW 65 Changelog
 
+### [2.0.1] - 2025-08-05
+
+#### Added:
+* Enable semantic highlighting in all themes by default
+
+#### Fixed:
+* Debugger default entry point selection from binaries
+* Propagate project load errors up to VS Code user
+
+#### Changed:
+* Tweak semantic token scope mapping
+
 ### [2.0.0] - 2025-07-29
 
 #### Added:

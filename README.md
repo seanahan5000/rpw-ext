@@ -15,10 +15,8 @@ Features include:
 * Code folding
 * Diagnostic errors and warnings
 
-Newest additions:
-* 65816 and 65EL02 assembly support
-* 64tass and ORCA/M (APW) syntax support
-* Pseudo-op/directive hover and auto-complete
+Newest addition:
+* Debug adapter connection to RPW A2 extension
 
 Note that no external assembler executable is required for any syntax.
 

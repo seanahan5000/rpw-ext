@@ -927,7 +927,16 @@ export class LspDebugger {
 
     if (command == "launch") {
       await this.sendRequest({ command: "hardReset" })
-      await this.mainProject?.binLoadProject(this)
+      try {
+        await this.mainProject?.binLoadProject(this)
+      } catch (err) {
+        let message = "Project load error"
+        if (err instanceof Error) {
+          message = "Project: " + err.message
+        }
+        this.connection.sendNotification("rpw65.debuggerError", { error: message })
+        return
+      }
     }
 
     const allArgs = <any>args

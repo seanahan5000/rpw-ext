@@ -335,14 +335,18 @@ export class LspServer {
           }
 
           if (project) {
-            throw new Error("Multiple .rpw-project files found")
+            this.connection.sendNotification("rpw65.debuggerError",
+              { error: "Multiple .rpw-project files found" })
+            break
           }
 
           const jsonData = fs.readFileSync(file, 'utf8')
           try {
             this.rpwProject = <RpwProject>JSON.parse(jsonData)
           } catch (e: any) {
-            throw new Error("Failed to parse project JSON: " + e.toString())
+            this.connection.sendNotification("rpw65.debuggerError",
+              { error: "Failed to parse project JSON: " + e.toString() })
+            break
           }
         }
       }
@@ -362,9 +366,12 @@ export class LspServer {
       }
 
       const project = new LspProject(this, await this.defaultSettings)
+
       if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
-        throw new Error("Failed to load project")
+        this.connection.sendNotification("rpw65.debuggerError",
+          { error: "Failed to load project" })
       }
+
       this.projects.push(project)
 
       this.mainProject = project
@@ -476,7 +483,7 @@ export class LspServer {
         }
       }
 
-      // *** send message that semantic tokens need refresh ***
+      // TODO: send message that semantic tokens need refresh
       // this.connection.sendNotification("workspace/semanticTokens/refresh")
     }
   }

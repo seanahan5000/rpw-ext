@@ -5,7 +5,7 @@
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -124,6 +124,11 @@
 				"configuration": "./language-configuration.json"
 			}
 		],
+		"configurationDefaults": {
+			"[rpw65]": {
+				"editor.semanticHighlighting.enabled": true
+			}
+		},
 		"grammars": [
 			{
 				"language": "rpw65",
@@ -206,19 +211,23 @@
 						"constant.character.escape"
 					],
 					"opcode": [
-						"keyword"
+						"keyword.mnemonic"
 					],
 					"constant": [
+						"entity.name.constant",
 						"keyword.control"
 					],
 					"zpage": [
+						"variable.zpage",
 						"entity.name.variable"
 					],
 					"label": [
-						"entity.name.function"
+						"entity.name.function",
+						"entity.name.label"
 					],
 					"label.local": [
-						"entity.other.attribute"
+						"entity.other.attribute",
+						"entity.name.label"
 					],
 					"function": [
 						"entity.name.function"
@@ -230,7 +239,7 @@
 						"entity.name.type"
 					],
 					"macro": [
-						"entity.name.type"
+						"entity.name.type.macro"
 					],
 					"buffer": [
 						"variable.other.constant"

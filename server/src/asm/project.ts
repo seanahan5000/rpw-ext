@@ -146,7 +146,6 @@ export class Project {
 
           let srcPath = ""
           let srcName = fixBackslashes(module.src)
-          let lstFilePath: string | undefined
 
           const lastSlash = srcName.lastIndexOf("/")
           if (lastSlash != -1) {
@@ -450,7 +449,7 @@ export class Project {
             const binBytes = fs.readFileSync(fullPath)
             dbg.setDiskImage(fullPath, binBytes, drive - 1, writeProtected)
           } else {
-            // TODO: report error?
+            throw new Error(`Failed to open disk image: ${fullPath}`)
           }
         }
       }
@@ -467,8 +466,32 @@ export class Project {
               throw new Error(`Invalid preload entryPoint value: ${preload.entryPoint}`)
             }
           }
+
           if (preload.bins) {
-            await this.processBins(dbg, preload.bins)
+            for (let bin of preload.bins) {
+              const rpwBin = this.processBinName(bin)
+              const fullPath = this.binDir + "/" + rpwBin.name
+              if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
+                const binBytes = fs.readFileSync(fullPath)
+                let binAddr
+                try {
+                  binAddr = parseInt(rpwBin.address!)
+                } catch (e: any) {
+                  throw new Error(`Invalid patch address: ${rpwBin.address!}`)
+                }
+                // if no entryPoint provided, default to address of first bin
+                //  (but don't allow 0xD000 bank 2)
+                if (!entryPoint) {
+                  entryPoint = binAddr
+                }
+                if (binAddr >= 0xD000 && binAddr <= 0xDFFF && rpwBin.bank == 2) {
+                  binAddr -= 0x1000
+                }
+                await dbg.writeRam(binAddr, binBytes)
+              } else {
+                throw new Error(`Missing preload binary: ${fullPath}`)
+              }
+            }
           }
 
           // load memory patches
@@ -595,32 +618,6 @@ export class Project {
     }
 
     return { name: fullName, address: addrStr, bank: bankNum }
-  }
-
-  private async processBins(dbg: LspDebugger, bins: (string | RpwBin)[]) {
-    for (let bin of bins) {
-      const rpwBin = this.processBinName(bin)
-      const fullPath = this.binDir + "/" + rpwBin.name
-      if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
-        const binBytes = fs.readFileSync(fullPath)
-        // if (!this.firstBinData) {
-        //   this.firstBinData = binBytes
-        //   this.firstBinAddress = rpwBin.address
-        // }
-        let binAddr
-        try {
-          binAddr = parseInt(rpwBin.address!)
-        } catch (e: any) {
-          throw new Error(`Invalid patch address: ${rpwBin.address!}`)
-        }
-        if (binAddr >= 0xD000 && binAddr <= 0xDFFF && rpwBin.bank == 2) {
-          binAddr -= 0x1000
-        }
-        await dbg.writeRam(binAddr, binBytes)
-      } else {
-        // TODO: report error?
-      }
-    }
   }
 }
 
