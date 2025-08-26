@@ -76,6 +76,7 @@ export class Project {
   public rootDir = "."
   public srcDir: string = ""
   public binDir: string = ""
+  public imgDir: string = ""
 
   public includePaths: string[] = []
   public isTemporary = false
@@ -105,6 +106,7 @@ export class Project {
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
     this.binDir = this.buildFullDirName(rpwProject.binDir)
+    this.imgDir = this.buildFullDirName(rpwProject.imgDir)
 
     if (rpwProject.defines) {
       for (let define of rpwProject.defines) {
@@ -414,19 +416,24 @@ export class Project {
         matchList.push(...objectDoc.findRanges(address, dataRange))
       }
     }
+
+    let bestMatch: RangeMatch | undefined
     if (matchList.length > 0) {
-      let bestMatch = matchList[0]
-      if (matchList.length > 1 && dataRange) {
-        for (let i = 1; i < matchList.length; i += 1) {
-          const match = matchList[i]
-          if (match.matchCount > bestMatch.matchCount) {
-            // TODO: look at match.sourceFile.calcLoadedPercent(dataRange)?
-            bestMatch = match
+      if (dataRange) {
+        const minMatchCount = Math.ceil(dataRange.dataLength / 4)
+        for (const match of matchList) {
+          if (match.matchCount >= minMatchCount) {
+            if (!bestMatch || match.matchCount > bestMatch.matchCount) {
+              // TODO: look at match.sourceFile.calcLoadedPercent(dataRange)?
+              bestMatch = match
+            }
           }
         }
+      } else {
+        bestMatch = matchList[0]
       }
-      return bestMatch
     }
+    return bestMatch
   }
 
   public async binLoadProject(dbg: LspDebugger) {
@@ -442,7 +449,7 @@ export class Project {
     if (this.rpwProject.images) {
       for (let imageEntry of this.rpwProject.images) {
         if (imageEntry.enabled == undefined || imageEntry.enabled == true) {
-          const fullPath = this.binDir + "/" + imageEntry.name
+          const fullPath = this.imgDir + "/" + imageEntry.name
           const drive = imageEntry.drive ?? 1
           const writeProtected = imageEntry.readonly || false
           if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
@@ -529,6 +536,9 @@ export class Project {
     if (entryPoint != undefined) {
       dbg.setEntryPoint(entryPoint)
     }
+
+    // TODO: make checkStack a project parameter?
+    dbg.setParameter("checkStack", 1)
   }
 
   private processBinName(bin: string | RpwBin): RpwBin {

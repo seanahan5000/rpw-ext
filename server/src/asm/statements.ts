@@ -3194,6 +3194,7 @@ export class AssertTrueStatement extends Statement {
   private typeName?: string
   private always: boolean
   private assertTrue: boolean
+  private inMacroDef: boolean = false
 
   constructor(typeName?: string, always = false, assertTrue = true) {
     super()
@@ -3202,11 +3203,24 @@ export class AssertTrueStatement extends Statement {
     this.assertTrue = assertTrue
   }
 
+  public preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+    this.inMacroDef = asm.inMacroDef()
+  }
+
   // TODO: should argument parsing/capture be done in preprocess instead?
 
-  // NOTE: Can't commit to error until pass2,
-  //  after forward references are resolved, for example.
-  pass2(asm: Assembler): void {
+  // TODO: Possibly can't commit to error until pass2,
+  //  after forward references are resolved, for example,
+  //  but pass2 won't be executed for struct/dummy.
+  //  Find real example of needing to wait for pass2 and test
+  //  with that and an error inside a struct/dummy.
+
+  public pass1(asm: Assembler): number {
+
+    if (this.inMacroDef) {
+      return 0
+    }
 
     let assertArg: exp.Expression | undefined
     let assertCond = !this.assertTrue
@@ -3217,7 +3231,7 @@ export class AssertTrueStatement extends Statement {
         const value = assertArg.resolve()
         if (assertCond === undefined) {
           // TODO: decide to ignore or trigger when condition not resolved
-          return
+          return 0
         }
         assertCond = value != 0
       }
@@ -3249,12 +3263,24 @@ export class AssertTrueStatement extends Statement {
         })
 
         if (error) {
-          (assertArg ?? this).setError("ERROR: " + message)
+          if (message) {
+            message = "ERROR: " + message
+          } else {
+            message = "ERROR"
+          }
+          (assertArg ?? this).setError(message)
         } else {
-          (assertArg ?? this).setWarning("Warning: " + message)
+          if (message) {
+            message = "Warning: " + message
+          } else {
+            message = "Warning"
+          }
+          (assertArg ?? this).setWarning(message)
         }
       }
     }
+
+    return 0
   }
 }
 

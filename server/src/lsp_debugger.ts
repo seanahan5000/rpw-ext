@@ -1,6 +1,7 @@
 
 import * as base64 from 'base64-js'
 import * as path from 'path'
+import * as fs from 'fs'
 import * as lsp from 'vscode-languageserver'
 import { DebugProtocol } from "@vscode/debugprotocol"
 import { Handles, Breakpoint, StackFrame, Source, Scope, Variable } from "@vscode/debugadapter"
@@ -11,6 +12,7 @@ import { Statement, MacroInvokeStatement, OpStatement } from "./asm/statements"
 import { ObjectDoc, DataRange, RangeMatch } from "./asm/object_doc"
 import { evalOpExpression } from "./asm/assembler"
 import { Symbol, TypeDef, FieldEntry } from "./asm/symbols"
+import { Module } from "./asm/project"
 
 import { Parser } from "./asm/parser"
 import { TokenType } from "./asm/tokenizer"
@@ -40,7 +42,7 @@ import { NajaTextStatement } from "./asm/statements"
 
 // NOTE: duplicated in machine/debugger.ts
 
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 type RequestHeader = {
   command: string
@@ -77,7 +79,8 @@ type StopNotification = RequestHeader & {
   reason: string
   pc: number
   dataAddress?: number
-  dataString?: string
+  dataString?: string,
+  error?: string
 }
 
 type SetRegisterRequest = RequestHeader & StackRegister
@@ -105,6 +108,16 @@ type ReadMemoryResponse = RequestHeader & {
   dataString: string    // actual data read in base64, possibly < readLength
 }
 
+type ReadRamRequest = RequestHeader & {
+  dataAddress: number   // read address
+  dataLength: number    // number of bytes to read
+}
+
+type ReadRamResponse = RequestHeader & {
+  dataAddress: number   // effective read address
+  dataString: string    // actual data read in base64
+}
+
 type WriteMemoryRequest = RequestHeader & {
   dataAddress: number     // direct write address
   dataBank?: number       // optional bank 0, 1, or 2
@@ -126,6 +139,16 @@ type SetDiskImageRequest = RequestHeader & {
   dataString: string    // disk contents in base64
   driveIndex: number
   writeProtected: boolean
+}
+
+type DiskWriteNotification = RequestHeader & {
+  fullPath: string
+  dataString: string    // disk contents in base64
+}
+
+type SetParameterRequest = RequestHeader & {
+  name: string,
+  value: number
 }
 
 //------------------------------------------------------------------------------
@@ -757,8 +780,26 @@ export class LspDebugger {
       case "cpuStopped": {
         const msg = <StopNotification>message
         if (msg.reason == "breakpoint" && this.mainProject) {
-          // TODO: need to use dataString in msg?
-          const result = this.mainProject.findSourceByAddress(msg.pc)
+          let dataRange: DataRange | undefined
+          if (msg.dataAddress && msg.dataString) {
+            dataRange = new DataRange(msg.dataAddress, base64.toByteArray(msg.dataString))
+          }
+          let result = this.mainProject.findSourceByAddress(msg.pc, dataRange)
+          if (result) {
+            const addresses = this.breakpoints.get(result.objectDoc.sourceFile.fullPath)
+            let matched = false
+            if (addresses) {
+              for (const address of addresses) {
+                if (address == msg.pc) {
+                  matched = true
+                  break
+                }
+              }
+            }
+            if (!matched) {
+              result = undefined
+            }
+          }
           if (!result) {
             // if breakpoint address is in file that isn't loaded,
             //  restart target and don't report stop
@@ -770,7 +811,14 @@ export class LspDebugger {
             break
           }
         }
-        this.connection.sendNotification("rpw65.debuggerStopped", { reason: msg.reason })
+        this.connection.sendNotification("rpw65.debuggerStopped", { reason: msg.reason, error: msg.error })
+        break
+      }
+
+      case "diskWrite": {
+        const msg = <DiskWriteNotification>message
+        const binBytes = base64.toByteArray(msg.dataString)
+        fs.writeFileSync(msg.fullPath, binBytes)
         break
       }
 
@@ -798,6 +846,17 @@ export class LspDebugger {
     await this.sendRequest(request)
   }
 
+  // direct readMemory method for check binary load status
+  public async readRam(address: number, length: number): Promise<Uint8Array> {
+    const request: ReadRamRequest =  {
+      command: "readRam",
+      dataAddress: address,
+      dataLength: length
+    }
+    const response: ReadRamResponse = await this.sendRequest(request)
+    return base64.toByteArray(response.dataString)
+  }
+
   public async setDiskImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {
     const dataString = base64.fromByteArray(data)
     const request: SetDiskImageRequest = {
@@ -812,6 +871,15 @@ export class LspDebugger {
       command: "setRegister",
       name: "PC",
       value: entryPoint
+    }
+    await this.sendRequest(request)
+  }
+
+  public async setParameter(name: string, value: number) {
+    const request: SetParameterRequest = {
+      command: "setParameter",
+      name,
+      value
     }
     await this.sendRequest(request)
   }
@@ -1148,9 +1216,9 @@ export class LspDebugger {
           path.posix.basename(sourceFile.fullPath),
           sourceFile.fullPath)
 
-        if (outStackFrames.length == 0) {
-          (entry as any).topOfStack = true
-        }
+        entry.topOfStack = (outStackFrames.length == 0);
+        (entry as any).objectDoc = rangeMatch.objectDoc
+
         const uniqueId = this.stackFrameHandles.create(entry)
         outStackFrames.push(new StackFrame(uniqueId, funcName, source, rangeMatch.sourceLine + 1))
       }
@@ -1191,8 +1259,7 @@ export class LspDebugger {
     const scopes: Scope[] = []
     const stackEntry = this.stackFrameHandles.get(args.frameId)
     if (stackEntry) {
-      const topOfStack = (stackEntry as any).topOfStack ?? false
-
+      const topOfStack = stackEntry.topOfStack ?? false
       scopes.push(new Scope("Registers", this.variableHandles.create(new RegistersVariable(stackEntry, topOfStack)), false))
       if (topOfStack) {
         // TODO: check for invalidated timing numbers above
@@ -1246,6 +1313,17 @@ export class LspDebugger {
       return
     }
 
+    let scopeModule: Module | undefined
+    if (args.frameId != undefined) {
+      const stackEntry = this.stackFrameHandles.get(args.frameId)
+      if (stackEntry) {
+        const objectDoc: ObjectDoc = (stackEntry as any).objectDoc
+        if (objectDoc) {
+          scopeModule = objectDoc.sourceFile.modules[0]
+        }
+      }
+    }
+
     // look for type name at end of expression and strip it off
     let expStr = args.expression.trim()
     let typeStr = ""
@@ -1255,7 +1333,7 @@ export class LspDebugger {
       expStr = expStr.substring(0, n).trim()
     }
 
-    opBytes = evalOpExpression(this.mainProject!, expStr)
+    opBytes = evalOpExpression(this.mainProject!, scopeModule, expStr)
     if (!opBytes) {
       return
     }
@@ -1268,11 +1346,17 @@ export class LspDebugger {
     let typeDef: TypeDef | undefined
 
     // see if expStr is a symbol with a typeRef
-    for (let module of this.mainProject!.modules) {
-      const foundSym = module.symbolMap.get(expStr)
-      if (foundSym) {
-        typeDef = foundSym.typeRef
-        break
+    if (scopeModule) {
+      const foundSym = scopeModule.symbolMap.get(expStr)
+      typeDef = foundSym?.typeRef
+    }
+    if (!typeDef) {
+      for (let module of this.mainProject!.modules) {
+        const foundSym = module.symbolMap.get(expStr)
+        if (foundSym) {
+          typeDef = foundSym.typeRef
+          break
+        }
       }
     }
 
@@ -1300,6 +1384,7 @@ export class LspDebugger {
       // get optional first bracketed term
       if (token) {
         if (token.getString() == "[") {
+          rows = 1
           token = parser.getNextToken()
           if (token) {
             if (token.type == TokenType.DecNumber) {
@@ -1315,9 +1400,7 @@ export class LspDebugger {
               } else {
                 parseError = true
               }
-            } else if (token.getString() == "]") {
-              columns = 8
-            } else {
+            } else if (token.getString() != "]") {
               parseError = true
             }
           } else {
@@ -1539,11 +1622,11 @@ export class LspDebugger {
     let rowCount = 0
     for (let i = 0; i < dataLength; i += 1) {
       if (rowCount == 0) {
-        str += address.toString(16).toUpperCase().padStart(addrLen, "0") + "="
+        str += "$" + address.toString(16).toUpperCase().padStart(addrLen, "0") + " ="
       } else if (rowCount == 8 && rowWidth > 8) {
         str += "\xa0"
       }
-      let hexStr = dataBytes[i].toString(16).toUpperCase().padStart(2, "0")
+      let hexStr = "$" + dataBytes[i].toString(16).toUpperCase().padStart(2, "0")
       if (i == indexOffset) {
         hexStr = underlineString(hexStr)
       }
@@ -1563,8 +1646,7 @@ export class LspDebugger {
     if (rowCount != 0) {
       str += "\n"
     }
-
-    return "```\n" + str + "\n```"
+    return str
   }
 }
 

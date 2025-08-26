@@ -3,7 +3,7 @@ import { DebugProtocol } from "@vscode/debugprotocol"
 import { DebugSession, InitializedEvent, StoppedEvent, TerminatedEvent } from "@vscode/debugadapter"
 import { BreakpointEvent, ContinuedEvent } from "@vscode/debugadapter"
 import { Thread } from "@vscode/debugadapter"
-import { client } from "./extension"
+import { client, decorator } from "./extension"
 import * as vsclnt from 'vscode-languageclient'
 import * as vscode from 'vscode'
 
@@ -74,7 +74,6 @@ export class RpwDebugSession extends DebugSession {
   constructor() {
     super()
 
-    // TODO: confirm that these are wanted
     this.setDebuggerLinesStartAt1(false)
     this.setDebuggerColumnsStartAt1(false)
 
@@ -85,25 +84,21 @@ export class RpwDebugSession extends DebugSession {
     client.onNotification("rpw65.debuggerStopped", (params) => {
 
       const reason = params?.reason ?? "step"
-      // *** filter known vs unknow reason types ***
 
-      // *** more information for stopped reason (human-readable)
+      if (reason == "error") {
+        vscode.window.showErrorMessage(params?.error ?? "ERROR")
+      }
 
-      // *** choose event based on reason ***
-      // "entry"
-      // "step"
-      // "breakpoint"
-      // "exception"
+      // update decorators on stop to reflect code modification changes
+      decorator.scheduleUpdate(500)
 
-      // BreakpointEvent
-      //  "changed"
-
-      // *** reset variable ref counter here? ***
+      // TODO: reset variable ref counter here?
 
       // NOTE: Without this delay, the VSCode debugger gets in a state
       //  where it knows the target has stopped but the UI doesn't reflect that.
       //  Only clicking on the Pause button would get it out of that state.
       setTimeout(() => {
+        // TODO: choose event based on reason
         const stoppedEvent = new StoppedEvent('step', 1)
         this.sendEvent(stoppedEvent)
       }, 100)

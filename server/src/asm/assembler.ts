@@ -321,6 +321,7 @@ export class Assembler {
 
   private checkPass(pass: number) {
     if (pass != this.pass) {
+      debugger
       throw "ASSERT: Pass check failed"
     }
   }
@@ -780,6 +781,7 @@ export class Assembler {
 
   public writeByte(value: number | undefined) {
     if (!this.curSeg?.dataArray) {
+      debugger
       throw "ASSERT: writeByte called without a segment"
     }
     this.checkPass(2)
@@ -789,6 +791,7 @@ export class Assembler {
 
   public writeBytes(values: (number | undefined)[]) {
     if (!this.curSeg?.dataArray) {
+      debugger
       throw "ASSERT: writeBytes called without a segment"
     }
     this.checkPass(2)
@@ -798,6 +801,7 @@ export class Assembler {
 
   public writeBytePattern(value: number | undefined, count: number) {
     if (!this.curSeg?.dataArray) {
+      debugger
       throw "ASSERT: writeBytePattern called without a segment"
     }
     this.checkPass(2)
@@ -1136,6 +1140,7 @@ export class Assembler {
     this.checkPass(0)
 
     if (!(this.curLine?.statement instanceof MacroInvokeStatement)) {
+      debugger
       throw "ASSERT: invokeMacro called on wrong statement type"
     }
 
@@ -1705,11 +1710,13 @@ export class EvalAssembler extends Assembler {
 
   public opBytes?: number[]
   private modules: Module[]
+  private scopeModule?: Module
 
-  constructor(modules: Module[]) {
+  constructor(modules: Module[], scopeModule?: Module) {
     super(modules[0])
     this.symUtils = undefined
     this.modules = modules
+    this.scopeModule = scopeModule
   }
 
   public override processSymbol_pass0(symExp: exp.SymbolExpression): void {
@@ -1727,10 +1734,15 @@ export class EvalAssembler extends Assembler {
     let foundSym: Symbol | undefined
 
     // search all modules for matching symbol
-    for (let module of this.modules) {
-      foundSym = module.symbolMap.get(symExp.fullName!)
-      if (foundSym) {
-        break
+    if (this.scopeModule) {
+      foundSym = this.scopeModule.symbolMap.get(symExp.fullName!)
+    }
+    if (!foundSym) {
+      for (let module of this.modules) {
+        foundSym = module.symbolMap.get(symExp.fullName!)
+        if (foundSym) {
+          break
+        }
       }
     }
     if (!foundSym) {
@@ -1751,12 +1763,12 @@ export class EvalAssembler extends Assembler {
 
 // TODO: eventually could support .defines, built-in functions, etc.
 
-export function evalOpExpression(project: Project, expStr: string): number[] | undefined {
+export function evalOpExpression(project: Project, scopeModule: Module | undefined, expStr: string): number[] | undefined {
 
   // TODO: scan for type information at end of expStr?
   // TODO: how will extra type info get returned?
 
-  const asm = new EvalAssembler(project.modules)
+  const asm = new EvalAssembler(project.modules, scopeModule)
   const parser = new Parser()
   const statement = parser.reparseStatement(" lda " + expStr, project.syntax)
 

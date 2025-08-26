@@ -572,32 +572,59 @@ export function getCommentHeader(atFile: SourceFile, atLine: number): string | u
       startLine += 1
       break
     }
+
+    // indented comments above the start line are not part of the block
+    if (token.start > 0) {
+      startLine += 1
+      break
+    }
   }
 
   while (startLine < atLine) {
     const sourceLine = atFile.statements[startLine].sourceLine;
-    if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
+    if (sourceLine != ";"  && sourceLine != "*" && sourceLine != "" && !sourceLine.startsWith(";-")) {
       break;
     }
     startLine += 1;
   }
 
-  while (atLine > startLine) {
-    const sourceLine = atFile.statements[atLine - 1].sourceLine;
-    if (sourceLine != ";" && sourceLine != "" && !sourceLine.startsWith(";-")) {
-      break;
+  let postHeader = ""
+  for (let postLine = atLine; postLine < atFile.statements.length; postLine += 1) {
+    const children = atFile.statements[postLine].children
+    const lastToken = children[children.length - 1]
+    if (postHeader && children.length > 1) {
+      break
     }
-    atLine -= 1;
+    if (lastToken && lastToken instanceof Token && lastToken.type == TokenType.Comment) {
+      postHeader += lastToken.getString() + "\n"
+    } else {
+      break
+    }
   }
 
+  if (!postHeader) {
+    while (atLine > startLine) {
+      const sourceLine = atFile.statements[atLine - 1].sourceLine;
+      if (sourceLine != ";"  && sourceLine != "*" && sourceLine != "" && !sourceLine.startsWith(";-")) {
+        break;
+      }
+      atLine -= 1;
+    }
+  }
+
+  let header = ""
   if (startLine != atLine) {
-    let header = ""
     for (let i = startLine; i < atLine; i += 1) {
       const statement = atFile.statements[i]
       header += statement.sourceLine + "  \n"
     }
-    return header
   }
+
+  if (postHeader) {
+    header += postHeader
+  }
+
+  return header ? header : undefined
 }
 
 //------------------------------------------------------------------------------

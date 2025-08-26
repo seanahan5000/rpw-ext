@@ -16,7 +16,7 @@ Features include:
 * Diagnostic errors and warnings
 
 Newest addition:
-* Debug adapter connection to RPW A2 extension
+* Debug adapter protocol connection to RPW A2 extension
 
 Note that no external assembler executable is required for any syntax.
 

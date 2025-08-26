@@ -197,7 +197,7 @@ export class ObjectDoc {
   public sourceFile: SourceFile
 
   // zero or more ranges of memory covered by file
-  private objectRanges: ObjectRange[] = []
+  public objectRanges: ObjectRange[] = []
 
   constructor(sourceFile: SourceFile) {
     this.sourceFile = sourceFile

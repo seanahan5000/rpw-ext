@@ -19,7 +19,7 @@ import {
 
 export let client: LanguageClient
 let statusBarItem: vscode.StatusBarItem
-let decorator: CodeDecorator
+export let decorator: CodeDecorator
 
 export function activate(context: vscode.ExtensionContext) {
 

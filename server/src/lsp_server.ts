@@ -446,7 +446,7 @@ export class LspServer {
         project.update()
       }
 
-      // *** okay to always to this? or only on actual change? ***
+      // *** okay to always do this? or only on actual change? ***
       this.connection.sendNotification("rpw65.syntaxChanged")
 
       this.scheduleDiagnostics(this.updateFile)
@@ -738,42 +738,109 @@ export class LspServer {
         entries: []
       }
 
-      const objectLines = objectDoc.getObjectLines(startLine, endLine)
-      for (let line of objectLines) {
-        let entry: CodeBytesEntry = {}
-        if (line.dataBytes) {
-          entry.a = line.dataAddress
-          if (line.dataBytes.length) {
-            entry.d = []
-            for (let i = 0; i < line.dataBytes.length; i += 1) {
-              entry.d.push(line.dataBytes[i])
-            }
-            if (isa && line.statement instanceof OpStatement) {
-              // dataByte might have error and be negative
-              const opByte = Math.abs(line.dataBytes[0])
-              entry.c = isa.opcodes[opByte].cy
-              if (entry.c == "2/3+") {
-                let pageCross = false
-                if (line.dataAddress && line.dataBytes[1]) {
-                  let offset = line.dataBytes[1]
-                  if (offset > 127) {
-                    offset -= 256
-                  }
-                  const dstPage = (line.dataAddress + 2 + offset) >> 8
-                  pageCross = line.dataAddress >> 8 != dstPage
-                }
-                entry.c = pageCross ? "2/4" : "2/3"
-                // TODO: swap to 4/2 and 3/2 if negative branch
-              } else if (entry.c == "4+") {
-                if (line.dataBytes[1] == 0x00) {
-                  entry.c = "4"
+      let memoryBlocks: Uint8Array[] | undefined
+      let isLoaded = false
+
+      if (this.debugger.isConnected()) {
+        memoryBlocks = []
+        let matchCount = 0
+        let byteCount = 0
+        for (const range of objectDoc.objectRanges) {
+          const memory = await this.debugger.readRam(range.getAddress(range.startLine), range.dataLength)
+          memoryBlocks.push(memory)
+          const endLine = range.endLine
+          for (let i = range.startLine; i < endLine; i += 1) {
+            const dataBytes = range.getDataBytes(i)
+            if (dataBytes) {
+              const dataAddress = range.getAddress(i)
+              // limit large block influence to only first 16 bytes
+              const compareCount = Math.min(dataBytes.length, 16)
+              for (let i = 0; i < compareCount; i += 1) {
+                byteCount += 1
+                const memValue = memory[dataAddress! - range.startAddress + i]
+                if (dataBytes[i] == memValue) {
+                  matchCount += 1
                 }
               }
             }
           }
         }
-        codeBytes.entries.push(entry)
+        if (matchCount / byteCount >= .75) {
+          isLoaded = true
+        }
       }
+
+      for (let i = 0; i < objectDoc.objectRanges.length; i += 1) {
+        const range = objectDoc.objectRanges[i]
+        if (range.endLine <= startLine) {
+          continue
+        }
+        if (range.startLine >= endLine) {
+          break
+        }
+
+        const memory = isLoaded ? memoryBlocks![i] : undefined
+
+        let lineNum = range.startLine
+        while (lineNum < range.endLine) {
+          if (lineNum >= startLine) {
+            let entry: CodeBytesEntry = {}
+
+            const dataBytes = range.getDataBytes(lineNum)
+            if (dataBytes) {
+
+              const dataAddress = range.getAddress(lineNum)
+              entry.a = dataAddress
+
+              if (dataBytes.length > 0) {
+
+                entry.d = []
+                for (let i = 0; i < dataBytes.length; i += 1) {
+                  let value = dataBytes[i]
+                  if (memory) {
+                    const memValue = memory[dataAddress! - range.startAddress + i]
+                    if (value != memValue) {
+                      value = -memValue
+                    }
+                  }
+                  entry.d.push(value)
+                }
+
+                const statement = objectDoc.sourceFile.statements[lineNum]
+                if (isa && statement instanceof OpStatement) {
+                  // dataByte might have error and be negative
+                  const opByte = Math.abs(dataBytes[0])
+                  entry.c = isa.opcodes[opByte].cy
+                  if (entry.c == "2/3+") {
+                    let pageCross = false
+                    if (dataAddress && dataBytes[1]) {
+                      let offset = dataBytes[1]
+                      if (offset > 127) {
+                        offset -= 256
+                      }
+                      const dstPage = (dataAddress + 2 + offset) >> 8
+                      pageCross = dataAddress >> 8 != dstPage
+                    }
+                    entry.c = pageCross ? "2/4" : "2/3"
+                    // TODO: swap to 4/2 and 3/2 if negative branch
+                  } else if (entry.c == "4+") {
+                    if (dataBytes[1] == 0x00) {
+                      entry.c = "4"
+                    }
+                  }
+                }
+              }
+            }
+            codeBytes.entries.push(entry)
+          }
+
+          lineNum += 1
+          if (lineNum >= endLine) {
+            break
+          }
+        }
+      }
+
       return codeBytes
     }
   }
@@ -811,14 +878,25 @@ export class LspServer {
       const res = statement.findExpressionAt(params.position.character)
       if (res) {
 
+        const hoverExp = res.expression
+        if (hoverExp instanceof SymbolExpression) {
+          if (hoverExp.symbol) {
+            const defExp = hoverExp.symbol.definition
+            if (defExp && defExp.sourceFile) {
+              hoverStr = getCommentHeader(defExp.sourceFile, defExp.lineNumber) ?? ""
+            }
+          }
+        }
+
         if (this.debugger.isConnected()) {
           if (statement instanceof OpStatement) {
-            if (res.expression != statement.opExp) {
+            if (hoverExp != statement.opExp) {
               let sourceFile = this.getSourceFile(params.textDocument.uri)
               if (sourceFile) {
-                const debugStr = await this.debugger.buildDebugHover(sourceFile.fullPath, params.position.line)
+                let debugStr = hoverStr
+                debugStr += await this.debugger.buildDebugHover(sourceFile.fullPath, params.position.line)
                 if (debugStr) {
-                  return { contents: debugStr }
+                  return { contents: "```\n" + debugStr + "\n```" }
                 }
               }
             }
@@ -826,26 +904,26 @@ export class LspServer {
         }
 
         if (res.expression instanceof SymbolExpression) {
-          const hoverExp = res.expression
           // TODO: if hovering over macro invocation, show macro contents
           if (hoverExp instanceof SymbolExpression) {
             if (hoverExp.symbol) {
               const defExp = hoverExp.symbol.definition
               if (defExp && defExp.sourceFile) {
-                hoverStr = getCommentHeader(defExp.sourceFile, defExp.lineNumber) ?? ""
-                if (hoverExp.symbol.isConstant) {
-                  const value = hoverExp.resolve()
-                  if (value != undefined) {
-                    hoverStr += hoverExp.getSimpleName().asString
-                      + " = " + value.toString(10)
-                      + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
-                      + ", %" + value.toString(2).padStart(8, "0")
-                  }
-                } else if (hoverExp.symbol.isZPage) {
+                if (hoverExp.symbol.isZPage) {
                   const value = hoverExp.resolve()
                   if (value != undefined) {
                     hoverStr += hoverExp.getSimpleName().asString
                       + " = $" + value.toString(16).padStart(2, "0").toUpperCase()
+                  }
+                } else {
+                  const value = hoverExp.resolve()
+                  if (value != undefined) {
+                    if (hoverExp.symbol.isConstant || value < 256) {
+                      hoverStr += hoverExp.getSimpleName().asString
+                        + " = " + value.toString(10)
+                        + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
+                        + ", %" + value.toString(2).padStart(8, "0")
+                    }
                   }
                 }
               }
@@ -1068,10 +1146,11 @@ export class LspServer {
       if (res && res.expression instanceof SymbolExpression) {
         const symbol = res.expression.symbol
         if (symbol) {
-          symbol.references.forEach(symExp => {
+          const symExps: SymbolExpression[] = [ symbol.definition, ...symbol.references ]
+          symExps.forEach(symExp => {
             const expRange = symExp.getRange()
             if (expRange && symExp.sourceFile) {
-              let location: lsp.Location = {
+              const location: lsp.Location = {
                 uri: URI.file(symExp.sourceFile.fullPath).toString(),
                 range: {
                   start: { line: symExp.lineNumber, character: expRange.start },
@@ -1160,6 +1239,13 @@ export class LspServer {
   }
 
   private updateDiagnostics(sourceFile: SourceFile) {
+
+    // For shared files, only update diagnostics for the instance
+    //  containing statements, else previously set errors/warnings
+    //  will get cleared.
+    if (sourceFile.statements.length == 0) {
+      return
+    }
 
     const diagnostics: lsp.Diagnostic[] = []
     const state: DiagnosticState = { sourceFile, lineNumber: 0, startOffset: 0, endOffset: 0, diagnostics }

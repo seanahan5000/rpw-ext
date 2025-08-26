@@ -69,6 +69,7 @@ export type StackEntry = {
   cycles: number
   dataAddress?: number
   dataString?: string
+  topOfStack?: boolean
 }
 
 export type BreakpointEntry = {
@@ -91,12 +92,13 @@ export interface IMachineDisplay {
 export interface IMachineMemory {
   readConst(address: number): number
   read(address: number, cycleCount: number): number
+  readRam(address: number, length: number): Uint8Array
   write(address: number, value: number, cycleCount: number): void
   writeRam(address: number, data: Uint8Array | number[]): void
 }
 
 export interface IMachineDevice {
-  reset(): void
+  reset(hardReset: boolean): void
   readConst(address: number): number
   read(address: number, cycleCount: number): number
   write(address: number, value: number, cycleCount: number): void
@@ -127,6 +129,12 @@ export interface IMachineIsa {
   isReturn(opByte: number): boolean
 }
 
+export interface ICpuEvents {
+  debug: (error?: string) => void
+  call: () => void
+  return: () => void
+}
+
 export interface IMachineCpu {
   reset(): void
   getPC(): number
@@ -134,13 +142,14 @@ export interface IMachineCpu {
   nextInstruction(): number
 
   // CPU hook support
-  on(name: string, listener: () => void): void
+  on<K extends keyof ICpuEvents>(event: K, listener: ICpuEvents[K]): void
 
   // debugger support
   setRegister(reg: StackRegister): void
   getCallStack(): StackEntry[]
   getRegIndex(opByte: number): number | undefined
   computeAddress(opBytes: number[], useIndex: boolean): OpInfo
+  enableCheckStack(enable: boolean): void
 
   get isa(): IMachineIsa
 }

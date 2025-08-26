@@ -1,5 +1,24 @@
 # RPW 65 Changelog
 
+### [2.0.2] - 2025-08-26
+
+#### Added:
+* Include definition when finding all references
+* Improved comment block extraction for hover
+* imgDir property to project
+* Debugger: Disk image writeback support
+* Debugger: Scope watch variables to stack frame
+* Show modified code bytes in red
+
+#### Fixed:
+* Error/assert statements inside structure/dummy defs and in shared files
+* autoClosingPairs in language-configuration.json
+* Hover over unused labels now shows value
+* Debugger: Hover over ZPAGE now shows header block
+* Debugger: Matching of breakpoints to source files, avoiding aliasing
+* Debugger: ZPAGE hover formatting
+* Debugger: Watch sizing/formatting of arrays
+
 ### [2.0.1] - 2025-08-05
 
 #### Added:
