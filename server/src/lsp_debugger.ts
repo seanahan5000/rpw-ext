@@ -83,7 +83,9 @@ type StopNotification = RequestHeader & {
   error?: string
 }
 
-type SetRegisterRequest = RequestHeader & StackRegister
+type SetRegisterRequest = RequestHeader & StackRegister & {
+  stopCpu?: boolean
+}
 
 type ReadOpMemoryRequest = RequestHeader & {
   opBytes: number[]     // instruction bytes, to determine addressing mode
@@ -532,7 +534,8 @@ class RegisterVariable extends DebugVariable {
       const request: SetRegisterRequest = {
         command: "setRegister",
         name: this.reg.name,
-        value: value
+        value: value,
+        stopCpu: true
       }
       dbg.sendRequest(request)
       this.reg.value = value
@@ -870,7 +873,8 @@ export class LspDebugger {
     const request: SetRegisterRequest = {
       command: "setRegister",
       name: "PC",
-      value: entryPoint
+      value: entryPoint,
+      stopCpu: false
     }
     await this.sendRequest(request)
   }
@@ -1174,7 +1178,8 @@ export class LspDebugger {
     const request: SetRegisterRequest = {
       command: "setRegister",
       name: "PC",
-      value: args.targetId
+      value: args.targetId,
+      stopCpu: true
     }
     this.sendRequest(request)
   }
@@ -1200,27 +1205,29 @@ export class LspDebugger {
       if (entry.dataAddress && entry.dataString) {
         dataRange = new DataRange(entry.dataAddress, base64.toByteArray(entry.dataString))
       }
+
+      entry.topOfStack = (outStackFrames.length == 0)
+      let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
+      const uniqueId = this.stackFrameHandles.create(entry)
+
       const rangeMatch = this.mainProject!.findSourceByAddress(entryPC, dataRange)
       if (rangeMatch) {
-
-        let funcName: string = "$" + entryPC.toString(16).toUpperCase().padStart(4, "0")
-
         const result = this.findProcLabel(rangeMatch, entry.proc)
         if (result) {
           funcName += ": " + result.statement.labelExp!.getString()
           funcName += "+$" + (entryPC - result.baseAddress).toString(16).toUpperCase().padStart(2, "0")
         }
 
+        (entry as any).objectDoc = rangeMatch.objectDoc
+
         const sourceFile = rangeMatch.objectDoc.sourceFile
         const source = new Source(
           path.posix.basename(sourceFile.fullPath),
           sourceFile.fullPath)
 
-        entry.topOfStack = (outStackFrames.length == 0);
-        (entry as any).objectDoc = rangeMatch.objectDoc
-
-        const uniqueId = this.stackFrameHandles.create(entry)
         outStackFrames.push(new StackFrame(uniqueId, funcName, source, rangeMatch.sourceLine + 1))
+      } else {
+        outStackFrames.push(new StackFrame(uniqueId, funcName))
       }
     }
 

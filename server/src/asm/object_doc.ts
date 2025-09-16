@@ -255,7 +255,7 @@ export class ObjectDoc {
       }
       // NOTE: dataRange could partially overlap objRange but dataPC may not
       const sourceLine = objRange.getLine(dataPC)
-      if (sourceLine) {
+      if (sourceLine != undefined) {
         matches.push({
           objectDoc: this,
           sourceLine,

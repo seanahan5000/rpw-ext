@@ -1,5 +1,11 @@
 # RPW 65 Changelog
 
+### [2.0.3] - 2025-09-16
+
+#### Fixed:
+* Debugger: Address to source file/line problems
+* Debugger: Stopping CPU when setting registers
+
 ### [2.0.2] - 2025-08-26
 
 #### Added:
