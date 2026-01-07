@@ -78,7 +78,12 @@ export class RpwDebugSession extends DebugSession {
     this.setDebuggerColumnsStartAt1(false)
 
     client.onNotification("rpw65.debuggerStarted", () => {
-      this.sendEvent(new ContinuedEvent(1))
+      // NOTE: This delay is needed to adjust for the
+      //  stopping delay below.  Without out, a quick stop/start
+      //  gets reordered to start/stop
+      setTimeout(() => {
+        this.sendEvent(new ContinuedEvent(1))
+      }, 100)
     })
 
     client.onNotification("rpw65.debuggerStopped", (params) => {
@@ -154,7 +159,7 @@ export class RpwDebugSession extends DebugSession {
 
     const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
       command: "rpw65.debugger",
-      arguments: [ "launch", args ]
+      arguments: ["launch", args]
     })
 
     // NOTE: This wait for all initial configuration
@@ -176,7 +181,7 @@ export class RpwDebugSession extends DebugSession {
 
     const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
       command: "rpw65.debugger",
-      arguments: [ "attach", args ]
+      arguments: ["attach", args]
     })
 
     // NOTE: This wait for all initial configuration

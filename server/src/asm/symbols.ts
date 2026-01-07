@@ -103,7 +103,7 @@ export class Symbol {
     this.from = from
   }
 
-  resolve(): number | undefined {
+  resolve(): number | number[] | undefined {
     return this.value?.resolve()
   }
 

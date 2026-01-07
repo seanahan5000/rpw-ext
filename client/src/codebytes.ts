@@ -1,28 +1,97 @@
 
 import * as vscode from 'vscode'
-import * as vsclnt from 'vscode-languageclient'
-import { client } from "./extension"
+import * as base64 from 'base64-js'
+import { ObjectBytesChangedParams, openDocs } from "./extension"
 
 //------------------------------------------------------------------------------
-// TODO: figure out how to share this with lsp_server
 
-type GetCodeBytesArgs = {
-  startLine?: number
-  endLine?: number
-  cycleCounts?: boolean
-}
-
-export type CodeBytesEntry = {
-  a?: number      // address
-  d?: number[]    // data bytes
-  c?: string      // cycle count ("3", "2/3", "4+", etc.)
-}
-
-// response to GetCodeBytes
-type CodeBytes = {
+export type LineRange = {
   startLine: number
-  cycleCounts?: boolean
-  entries: CodeBytesEntry[]
+  endLine: number
+}
+
+// code bytes is the decoded version of object bytes
+type CodeBytesRange = {
+  startLine: number
+  startAddress: number
+  offsets: number[]     // length == line count + 1
+  dataArray: number[]
+  dataBytes: Uint8Array
+  refDataBytes?: Uint8Array
+  cycleCounts?: string[]
+}
+
+type CodeBytes = {
+  ranges: CodeBytesRange[]
+}
+
+function decodeObjectRanges(obParams: ObjectBytesChangedParams): CodeBytes {
+
+  let codeBytes: CodeBytes = {
+    ranges: []
+  }
+
+  for (const obRange of obParams.ranges) {
+
+    let offsets: number[] | undefined
+    if (obRange.offsetsString) {
+      offsets = []
+      const offsetsDataBytes = base64.toByteArray(obRange.offsetsString)
+      for (let i = 0; i < offsetsDataBytes.length; i += 1) {
+        let value = offsetsDataBytes[i]
+        if (value >= 254) {
+          while (true) {
+            let nextValue = offsetsDataBytes[++i]
+            value += nextValue
+            if (nextValue != 254) {
+              break
+            }
+          }
+        }
+        offsets.push(value)
+      }
+    }
+
+    let dataBytes: Uint8Array | undefined
+    let dataArray: number[] | undefined
+    if (obRange.dataString) {
+      dataBytes = base64.toByteArray(obRange.dataString)
+      dataArray = new Array(...dataBytes)
+    }
+
+    let refDataBytes: Uint8Array | undefined
+    if (obRange.refDataString) {
+      refDataBytes = base64.toByteArray(obRange.refDataString)
+      for (let i = 0; i < dataArray.length; i += 1) {
+        if (refDataBytes[i] != dataBytes[i]) {
+          dataArray[i] = -dataArray[i]
+        }
+      }
+    }
+
+    let cycleCounts: string[] | undefined
+    if (obRange.cyclesString) {
+      const cyclesIndexes = base64.toByteArray(obRange.cyclesString)
+      cycleCounts = []
+      for (let i = 0; i < cyclesIndexes.length; i += 1) {
+        cycleCounts.push(obParams.cyclesNames![cyclesIndexes[i]])
+      }
+    }
+
+    if (offsets) {
+      const cbRange: CodeBytesRange = {
+        startLine: obRange.startLine,
+        startAddress: obRange.startAddress,
+        offsets,
+        dataArray,
+        dataBytes,
+        refDataBytes,
+        cycleCounts
+      }
+      codeBytes.ranges.push(cbRange)
+    }
+  }
+  return codeBytes
 }
 
 //------------------------------------------------------------------------------
@@ -32,128 +101,110 @@ class CodeLine {
   private codeList: CodeList
   public codeStr?: string
   public errStr?: string
-  public cyclesStr?: string
 
   constructor(codeList: CodeList) {
     this.codeList = codeList
-    this.rebuildContents()
+    this.clearDecContent()
   }
 
-  public buildDecorations(entry: CodeBytesEntry) {
-    this.rebuildContents(entry.a, entry.d, entry.c)
+  public clearDecContent() {
+    this.codeStr = this.codeList.getEmptyCodeStr()
+    this.errStr = undefined
   }
 
-  public clearDecorations() {
-    if (this.codeList.showCodeBytes) {
-      this.codeStr = this.getEmptyCodeStr()
-      this.errStr = undefined
+  public buildDecContent(
+      address: number,
+      dataArray: number[],
+      offset: number,
+      length: number,
+      cycleCount?: string) {
+
+    if (length == 0) {
+      this.clearDecContent()
+      return
     }
-    if (this.codeList.showCycleCounts) {
-      this.cyclesStr = "\xA0\xA0\xA0\xA0\xA0"
-    }
-  }
 
-  private rebuildContents(address?: number, dataBytes?: (number | undefined)[], cycleCount?: string) {
+    this.codeStr = undefined
+    this.errStr = undefined
 
     if (this.codeList.showCodeBytes) {
 
-      // address is "0000:" or "????:"
-      let addressStr = address?.toString(16).toUpperCase() ?? "????"
+      let addressStr = address.toString(16).toUpperCase()
       if (addressStr.length <= 2) {
         addressStr = addressStr.padStart(2, "0").padStart(4, "\xA0") + ":"
       } else {
         addressStr = addressStr.padStart(4, "0") + ":"
       }
 
-      this.errStr = undefined
-
-      if (dataBytes) {
-
-        this.codeStr = addressStr
-        for (let i = 0; i < 3; i += 1) {
-          if (i < dataBytes.length) {
-            if (dataBytes[i] === undefined) {
-              this.syncStrings()
-              this.codeStr += "\xA0??"
-              continue
-            }
-            let byteValue = dataBytes[i]
-            if (byteValue < 0) {
-              byteValue = -byteValue
-              if (!this.errStr) {
-                this.errStr = ""
-              }
-            }
-            this.syncStrings()
-            const byteStr = "\xA0" + byteValue.toString(16).toUpperCase().padStart(2, "0")
-            if (byteValue == dataBytes[i]) {
-              this.codeStr += byteStr
-            } else {
-              this.errStr += byteStr
-            }
-          } else {
-            this.syncStrings()
-            this.codeStr += "\xA0\xA0\xA0"
-          }
-        }
-
-        // check remaining data
-        if (dataBytes.length > 3) {
-
-          // scan remaining bytes for errors
-          let inRemaining = false
-          for (let i = 3; i < dataBytes.length; i += 1) {
-            if (dataBytes[i] < 0) {
-              inRemaining = true
-              if (this.errStr === undefined) {
-                this.errStr = ""
-              }
-              break
+      this.codeStr = addressStr
+      for (let i = 0; i < 3; i += 1) {
+        if (i < length) {
+          let byteValue = dataArray[i + offset]
+          if (byteValue < 0) {
+            byteValue = -byteValue
+            if (!this.errStr) {
+              this.errStr = ""
             }
           }
-
-          // if error found, draw "+" in red
           this.syncStrings()
-          if (inRemaining) {
-            this.errStr += "+"
+          const byteStr = "\xA0" + byteValue.toString(16).toUpperCase().padStart(2, "0")
+          if (byteValue == dataArray[i + offset]) {
+            this.codeStr += byteStr
           } else {
-            this.codeStr += "+"
+            this.errStr += byteStr
           }
-
         } else {
           this.syncStrings()
-          this.codeStr += "\xA0"
-        }
-
-        this.syncStrings()
-        this.codeStr += "\xA0\xA0"
-
-        // final sync
-        this.syncStrings()
-
-      } else {
-        if (address === undefined) {
-          this.codeStr = this.getEmptyCodeStr()
-        } else {
-          this.codeStr = addressStr.padEnd(5 + 3 + 3 + 3 + 1 + 2, "\xA0")
+          this.codeStr += "\xA0\xA0\xA0"
         }
       }
+
+      // check remaining data
+      if (length > 3) {
+
+        // scan remaining bytes for errors
+        let inRemaining = false
+        for (let i = 3; i < length; i += 1) {
+          if (dataArray[i + offset] < 0) {
+            inRemaining = true
+            if (this.errStr === undefined) {
+              this.errStr = ""
+            }
+            break
+          }
+        }
+
+        // if error found, draw "+" in red
+        this.syncStrings()
+        if (inRemaining) {
+          this.errStr += "+"
+        } else {
+          this.codeStr += "+"
+        }
+
+      } else {
+        this.syncStrings()
+        this.codeStr += "\xA0"
+      }
+
+      this.syncStrings()
+      this.codeStr += "\xA0\xA0"
+
+      // final sync
+      this.syncStrings()
     }
 
     if (this.codeList.showCycleCounts) {
-      if (cycleCount) {
-        this.cyclesStr = cycleCount.padEnd(5, "\xA0")
-      } else {
-        this.cyclesStr = "\xA0\xA0\xA0\xA0\xA0"
+      if (this.codeStr == undefined) {
+        this.codeStr = ""
       }
+      if (cycleCount) {
+        this.codeStr += cycleCount.padEnd(5, "\xA0")
+      } else {
+        this.codeStr += "\xA0\xA0\xA0\xA0\xA0"
+      }
+      this.syncStrings()
     }
-  }
-
-  private getEmptyCodeStr(): string {
-    if (!this.codeList.emptyCodeStr) {
-      this.codeList.emptyCodeStr = "".padEnd(5 + 3 + 3 + 3 + 1 + 2, "\xA0")
-    }
-    return this.codeList.emptyCodeStr
   }
 
   private syncStrings() {
@@ -175,14 +226,15 @@ class CodeList {
   public editor: vscode.TextEditor
   public showCodeBytes: boolean
   public showCycleCounts: boolean
+  public codeBytes?: CodeBytes
   private codeLines: CodeLine[]
+  private activeRange?: LineRange
 
   private codeDecType: vscode.TextEditorDecorationType
   private errorDecType: vscode.TextEditorDecorationType
-  private cyclesDecType: vscode.TextEditorDecorationType
 
   // cached for use by CodeLines
-  public emptyCodeStr: string = ""
+  private emptyCodeStr: string = ""
 
   constructor(editor: vscode.TextEditor, showCodeBytes: boolean, showCycleCounts: boolean) {
     this.editor = editor
@@ -206,29 +258,123 @@ class CodeList {
         color: "red"
       }
     })
-    this.cyclesDecType = vscode.window.createTextEditorDecorationType({
-      before: {
-        color: "gray"
+  }
+
+  public setShowFlags(showCodeBytes: boolean, showCycleCounts: boolean) {
+    this.showCodeBytes = showCodeBytes
+    this.showCycleCounts = showCycleCounts
+    this.emptyCodeStr = ""
+  }
+
+  public getEmptyCodeStr(): string | undefined {
+    if (this.showCodeBytes || this.showCycleCounts) {
+      if (!this.emptyCodeStr) {
+        let padCount = 5 + 3 + 3 + 3 + 1 + 2
+        if (this.showCycleCounts) {
+          padCount += 5
+        }
+        this.emptyCodeStr = "".padEnd(padCount, "\xA0")
       }
-    })
+      return this.emptyCodeStr
+    }
   }
 
   public dispose() {
     this.codeDecType.dispose()
     this.errorDecType.dispose()
-    this.cyclesDecType.dispose()
   }
 
-  public applyCodeBytes(codeBytes: CodeBytes) {
-    for (let i = 0; i < codeBytes.entries.length; i += 1) {
-      const codeLine = this.codeLines[codeBytes.startLine + i]
-      if (codeLine) {
-        codeLine.buildDecorations(codeBytes.entries[i])
+  public changeActiveRange(visibleRanges: readonly vscode.Range[]) {
+
+    const fullRange = this.getVisibleRange(visibleRanges)
+    let newRange: LineRange | undefined
+
+    if (fullRange) {
+      // TODO: incorporate scroll direction?
+      newRange = {
+        startLine: Math.max(fullRange.startLine - 100, 0),
+        endLine: Math.min(fullRange.endLine + 100, this.codeLines.length)
+      }
+    }
+
+    if (!this.activeRange || !newRange ||
+        newRange.startLine < this.activeRange.startLine ||
+        newRange.endLine > this.activeRange.endLine) {
+
+      this.clearActiveRange()
+      this.activeRange = newRange
+      if (this.codeBytes) {
+        this.updateActiveRange()
+      }
+      this.setDecorations(0, this.codeLines.length)
+    }
+  }
+
+  private getVisibleRange(visibleRanges: readonly vscode.Range[]): LineRange | undefined {
+    let fullRange: LineRange | undefined
+    for (const range of visibleRanges) {
+      const rangeStart = Math.max(range.start.line - 1, 0)
+      const rangeEnd = range.end.line + 1
+      if (!fullRange) {
+        fullRange = { startLine: rangeStart, endLine: rangeEnd }
+      } else {
+        if (fullRange.startLine > rangeStart) {
+          fullRange.startLine = rangeStart
+        }
+        if (fullRange.endLine < rangeEnd) {
+          fullRange.endLine = rangeEnd
+        }
+      }
+    }
+    return fullRange
+  }
+
+  private clearActiveRange() {
+    if (this.activeRange) {
+      for (let i = this.activeRange.startLine; i < this.activeRange.endLine; i += 1) {
+        this.codeLines[i].clearDecContent()
+      }
+      this.activeRange = undefined
+    }
+  }
+
+  public updateActiveRange() {
+    if (this.codeBytes && this.activeRange) {
+
+      let lineIndex = this.activeRange.startLine
+
+      for (const range of this.codeBytes.ranges) {
+
+        if (range.startLine + range.offsets.length - 1 <= lineIndex) {
+          continue
+        }
+
+        const startIndex = range.startLine
+        const endIndex = startIndex + range.offsets.length - 1
+        for (let i = lineIndex; i < endIndex; i += 1) {
+
+          const codeLine = this.codeLines[i]
+          const offset = range.offsets[i - startIndex]
+          const length = range.offsets[i - startIndex + 1] - offset
+          codeLine?.buildDecContent(
+            range.startAddress + offset,
+            range.dataArray,
+            offset,
+            length,
+            range.cycleCounts[i - startIndex])
+
+          lineIndex += 1
+          if (lineIndex == this.activeRange.endLine) {
+            return
+          }
+        }
       }
     }
   }
 
-  public applyEdits(changes: readonly vscode.TextDocumentContentChangeEvent[]) {
+  public applyEdits(changes: readonly vscode.TextDocumentContentChangeEvent[]): number {
+
+    let totalRemoved = 0
 
     for (let change of changes) {
 
@@ -241,6 +387,7 @@ class CodeList {
       const linesRemoved = endLineInc - startLine + 1
       const linesAdded = newLines.length
       const linesDelta = linesAdded - linesRemoved
+      totalRemoved += linesRemoved
 
       let clearStart = startLine
       let clearEnd = endLineInc + 1
@@ -280,7 +427,7 @@ class CodeList {
         }
       }
 
-      this.clearDecorations(clearStart, clearEnd - clearStart)
+      this.clearDecContent(clearStart, clearEnd - clearStart)
 
       if (linesDelta > 0) {
         const newSlots: CodeLine[] = []
@@ -293,52 +440,42 @@ class CodeList {
       }
     }
 
-    const visibleRange = this.getVisibleRange()
-    this.setDecorations(visibleRange.start, visibleRange.end)
+    // After an edit is is just setting decorations that could
+    //  currenty be seen.  All other lines will appear left-aligned
+    //  because they have no decoration.
+    const visibleRange = this.getVisibleRange(this.editor.visibleRanges)
+    this.setDecorations(visibleRange.startLine ?? 0, visibleRange.endLine ?? 0)
+    this.codeBytes = undefined
+
+    return totalRemoved
   }
 
-  private clearDecorations(startLine: number, count: number) {
+  public clearDecContent(startLine: number, count: number) {
     for (let i = startLine; i < startLine + count; i += 1) {
       if (this.codeLines[i]) {
-        this.codeLines[i].clearDecorations()
+        this.codeLines[i].clearDecContent()
       }
     }
-  }
-
-  public getVisibleRange(): { start: number, end: number } {
-    // Flatten visible ranges into a single range
-    //  and pad to cover partial lines.
-    let start = 999999
-    let end = -1
-    for (let range of this.editor.visibleRanges) {
-      if (start > range.start.line) {
-        start = Math.max(range.start.line - 1, 0)
-      }
-      if (end < range.end.line) {
-        end = range.end.line + 1
-      }
-    }
-    if (end < start) {
-      end = start
-    }
-    return { start, end }
   }
 
   public setDecorations(visibleStart: number, visibleEnd: number) {
 
     let codeDecOptions: vscode.DecorationOptions[] = []
     let errDecOptions: vscode.DecorationOptions[] = []
-    let cyclesDecOptions: vscode.DecorationOptions[] = []
 
-    if (visibleEnd > this.codeLines.length) {
-      visibleEnd = this.codeLines.length
-    }
+    if (this.showCodeBytes || this.showCycleCounts) {
 
-    for (let i = visibleStart; i < visibleEnd; i += 1) {
+      if (visibleEnd > this.codeLines.length) {
+        visibleEnd = this.codeLines.length
+      }
 
-      const codeLine = this.codeLines[i]
+      const margin = (this.showCodeBytes ? 17 : 0) + (this.showCycleCounts ? 5 : 0)
+      const marginStr = `0 0 0 -${margin}ch`
 
-      if (this.showCodeBytes) {
+      for (let i = visibleStart; i < visibleEnd; i += 1) {
+
+        const codeLine = this.codeLines[i]
+
         if (codeLine.codeStr) {
           codeDecOptions.push({
             range: new vscode.Range(i, 0, i, 0),
@@ -355,21 +492,8 @@ class CodeList {
             range: new vscode.Range(i, 0, i, 0),
             renderOptions: {
               before: {
-                margin: "0 0 0 -17ch",
+                margin: marginStr,
                 contentText: codeLine.errStr
-              }
-            }
-          })
-        }
-      }
-
-      if (this.showCycleCounts) {
-        if (codeLine.cyclesStr) {
-          cyclesDecOptions.push({
-            range: new vscode.Range(i, 0, i, 0),
-            renderOptions: {
-              before: {
-                contentText: codeLine.cyclesStr
               }
             }
           })
@@ -379,7 +503,6 @@ class CodeList {
 
     this.editor.setDecorations(this.codeDecType, codeDecOptions)
     this.editor.setDecorations(this.errorDecType, errDecOptions)
-    this.editor.setDecorations(this.cyclesDecType, cyclesDecOptions)
   }
 }
 
@@ -407,8 +530,8 @@ export class CodeDecorator {
     this.enable(this.showCodeBytes, cycleCounts)
   }
 
-  private async enable(codeBytes: boolean, cycleCounts: boolean) {
-    if (this.showCodeBytes != codeBytes || this.showCycleCounts != cycleCounts) {
+  private async enable(showCodeBytes: boolean, showCycleCounts: boolean) {
+    if (this.showCodeBytes != showCodeBytes || this.showCycleCounts != showCycleCounts) {
 
       if (this.updateId !== undefined) {
         clearTimeout(this.updateId)
@@ -417,10 +540,49 @@ export class CodeDecorator {
 
       await this.updateComplete
 
-      this.showCodeBytes = codeBytes
-      this.showCycleCounts = cycleCounts
+      this.showCodeBytes = showCodeBytes
+      this.showCycleCounts = showCycleCounts
       this.scheduleUpdate(undefined, true)
     }
+  }
+
+  private findCodeList(editor: vscode.TextEditor): CodeList | undefined {
+    for (const codeList of this.codeLists) {
+      if (codeList.editor == editor) {
+        return codeList
+      }
+    }
+  }
+
+  // update newly visible editors with empty lines as early as possible
+  //  to minimize left to right jumping
+  public updateVisibleEditors() {
+    if (this.showCodeBytes || this.showCycleCounts) {
+      for (const editor of vscode.window.visibleTextEditors) {
+        if (editor.document.languageId == "rpw65") {
+          let codeList = this.findCodeList(editor)
+          if (!codeList) {
+            codeList = new CodeList(editor, this.showCodeBytes, this.showCycleCounts)
+            this.codeLists.push(codeList)
+
+            // NOTE: This sets every line in the source file to empty, regardless
+            //  of visibility. At this point, visibility ranges aren't valid and
+            //  it doesn't appear to make any performance difference if some
+            //  versus all the lines are set to empty.
+            codeList.setDecorations(0, editor.document.lineCount)
+          }
+
+          codeList.changeActiveRange(editor.visibleRanges)
+        }
+      }
+    }
+  }
+
+  // NOTE: called whenever the visible range of a document changes,
+  //  normally after a scroll operation
+  public changeActiveRange(editor: vscode.TextEditor, visibleRanges: readonly vscode.Range[]) {
+    const codeList = this.findCodeList(editor)
+    codeList?.changeActiveRange(visibleRanges)
   }
 
   public scheduleUpdate(timeout?: number, forceUpdate = false) {
@@ -434,12 +596,10 @@ export class CodeDecorator {
       const updateTimeout = timeout ?? 10
       this.updateId = setTimeout(async () => {
 
-        await this.updateComplete
-
         clearTimeout(this.updateId)
         delete this.updateId
 
-        this.updateComplete = this.updateDecorations()
+        this.updateDecorations()
 
       }, updateTimeout)
     }
@@ -451,12 +611,33 @@ export class CodeDecorator {
 
     if (this.showCodeBytes || this.showCycleCounts) {
 
-      await this.updateComplete
+      // await this.updateComplete
 
+      let largeDelete = false
       for (let codeList of this.codeLists) {
         if (codeList.editor.document == document) {
-          codeList.applyEdits(changes)
+          const linesRemoved = codeList.applyEdits(changes)
+          if (linesRemoved > 4) {
+            largeDelete = true
+          }
         }
+      }
+
+      // NOTE: at this point, only the visible lines have any decorations
+
+      // When deleting large chunks of text with code decorators,
+      //  counteract the big scroll to the right caused by the
+      //  remaining decorators.
+      // NOTE: This seems like a VSCode bug because it does do
+      //  the correct thing when deleting text but not when cutting
+      //  it or redoing a cut.
+      if (largeDelete) {
+        const editor = vscode.window.activeTextEditor
+        setTimeout(() => {
+          const pos = editor.selection.active
+          const range = new vscode.Range(pos, pos)
+          editor.revealRange(range)
+        }, 0)
       }
 
       // longer delay after text changes
@@ -464,94 +645,53 @@ export class CodeDecorator {
     }
   }
 
-  private async updateDecorations() {
+  private updateDecorations() {
 
-    const editors = vscode.window.visibleTextEditors
+    // build list of visible editors with the active editor first
+    const editors = [...vscode.window.visibleTextEditors]
     const activeEditor = vscode.window.activeTextEditor
-    const newLists: CodeList[] = []
-
-    for (let i = -1; i < editors.length; i += 1) {
-
-      // favor active editor among visible editors
-      let editor: vscode.TextEditor
-      if (i < 0) {
-        editor = activeEditor
-        if (!editor) {
-          continue
+    for (let i = 0; i < editors.length; i += 1) {
+      if (editors[i] == activeEditor) {
+        if (i > 0) {
+          editors.splice(i, 1)
+          editors.unshift(activeEditor)
         }
-      } else {
-        editor = editors[i]
-        if (editor == activeEditor) {
-          continue
-        }
+        break
       }
+    }
 
+    // move still-visible lists into newList
+    const newLists: CodeList[] = []
+    for (const editor of editors) {
       if (editor.document.languageId == "rpw65") {
-
-        let codeList: CodeList | undefined
-
         for (let i = 0; i < this.codeLists.length; i += 1) {
-          const list = this.codeLists[i]
-          if (list.editor == editor) {
-            codeList = list
-            codeList.showCodeBytes = this.showCodeBytes
-            codeList.showCycleCounts = this.showCycleCounts
+          const codeList = this.codeLists[i]
+          if (codeList.editor == editor) {
+            // remove lists from current set and add to newList
+            //  (for editors that remain visible after update)
+            codeList.setShowFlags(this.showCodeBytes, this.showCycleCounts)
             this.codeLists.splice(i, 1)
             newLists.push(codeList)
             break
           }
         }
-
-        let visRange = codeList?.getVisibleRange()
-
-        if (!codeList) {
-          codeList = new CodeList(editor, this.showCodeBytes, this.showCycleCounts)
-          visRange = codeList.getVisibleRange()
-          codeList.setDecorations(visRange.start, visRange.end)
-          newLists.push(codeList)
-        }
-
-        // update just the visible lines first, for fast refresh
-
-        const request = {
-          command: "rpw65.getCodeBytes",
-          arguments: []
-        }
-        request.arguments.push(editor.document.uri.toString())
-        request.arguments.push({ startLine: visRange.start, endLine: visRange.end, cycleCounts: this.enableCycleCounts })
-
-        const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, request)
-        if (content) {
-          codeList.applyCodeBytes(content)
-          codeList.setDecorations(visRange.start, visRange.end)
-        }
-
-        // do a final full refresh
-
-        const lineCount = codeList.editor.document.lineCount
-        if (visRange.start > 0 || visRange.end < lineCount) {
-
-          const request = {
-            command: "rpw65.getCodeBytes",
-            arguments: []
-          }
-          request.arguments.push(editor.document.uri.toString())
-          request.arguments.push({ cycleCounts: this.showCycleCounts })
-
-          const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, request)
-          if (content) {
-            codeList.applyCodeBytes(content)
-          }
-
-          codeList.setDecorations(0, lineCount)
-        }
       }
     }
 
-    for (let codeList of this.codeLists) {
-      codeList.dispose()
+    // apply objectBytes data to each code list and then update visible decorators
+    for (const codeList of newLists) {
+      const state = openDocs.get(codeList.editor.document.uri.toString())
+      if (state?.objectState) {
+        codeList.codeBytes = decodeObjectRanges(state.objectState)
+      }
+      codeList.updateActiveRange()
+      codeList.setDecorations(0, codeList.editor.document.lineCount)
     }
 
+    // dispose lists not moved to newLists (those that are no longer visible)
+    for (const codeList of this.codeLists) {
+      codeList.dispose()
+    }
     this.codeLists = newLists
   }
 }

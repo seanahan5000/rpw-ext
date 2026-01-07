@@ -1,5 +1,34 @@
 # RPW 65 Changelog
 
+### [2.0.4] - 2026-xx-xx
+
+Rewrite object bytes and cycle counts decorator mechanism for performance.
+Automatically determine tab tops and upper/lower case, deprecating associated project settings.
+
+#### Added:
+* a78Header section to project file
+* Prepend Atari 7800 header to binary when saving as .a78 file
+* Write assembly results to bin directory
+* Debugger: Show cpu cycle delta
+* DASM: Support RORG and REND
+* DASM: Support ORG fill value
+
+#### Fixed:
+* Unneeded reparsing on file open, tab change
+* Hover over structure labels not showing values
+* DASM: Generate data for strings in .byte and dc.b statements
+* DASM: Mark closing quote as error on string constant
+* DASM: Apply opcode suffix to code generation (lda.w, etc.)
+* DASM: Fill bytes when switching between SEG.U and SEG
+* DASM: ifconst and ifnconst with undefined symbols
+* Editor: Force cursor visible after large cut of text with codeByte decorators
+* Editor: Suppress trailing space on auto-completes for LSR, ROR, etc.
+* Editor: Handling of trigger characters in completion suggestions
+* Debugger: Watch arrays with empty dimensions ("$1000:[]", "$1000[][4]" etc.)
+
+#### Changed:
+* Hover over label definition no longer shows comment header block
+
 ### [2.0.3] - 2025-09-16
 
 #### Fixed:

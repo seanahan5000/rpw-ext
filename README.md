@@ -64,7 +64,3 @@ NOTE: Some functionality is disabled when when source files aren't part of a pro
 Variable tabbing command doesn't work correctly on files using tabs instead of spaces.
 
 There are still gaps in syntax parsing that may incorrectly report errors, particularly for less frequently used options.  Error hiliting can be turned off by unchecking the "Hilite syntax errors" option in the RPW 65 settings.
-
-### Request for Feedback
-
-This is a work in progress, driven mostly by my own development needs.  If you install the extension and don't find it useful, I'd be interested in knowing what additions or changes would make it useful to you.  And of course, if you're using the extension and have suggestions for improvements, please report those as well.  Thanks!

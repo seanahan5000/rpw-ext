@@ -1,10 +1,10 @@
 
 import * as fs from 'fs'
 import { RpwProject, RpwSettings, RpwDefine, RpwBin } from "../shared/rpw_types"
-import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
+import { Syntax, SyntaxMap, SyntaxNames } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
-import { Parser } from "./parser"
+import { Parser, ParserStats } from "./parser"
 import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
@@ -29,12 +29,20 @@ export class SourceFile {
   public statements: Statement[] = []
   // TODO: displayName for progress/error messages?
 
+  public tabStops: number[] = [0,0,0,0]
+  public opcodeUpperCase: boolean = false
+  public keywordUpperCase: boolean = false
+
   constructor(module: Module, fullPath: string, isShared: boolean, lines: string[]) {
     this.project = module.project
     this.fullPath = fullPath
     this.lines = lines
     this.isShared = isShared
     this.modules.push(module)
+  }
+
+  public get syntaxName(): string {
+    return SyntaxNames[this.project.syntax]
   }
 
   public getSymbolMap(): SymbolMap {
@@ -48,7 +56,13 @@ export class SourceFile {
     //  for normal source files included multiple times.
     if (!this.statements.length) {
       const parser = new Parser()
-      this.statements = parser.parseStatements(this, this.lines, syntaxStats)
+      const stats = new ParserStats(syntaxStats)
+
+      this.statements = parser.parseStatements(this, this.lines, stats)
+
+      this.tabStops = stats.getTabStops() ?? [0,0,0,0]
+      this.opcodeUpperCase = stats.opcodeUpperCase ?? false
+      this.keywordUpperCase = stats.keywordUpperCase ?? false
     }
     return this.statements
   }
@@ -58,15 +72,12 @@ export class SourceFile {
 
 export class Project {
 
-  private rpwProject?: RpwProject
+  public rpwProject?: RpwProject
   private defaultSettings?: RpwSettings
   private inferredSyntax = Syntax.UNKNOWN
 
   public syntax = Syntax.UNKNOWN
   public syntaxDef = SyntaxDefs[Syntax.UNKNOWN]
-  public upperCase: boolean = true
-  public tabSize = 4
-  public tabStops = [0, 16, 20, 40]
   public caseSensitive?: boolean    // overrides syntax definition
 
   public defines: RpwDefine[] = []
@@ -205,7 +216,7 @@ export class Project {
     const defaults = this.defaultSettings
     const settings = this.rpwProject?.settings
 
-    const syntaxName = settings?.syntax ?? defaults?.syntax
+    const syntaxName = settings?.syntax ?? this.rpwProject?.assembler ?? defaults?.syntax
     if (syntaxName) {
       const syntax = SyntaxMap.get(syntaxName.toUpperCase())
       if (!syntax) {
@@ -217,14 +228,8 @@ export class Project {
     }
     this.syntaxDef = SyntaxDefs[this.syntax]
 
-    this.upperCase = settings?.upperCase ?? defaults?.upperCase ?? true
-    this.tabSize = settings?.tabSize ?? defaults?.tabSize ?? 4
-    this.tabStops = settings?.tabStops ?? defaults?.tabStops ?? [0, 16, 20, 40]
-    if (this.tabStops[0] != 0) {
-      this.tabStops.unshift(0)
-    }
-
     // optional override, not a hard setting
+    // TODO: is the needed anymore?
     this.caseSensitive = settings?.caseSensitive
   }
 
@@ -439,6 +444,7 @@ export class Project {
   public async binLoadProject(dbg: LspDebugger) {
 
     let entryPoint: number | undefined
+    let firstBinAddr: number | undefined
 
     // loadProject should have already set this
     if (!this.rpwProject) {
@@ -454,7 +460,7 @@ export class Project {
           const writeProtected = imageEntry.readonly || false
           if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
             const binBytes = fs.readFileSync(fullPath)
-            dbg.setDiskImage(fullPath, binBytes, drive - 1, writeProtected)
+            dbg.setDataImage(fullPath, binBytes, drive - 1, writeProtected)
           } else {
             throw new Error(`Failed to open disk image: ${fullPath}`)
           }
@@ -488,13 +494,13 @@ export class Project {
                 }
                 // if no entryPoint provided, default to address of first bin
                 //  (but don't allow 0xD000 bank 2)
-                if (!entryPoint) {
-                  entryPoint = binAddr
+                if (!firstBinAddr) {
+                  firstBinAddr = binAddr
                 }
                 if (binAddr >= 0xD000 && binAddr <= 0xDFFF && rpwBin.bank == 2) {
                   binAddr -= 0x1000
                 }
-                await dbg.writeRam(binAddr, binBytes)
+                await dbg.writeRange(binAddr, binBytes)
               } else {
                 throw new Error(`Missing preload binary: ${fullPath}`)
               }
@@ -526,19 +532,26 @@ export class Project {
                   throw new Error(`Invalid patch ${patch.address} value ${patchValStr}`)
                 }
               }
-              await dbg.writeRam(patchAddr, patchVals)
+              await dbg.writeRange(patchAddr, patchVals)
             }
           }
         }
       }
     }
 
+    if (entryPoint == undefined) {
+      entryPoint = firstBinAddr
+    }
     if (entryPoint != undefined) {
-      dbg.setEntryPoint(entryPoint)
+      if (entryPoint == 0xfffc) {
+        await dbg.softReset()
+      } else {
+        await dbg.setEntryPoint(entryPoint)
+      }
     }
 
     // TODO: make checkStack a project parameter?
-    dbg.setParameter("checkStack", 1)
+    await dbg.setParameter("checkStack", 1)
   }
 
   private processBinName(bin: string | RpwBin): RpwBin {

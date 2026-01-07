@@ -54,7 +54,19 @@ export type RpwPreload = {
   patches?: RpwPatch[]
 }
 
+export type A78Header = {
+  gameName?: string
+  romSize?: number
+  cartType?: number
+  controller1Type?: number
+  controller2Type?: number
+  tvFormat?: string
+  saveDevice?: number
+}
+
 export type RpwProject = {
+  platform?: string
+  assembler?: string
   settings?: RpwSettings        // default: RpwSettings defaults
   projectName?: string          // default: <name>.rpw-project
   srcDir?: string
@@ -65,6 +77,8 @@ export type RpwProject = {
   modules?: RpwModule[]
   images?: RpwImage []
   preloads?: RpwPreload[]
+  a78Header?: A78Header
+  a78header?: A78Header         // catch easy-to-make typo
 }
 
 // TODO: add default fileSuffix? ".S" for merlin, for example

@@ -21,7 +21,6 @@ import { TokenType } from "./asm/tokenizer"
 import { NajaTextStatement } from "./asm/statements"
 
 // TODO:
-//  - show timing
 //  - step forward
 //  - add default key-combos for all stepping operations
 //
@@ -42,7 +41,7 @@ import { NajaTextStatement } from "./asm/statements"
 
 // NOTE: duplicated in machine/debugger.ts
 
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 type RequestHeader = {
   command: string
@@ -78,6 +77,7 @@ type StackResponse = RequestHeader & {
 type StopNotification = RequestHeader & {
   reason: string
   pc: number
+  cpuCycles: number
   dataAddress?: number
   dataString?: string,
   error?: string
@@ -110,12 +110,12 @@ type ReadMemoryResponse = RequestHeader & {
   dataString: string    // actual data read in base64, possibly < readLength
 }
 
-type ReadRamRequest = RequestHeader & {
+type ReadRangeRequest = RequestHeader & {
   dataAddress: number   // read address
   dataLength: number    // number of bytes to read
 }
 
-type ReadRamResponse = RequestHeader & {
+type ReadRangeResponse = RequestHeader & {
   dataAddress: number   // effective read address
   dataString: string    // actual data read in base64
 }
@@ -131,19 +131,19 @@ type WriteMemoryResponse = RequestHeader & {
   bytesWritten: number  // bytes successfully written
 }
 
-type WriteRamRequest = RequestHeader & {
+type WriteRangeRequest = RequestHeader & {
   dataAddress: number     // direct write address
   dataString: string      // bytes to write in base64
 }
 
-type SetDiskImageRequest = RequestHeader & {
+type SetDataImageRequest = RequestHeader & {
   fullPath?: string     // no path means set drive as empty
   dataString: string    // disk contents in base64
   driveIndex: number
   writeProtected: boolean
 }
 
-type DiskWriteNotification = RequestHeader & {
+type DataWriteNotification = RequestHeader & {
   fullPath: string
   dataString: string    // disk contents in base64
 }
@@ -471,12 +471,12 @@ class ArrayRowVariable extends DebugVariable {
 
 class ArrayVariable extends DebugVariable {
   constructor(
-    rows: number,
-    columns: number,
-    typeSize: number,
-    address: number,
-    indexAddress: number | undefined,
-    dataBytes: Uint8Array) {
+      rows: number,
+      columns: number,
+      typeSize: number,
+      address: number,
+      indexAddress: number | undefined,
+      dataBytes: Uint8Array) {
 
     super("array", address)
 
@@ -496,7 +496,7 @@ class ArrayVariable extends DebugVariable {
 }
 
 class RegistersVariable extends DebugVariable {
-  constructor(stackEntry: StackEntry, isTop: boolean) {
+  constructor(stackEntry: StackEntry, isTop: boolean, startCycles?: number) {
     super("registers")
 
     for (let i = 0; i < stackEntry.regs.length; i += 1) {
@@ -507,6 +507,11 @@ class RegistersVariable extends DebugVariable {
       }
       const reg = stackEntry.regs[index]
       this.addChild(new RegisterVariable(reg, isTop))
+    }
+
+    if (startCycles != undefined) {
+      const deltaVar = new CyclesVariable("Cycles Δ", stackEntry.cpuCycles, startCycles)
+      this.addChild(deltaVar)
     }
   }
 }
@@ -609,6 +614,18 @@ class RegisterVariable extends DebugVariable {
   }
 }
 
+class CyclesVariable extends DebugVariable {
+  constructor(name: string, curCycles: number, startCycles?: number) {
+    super(name)
+    this.updateValueStr(curCycles, startCycles)
+  }
+
+  private updateValueStr(curCycles: number, startCycles?: number) {
+    const value = curCycles - (startCycles ?? 0)
+    this.valueStr = value.toString()
+  }
+}
+
 //------------------------------------------------------------------------------
 
 // TODO: move to common utilities
@@ -682,6 +699,8 @@ export class LspDebugger {
   private breakpoints = new Map<string, number[]>()
   public variableHandles = new Handles<DebugVariable>()
   private stackFrameHandles = new Handles<StackEntry>()
+  private prevStopCycles: number = 0
+  private curStopCycles: number = 0
 
   private connectEvent?: AwaitEvent
   private launchEvent?: AwaitEvent
@@ -806,20 +825,18 @@ export class LspDebugger {
           if (!result) {
             // if breakpoint address is in file that isn't loaded,
             //  restart target and don't report stop
-
-            // TODO: Invalidate cycle count numbers because will
-            //  cause them to be inaccurate.
-
             this.sendCommand("startCpu")
             break
           }
         }
+        this.prevStopCycles = this.curStopCycles
+        this.curStopCycles = msg.cpuCycles
         this.connection.sendNotification("rpw65.debuggerStopped", { reason: msg.reason, error: msg.error })
         break
       }
 
-      case "diskWrite": {
-        const msg = <DiskWriteNotification>message
+      case "dataWrite": {
+        const msg = <DataWriteNotification>message
         const binBytes = base64.toByteArray(msg.dataString)
         fs.writeFileSync(msg.fullPath, binBytes)
         break
@@ -837,33 +854,36 @@ export class LspDebugger {
   }
 
   // direct writeMemory method for loading project binaries
-  public async writeRam(address: number, data: Uint8Array | number[]) {
+  public async writeRange(address: number, data: Uint8Array | number[]) {
     if (Array.isArray(data)) {
       data = new Uint8Array(data)
     }
-    const request: WriteRamRequest =  {
-      command: "writeRam",
+    const request: WriteRangeRequest =  {
+      command: "writeRange",
       dataAddress: address,
       dataString: base64.fromByteArray(data)
     }
     await this.sendRequest(request)
   }
 
-  // direct readMemory method for check binary load status
-  public async readRam(address: number, length: number): Promise<Uint8Array> {
-    const request: ReadRamRequest =  {
-      command: "readRam",
+  // direct readMemory method for checking binary load status
+  public async readRange(address: number, length: number): Promise<Uint8Array> {
+    if (length == 0) {
+      return new Uint8Array(0)
+    }
+    const request: ReadRangeRequest =  {
+      command: "readRange",
       dataAddress: address,
       dataLength: length
     }
-    const response: ReadRamResponse = await this.sendRequest(request)
+    const response: ReadRangeResponse = await this.sendRequest(request)
     return base64.toByteArray(response.dataString)
   }
 
-  public async setDiskImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {
+  public async setDataImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {
     const dataString = base64.fromByteArray(data)
-    const request: SetDiskImageRequest = {
-      command: "setDiskImage",
+    const request: SetDataImageRequest = {
+      command: "setDataImage",
       fullPath, dataString, driveIndex, writeProtected
     }
     await this.sendRequest(request)
@@ -877,6 +897,10 @@ export class LspDebugger {
       stopCpu: false
     }
     await this.sendRequest(request)
+  }
+
+  public async softReset() {
+    await this.sendRequest({ command: "softReset" })
   }
 
   public async setParameter(name: string, value: number) {
@@ -1267,10 +1291,12 @@ export class LspDebugger {
     const stackEntry = this.stackFrameHandles.get(args.frameId)
     if (stackEntry) {
       const topOfStack = stackEntry.topOfStack ?? false
-      scopes.push(new Scope("Registers", this.variableHandles.create(new RegistersVariable(stackEntry, topOfStack)), false))
+      const startCycles = topOfStack ? this.prevStopCycles : undefined
+      scopes.push(new Scope("CPU", this.variableHandles.create(new RegistersVariable(stackEntry, topOfStack, startCycles)), false))
+
       if (topOfStack) {
-        // TODO: check for invalidated timing numbers above
-        // scopes.push(new Scope("Timing", this.variableHandles.create(new DebugVariable("timing")), false))
+        // TODO: hardware-specific scope
+        // scopes.push(new Scope("Hardware", this.variableHandles.create(new DebugVariable("hardware")), false))
       }
     }
     return { scopes }
@@ -1391,7 +1417,6 @@ export class LspDebugger {
       // get optional first bracketed term
       if (token) {
         if (token.getString() == "[") {
-          rows = 1
           token = parser.getNextToken()
           if (token) {
             if (token.type == TokenType.DecNumber) {
@@ -1407,7 +1432,9 @@ export class LspDebugger {
               } else {
                 parseError = true
               }
-            } else if (token.getString() != "]") {
+            } else if (token.getString() == "]") {
+              columns = 0
+            } else {
               parseError = true
             }
           } else {
@@ -1435,6 +1462,9 @@ export class LspDebugger {
             } else {
               parseError = true
             }
+          } else if (token.getString() == "]") {
+            rows = columns
+            columns = 0
           } else {
             parseError = true
           }
@@ -1488,11 +1518,22 @@ export class LspDebugger {
       let arrayView = false
 
       if (columns != undefined) {
-        columns = Math.max(Math.min(columns, 16), 1)
-        if (rows != undefined) {
-          rows = Math.max(Math.min(rows, 16), 1)
+        if (columns == 0) {
+          columns = 8
+          if (rows == undefined || rows == 0) {
+            rows = 4
+          }
+        } else {
+          columns = Math.max(Math.min(columns, 16), 1)
         }
-        request.typeSize = columns * typeSize * (rows ?? 1)
+        if (rows == undefined) {
+          rows = 1
+        } if (rows == 0) {
+          rows = Math.ceil(16 / columns)
+        } else {
+          rows = Math.max(Math.min(rows, 32), 1)
+        }
+        request.typeSize = columns * typeSize * rows
         arrayView = true
       }
 
@@ -1507,11 +1548,7 @@ export class LspDebugger {
       }
 
       if (arrayView) {
-        if (rows == undefined) {
-          rows = Math.floor(dataBytes.length / columns!)
-        }
-
-        const arrayVar = new ArrayVariable(rows, columns!, typeSize, response.dataAddress, response.indexAddress, dataBytes)
+        const arrayVar = new ArrayVariable(rows!, columns!, typeSize, response.dataAddress, response.indexAddress, dataBytes)
         varRef = this.variableHandles.create(arrayVar)
       }
 

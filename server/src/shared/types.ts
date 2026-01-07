@@ -66,7 +66,7 @@ export type StackRegister = {
 export type StackEntry = {
   proc: number
   regs: StackRegister[]
-  cycles: number
+  cpuCycles: number
   dataAddress?: number
   dataString?: string
   topOfStack?: boolean

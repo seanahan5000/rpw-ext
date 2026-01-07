@@ -226,7 +226,10 @@ export class OpStatement extends Statement {
     }
 
     if (!parser.syntax || parser.syntax == Syntax.DASM) {
-      // TODO: use this.opSuffix to help choose mode
+      // TODO: are there other suffixes here?
+      if (this.opSuffix == "w") {
+        this.forceLong = true
+      }
     }
 
     // NOTE: Guess at and set this.mode early so it's available
@@ -647,7 +650,7 @@ export class OpStatement extends Statement {
             if (this.expression) {
               asm.symUtils?.markConstants(this.expression)
               const immValue = this.expression.resolve()
-              if (immValue === undefined) {
+              if (immValue === undefined || Array.isArray(immValue)) {
                 if (this.expression instanceof exp.StringExpression) {
                   this.expression.setError("String expression not valid here")
                 }
@@ -711,7 +714,7 @@ export class OpStatement extends Statement {
           case OpMode.INDY:
             asm.symUtils?.markZPage(this.expression)
             const value = this.expression.resolve()
-            if (value !== undefined) {
+            if (value !== undefined && !Array.isArray(value)) {
               if (value > 255) {
                 this.expression.setError("Expression too large for addressing mode")
               }
@@ -747,7 +750,7 @@ export class OpStatement extends Statement {
       asm.writeByte(opDef.val)
       if (this.expression) {
         let value = this.expression.resolve()
-        if (value !== undefined) {
+        if (value !== undefined && !Array.isArray(value)) {
           if (opDef.bc == 2) {
             if (this.mode == OpMode.REL) {
               value = value - this.PC! - 2
@@ -1166,11 +1169,16 @@ export class RepeatStatement extends Statement {
     let startVal: number | undefined
     const startExp = this.findArg("loop-start")
     if (startExp) {
-      startVal = startExp.resolve()
-      if (startVal === undefined) {
+      const value = startExp.resolve()
+      if (value === undefined) {
         startExp.setErrorWeak("Must resolve in first pass")
         return
       }
+      if (Array.isArray(value)) {
+        startExp.setErrorWeak("String/array not allowed")
+        return
+      }
+      startVal = value
     } else {
       startVal = 1
     }
@@ -1178,11 +1186,16 @@ export class RepeatStatement extends Statement {
     let endVal: number | undefined
     const endExp = this.findArg("loop-end")
     if (endExp) {
-      endVal = endExp.resolve()
-      if (endVal === undefined) {
+      const value = endExp.resolve()
+      if (value === undefined) {
         endExp.setErrorWeak("Must resolve in first pass")
         return
       }
+      if (Array.isArray(value)) {
+        endExp.setErrorWeak("String/array not allowed")
+        return
+      }
+      endVal = value
     } else {
       endVal = 1
     }
@@ -1192,6 +1205,10 @@ export class RepeatStatement extends Statement {
       const countVal = countExp.resolve()
       if (countVal === undefined) {
         countExp.setErrorWeak("Must resolve in first pass")
+        return
+      }
+      if (Array.isArray(countVal)) {
+        countExp.setErrorWeak("String/array not allowed")
         return
       }
       if (countVal < 0) {
@@ -1282,13 +1299,12 @@ const DataRanges: number[][] = [
   [ 0xffffffff, 0x7fffffff, -0x80000000 ],
 ]
 
-// TODO: need to think about handling string constants in here
-
 export class DataStatement extends Statement {
 
   protected dataSize: number
   protected signType: string
   protected bigEndian: boolean
+  protected byteLength: number = 0
 
   constructor(dataSize: number, signType: string, bigEndian = false) {
     super()
@@ -1313,7 +1329,8 @@ export class DataStatement extends Statement {
 
     for (let arg of this.args) {
       const value = arg.resolve()
-      if (value != undefined) {
+      // TODO: range check each value in the array?
+      if (value != undefined && !Array.isArray(value)) {
         if (this.signType == "s") {
           if (value < sMin || value > sMax) {
             arg.setError(`Expression value ${value} out of range ${sMin}..${sMax}`)
@@ -1340,6 +1357,17 @@ export class DataStatement extends Statement {
       }
     }
 
+    let count = 0
+    for (let element of this.args) {
+      const value = element.resolve()
+      if (Array.isArray(value)) {
+        count += value.length
+      } else {
+        count += 1
+      }
+    }
+    this.byteLength = count * this.dataSize
+
     if (asm.inTypeDef()) {
       let typeName: string | undefined
       if (this.dataSize == 1) {
@@ -1363,12 +1391,12 @@ export class DataStatement extends Statement {
   }
 
   pass1(asm: Assembler): number {
-    return this.getSize()!
+    return this.byteLength
   }
 
   // required for structure field entries
   public override getSize(): number | undefined {
-    return Math.max(this.args.length, 1) * this.dataSize
+    return this.byteLength
   }
 
   pass2(asm: Assembler) {
@@ -1380,32 +1408,37 @@ export class DataStatement extends Statement {
     }
 
     for (let element of this.args) {
-      const value = element.resolve()
-      if (value === undefined) {
+      let values = element.resolve()
+      if (values == undefined) {
         asm.writeBytePattern(undefined, this.dataSize)
         continue
       }
-      if (this.dataSize == 1) {
-        if (asm.syntax == Syntax.CA65) {
-          if (value < 0 || value > 255) {
-            element.setError(`Value ${value} out of range 0..255`)
+      if (!Array.isArray(values)) {
+        values = [values]
+      }
+      for (const value of values) {
+        if (this.dataSize == 1) {
+          if (asm.syntax == Syntax.CA65) {
+            if (value < 0 || value > 255) {
+              element.setError(`Value ${value} out of range 0..255`)
+            }
+          } else if (value > 255 || value < -128) {
+            element.setWarning(`Value ${value} overflows 8 bits`)
           }
-        } else if (value > 255 || value < -128) {
-          element.setWarning(`Value ${value} overflows 8 bits`)
-        }
-        asm.writeByte(value & 0xff)
-      } else if (this.dataSize == 2) {
-        const value0 = (value >> 0) & 0xff
-        const value8 = (value >> 8) & 0xff
-        if (this.bigEndian) {
-          asm.writeByte(value8)
-          asm.writeByte(value0)
+          asm.writeByte(value & 0xff)
+        } else if (this.dataSize == 2) {
+          const value0 = (value >> 0) & 0xff
+          const value8 = (value >> 8) & 0xff
+          if (this.bigEndian) {
+            asm.writeByte(value8)
+            asm.writeByte(value0)
+          } else {
+            asm.writeByte(value0)
+            asm.writeByte(value8)
+          }
         } else {
-          asm.writeByte(value0)
-          asm.writeByte(value8)
+          // TODO: deal with 24 bit values
         }
-      } else {
-        // TODO: deal with 24 bit values
       }
     }
   }
@@ -1522,9 +1555,13 @@ export class StorageStatement extends Statement {
 
     const countArg = this.findArg("count")
     if (countArg) {
-      this.countValue = countArg.resolve()
-      if (this.countValue === undefined) {
+      const value = countArg.resolve()
+      if (value === undefined) {
         countArg.setErrorWeak("Must resolve on first pass")
+      } else if (Array.isArray(value)) {
+        countArg.setError("String/array not allowed")
+      } else {
+        this.countValue = value
       }
     } else {
       // assume if count isn't found, must be Merlin "\\"
@@ -1547,6 +1584,10 @@ export class StorageStatement extends Statement {
       const value = fillArg.resolve()
       if (value === undefined) {
         fillArg.setError("Unresolved expression")
+        return
+      }
+      if (Array.isArray(value)) {
+        fillArg.setError("String/array not allowed")
         return
       }
       fillValue = value
@@ -1646,9 +1687,17 @@ export class AlignStatement extends Statement {
         andArg.setErrorWeak("Must resolve on first pass")
         return
       }
+      if (Array.isArray(andValue)) {
+        andArg.setError("String/array not allowed")
+        return
+      }
       const equalValue = equalArg.resolve()
       if (equalValue === undefined) {
         equalArg.setErrorWeak("Must resolve on first pass")
+        return
+      }
+      if (Array.isArray(equalValue)) {
+        equalArg.setError("String/array not allowed")
         return
       }
       this.padValue = (equalValue - (this.PC ?? 0)) & andValue
@@ -1663,6 +1712,10 @@ export class AlignStatement extends Statement {
         boundaryArg.setErrorWeak("Must resolve on first pass")
         return
       }
+      if (Array.isArray(value)) {
+        boundaryArg.setError("String/array not allowed")
+        return
+      }
       boundaryValue = value
     }
 
@@ -1672,6 +1725,10 @@ export class AlignStatement extends Statement {
       const value = offsetArg.resolve()
       if (value === undefined) {
         offsetArg.setErrorWeak("Must resolve on first pass")
+        return
+      }
+      if (Array.isArray(value)) {
+        offsetArg.setError("String/array not allowed")
         return
       }
       offsetValue = value
@@ -1694,6 +1751,8 @@ export class AlignStatement extends Statement {
       const value = fillArg.resolve()
       if (value === undefined) {
         fillArg.setError("Unresolved expression")
+      } else if (Array.isArray(value)) {
+        fillArg.setError("String/array not allowed")
       } else {
         fillValue = value
       }
@@ -2292,6 +2351,10 @@ export class EnumValueStatement extends Statement {
         this.value.setError("Must resolve in first pass")
         return 0
       }
+      if (Array.isArray(n)) {
+        this.value.setError("String/array not allowed")
+        return 0
+      }
       return n - this.PC!
     }
     return 1
@@ -2695,6 +2758,8 @@ export class CpuStatement extends Statement {
 export class OrgStatement extends Statement {
 
   private fillAmount = 0
+  // TODO: DASM default is 0xff -- what about others?
+  private fillValue = 0xff
 
   public override preprocess(asm: Assembler): void {
     super.preprocess(asm)
@@ -2704,12 +2769,28 @@ export class OrgStatement extends Statement {
       const orgValue = valueArg.resolve()
       if (orgValue === undefined) {
         valueArg.setErrorWeak("Must resolve in first pass")
+      } else if (Array.isArray(orgValue)) {
+        valueArg.setError("String/array not allowed")
       } else if (orgValue < 0 || orgValue > 0xFFFF) {
         valueArg.setError("Invalid org value " + orgValue)
       } else {
         // TODO: does only Merlin treat this as a virtual PC?
         const isVirtual = asm.syntax == Syntax.MERLIN
         this.fillAmount = asm.setNextOrg(orgValue, isVirtual)
+      }
+
+      const fillArg = this.findArg("fill")
+      if (fillArg) {
+        const fillValue = fillArg.resolve()
+        if (fillValue === undefined) {
+          fillArg.setErrorWeak("Must resolve in first pass")
+        } else if (Array.isArray(fillValue)) {
+          fillArg.setError("String/array not allowed")
+        } else if (fillValue < 0 || fillValue > 0xFF) {
+          fillArg.setError("Invalid fill value " + fillValue)
+        } else {
+          this.fillValue = fillValue
+        }
       }
     } else {
       // TODO: Merlin treats an org with address as a reorg
@@ -2723,9 +2804,56 @@ export class OrgStatement extends Statement {
 
   public pass2(asm: Assembler): void {
     if (this.fillAmount > 0) {
-      // TODO: 0xFF is the DASM ORG fill value, what about others?
-      asm.writeBytePattern(0xFF, this.fillAmount)
+      asm.writeBytePattern(this.fillValue, this.fillAmount)
     }
+  }
+}
+
+export class ReorgStatement extends Statement {
+
+  public override preprocess(asm: Assembler) {
+    super.preprocess(asm)
+
+    const valueArg = this.args[0]
+    if (valueArg) {
+      const orgValue = valueArg.resolve()
+      if (orgValue === undefined) {
+        valueArg.setErrorWeak("Must resolve in first pass")
+      } else if (Array.isArray(orgValue)) {
+        valueArg.setError("String/array not allowed")
+      } else if (orgValue < 0 || orgValue > 0xFFFF) {
+        valueArg.setError("Invalid org value " + orgValue)
+      } else {
+        asm.pushNesting(NestingType.PseudoPc, () => {
+          // TODO: pop segment?
+          // TODO: adjust current PC by number of bytes added to virtual PC?
+        })
+
+        // TODO: push segment?
+        const isVirtual = true
+        asm.setNextOrg(orgValue, isVirtual)
+      }
+    } else {
+      // TODO: error if no valueArg?
+    }
+  }
+}
+
+export class RendStatement extends Statement {
+
+  public override preprocess(asm: Assembler): void {
+
+    if (!asm.isNested(NestingType.PseudoPc)) {
+      this.setError("Missing begin for this end")
+      return
+    }
+
+    if (asm.topNestingType() != NestingType.PseudoPc) {
+      this.setError("Dangling scoped type")
+      return
+    }
+
+    asm.popNesting(true)
   }
 }
 
@@ -3064,11 +3192,15 @@ export class DummyStatement extends Statement {
     let orgValue: number | undefined
     const valueArg = this.args[0]
     if (valueArg) {
-      orgValue = valueArg.resolve()
-      if (orgValue === undefined) {
+      let value = valueArg.resolve()
+      if (value === undefined) {
         valueArg.setErrorWeak("Must resolve in first pass")
-        orgValue = 0
+        value = 0
+      } else if (Array.isArray(value)) {
+        valueArg.setError("String/array not allowed")
+        value = 0
       }
+      orgValue = value
     }
 
     // If a the statement has a label and base address
@@ -3155,7 +3287,7 @@ export class SegmentStatement extends Statement {
       this.segName = segNameArg.getString()
     } else {
       // TODO: DASM-only?, when no game is given -- same as default
-      this.segName = "code"
+      this.segName = initialized ? "code" : "dummy"
     }
 
     asm.setSegment(this.segName, addressing, initialized)

@@ -1359,6 +1359,7 @@ export class Assembler {
     }
 
     const binFileName = this.module.getBinFilePath(fileName)
+    const refFileName = this.module.getBinFilePath("ref_" + fileName)
 
     if (Assembler.verifyOnWrite) {
       console.log(`Checking ${binFileName}`)
@@ -1376,14 +1377,51 @@ export class Assembler {
 
     const buffer = new Uint8Array(<number[]>this.curSeg.dataArray)
 
-    // TODO: eventually write out final data
-    // fs.writeFileSync(binFileName + "_new", buffer, { encoding: null, flag: "w" })
+    let header: Uint8Array | undefined
+    if (binFileName.endsWith(".a78")) {
+      header = new Uint8Array(128)
+      header.fill(0)
+
+      // catch easy-to-make typo
+      const a78Header = this.module.project.rpwProject?.a78Header ??
+                        this.module.project.rpwProject?.a78header
+      const gameName = a78Header?.gameName ?? "Your Cart Name"
+      const romSize = a78Header?.romSize ?? buffer.length
+      const cartType = a78Header?.cartType ?? 0
+      const controller1Type = a78Header?.controller1Type ?? 0
+      const controller2Type = a78Header?.controller2Type ?? 0
+      const tvFormat = a78Header?.tvFormat?.toUpperCase() ?? "NTSC"
+      const saveDevice = a78Header?.saveDevice ?? false
+
+      const encoder = new TextEncoder()
+      header[0] = 1   // version
+      header.set(encoder.encode("ATARI7800       "), 0x01)
+      header.set(encoder.encode(gameName), 0x11)
+      header[0x31] = (romSize >> 24) & 0xff
+      header[0x32] = (romSize >> 16) & 0xff
+      header[0x33] = (romSize >>  8) & 0xff
+      header[0x34] = (romSize >>  0) & 0xff
+      header[0x35] = cartType
+      header[0x37] = controller1Type
+      header[0x38] = controller2Type
+      header[0x39] = tvFormat == "PAL" ? 1 : 0
+      header[0x3A] = saveDevice ? 1 : 0
+      header.set(encoder.encode("ACTUAL CART DATA STARTS HERE"), 0x64)
+    }
+
+    let imageData = buffer
+    if (header) {
+      imageData = new Uint8Array(header.length + buffer.length)
+      imageData.set(header, 0)
+      imageData.set(buffer, header.length)
+    }
+    fs.writeFileSync(binFileName, imageData, { encoding: null, flag: "w" })
 
     // TODO: debug code, to be removed
     if (Assembler.verifyOnWrite) {
-      if (fs.existsSync(binFileName)) {
+      if (fs.existsSync(refFileName)) {
         // compare file results with previously written data
-        const refData = fs.readFileSync(binFileName)
+        const refData = fs.readFileSync(refFileName)
         if (refData) {
           if (refData.length != buffer.length) {
             console.log(`size mismatch (${refData.length} vs ${buffer.length}`)
@@ -1399,12 +1437,15 @@ export class Assembler {
           }
         }
       } else {
-        console.log("File missing: " + binFileName)
+        console.log("File missing: " + refFileName)
       }
     }
 
-    if (fs.existsSync(binFileName)) {
-      this.curSeg.refBytes = fs.readFileSync(binFileName)
+    if (fs.existsSync(refFileName)) {
+      this.curSeg.refBytes = fs.readFileSync(refFileName)
+      if (refFileName.endsWith(".a78")) {
+        this.curSeg.refBytes = this.curSeg.refBytes.subarray(0x80)
+      }
     }
 
     this.curSeg.finalize()
@@ -1588,9 +1629,11 @@ export class SymbolUtils {
       const symbol = symExps[0].symbol
       if (symbol) {
         const value = symbol.resolve()
-        // *** do something special with Apple hardware addresses ***
-        if (value && value >= 0xC000 && value <= 0xCFFF) {
-          return
+        if (value != undefined && !Array.isArray(value)) {
+          // *** do something special with Apple hardware addresses ***
+          if (value && value >= 0xC000 && value <= 0xCFFF) {
+            return
+          }
         }
         if (symbol.isConstant) {
           symExps[0].setWarning("Symbol used as both data address and constant")

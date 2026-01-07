@@ -97,7 +97,8 @@ export class Completions {
     let checkXY = false
     let checkInd = false
     let appendIndY = false
-    let leadingSymbol = ""
+    let leadingText = ""
+    let replaceRange: lsp.Range | undefined
 
     const firstPosition = curPosition + (curStatement.startOffset ?? 0)
     const syntaxDef = SyntaxDefs[sourceFile.project.syntax]
@@ -154,6 +155,18 @@ export class Completions {
       // use default completions
       // TODO: addKeywords if syntax supports them in column 0
     } else if (loc == Loc.afterLabel) {
+
+      // handle keywords in column 0, prefixed with "."
+      // NOTE: labelRange isn't always available at this point
+      if (curPosition == 1) {
+        if (syntaxDef.keywordPrefixes.includes(prevChar)) {
+          leadingText = prevChar
+          const start = lsp.Position.create(lineNumber, 0)
+          const end = lsp.Position.create(lineNumber, 1)
+          replaceRange = lsp.Range.create(start, end)
+        }
+      }
+
       // new opcode completions
       this.addMacros = ++index
       this.addKeywords = ++index
@@ -161,14 +174,21 @@ export class Completions {
     } else if (loc == Loc.beforeOpcode) {
       // use default completions
     } else if (loc == Loc.inOpcode) {
+
+      if (opRange) {
+        leadingText = opRange.sourceLine.substring(opRange.start, firstPosition).toLowerCase()
+        const start = lsp.Position.create(lineNumber, opRange.start - (curStatement.startOffset ?? 0))
+        const end = lsp.Position.create(lineNumber, opRange.end - (curStatement.startOffset ?? 0))
+        replaceRange = lsp.Range.create(start, end)
+      }
+
       const firstChar = opRange ? opRange.sourceLine[opRange.start] : ""
       if (syntaxDef.keywordPrefixes.includes(firstChar)) {
         // TODO: what if prefix is also used for symbol? (dasm)
+          // (need to treat as optional for dasm, required for ca65)
         this.addKeywords = ++index
-        leadingSymbol = firstChar
       } else if (syntaxDef.macroInvokePrefixes.includes(firstChar)) {
         this.addMacros = ++index
-        leadingSymbol = firstChar
       } else {
         // might depend on statement type
         this.addMacros = ++index
@@ -213,14 +233,12 @@ export class Completions {
               break
             case OpMode.ABS:
             case OpMode.LABS:
-                if (firstStatement.opNameLC == "jsr" || firstStatement.opNameLC == "jmp") {
-                // *** TODO: handle both zone and cheap locals
-                if (prevChar == ":") {
-                  this.addLocals = ++index
-                } else {
-                  this.addCode = ++index
-                  this.addUnclassified = ++index
-                }
+              if (syntaxDef.cheapLocalPrefixes.includes(prevChar) ||
+                  syntaxDef.zoneLocalPrefixes.includes(prevChar)) {
+                this.addLocals = ++index
+              } else if (firstStatement.opNameLC == "jsr" || firstStatement.opNameLC == "jmp") {
+                this.addCode = ++index
+                this.addUnclassified = ++index
               } else {
                 this.addZpage = ++index
                 this.addData = ++index
@@ -262,8 +280,8 @@ export class Completions {
             case OpMode.REL:
             case OpMode.LREL:
               // TODO: constrain to only close-by code
-              // *** TODO: handle both zone and cheap locals
-              if (prevChar == ":") {
+              if (syntaxDef.cheapLocalPrefixes.includes(prevChar) ||
+                  syntaxDef.zoneLocalPrefixes.includes(prevChar)) {
                 this.addLocals = ++index
               } else {
                 this.addCode = ++index
@@ -335,17 +353,24 @@ export class Completions {
       const isa = isaSet65xx.getIsa("65816")
 
       isa.opcodeByName.forEach((value, key) => {
-        if (sourceFile.project.upperCase) {
-          key = key.toUpperCase()
+        if (key.startsWith(leadingText)) {
+          if (sourceFile.opcodeUpperCase) {
+            key = key.toUpperCase()
+          }
+          // Only add trailing space for opcodes that have addressing modes.
+          // Also, exclude opcodes that have an accumulator mode, like LSR A,
+          //  where the extra space may be unwanted.
+          if (!value.get(OpMode.NONE) && !value.get(OpMode.A)) {
+            key = key.padEnd(4, " ")
+          }
+          let item = lsp.CompletionItem.create(key)
+          item.sortText = `${this.addOpcodes}_${key}`
+          item.kind = lsp.CompletionItemKind.Text
+          if (replaceRange) {
+            item.textEdit = lsp.InsertReplaceEdit.create(key, replaceRange, replaceRange)
+          }
+          completions.push(item)
         }
-        // only add trailing space for opcodes that have addressing modes
-        if (!value.get(OpMode.NONE)) {
-          key = key.padEnd(4, " ")
-        }
-        let item = lsp.CompletionItem.create(key)
-        item.sortText = `${this.addOpcodes}_${key}`
-        item.kind = lsp.CompletionItemKind.Text
-        completions.push(item)
       })
     }
 
@@ -353,43 +378,41 @@ export class Completions {
       const syntax = sourceFile.project.syntax
       if (syntax) {
         for (let [key, keywordDef] of syntaxDef.keywordMap) {
-          if (sourceFile.project.upperCase) {
-            key = key.toUpperCase()
-          }
+          if (key.startsWith(leadingText)) {
 
-          // don't include keywords that don't start with the leading symbol
-          if (leadingSymbol != "" && !key.startsWith(leadingSymbol)) {
-            continue
-          }
+            if (sourceFile.keywordUpperCase) {
+              key = key.toUpperCase()
+            }
 
-          const params = keywordDef.params ?? ""
-          const desc = keywordDef.desc ?? ""
+            const params = keywordDef.params ?? ""
+            const desc = keywordDef.desc ?? ""
 
-          // only pad keywords that have arguments
-          if (params != "") {
-            // TODO: use settings instead of 4
-            key = key.padEnd(3 - leadingSymbol.length, " ")
-            key += " "
-          }
-          let item = lsp.CompletionItem.create(key)
-          item.sortText = `${this.addKeywords}_${key}`
-          item.kind = lsp.CompletionItemKind.Text
+            // only pad keywords that have arguments
+            if (params != "") {
+              // TODO: use settings instead of 4
+              key = key.padEnd(3 /*- leadingSymbol.length*/, " ")
+              key += " "
+            }
+            let item = lsp.CompletionItem.create(key)
+            item.sortText = `${this.addKeywords}_${key}`
+            item.kind = lsp.CompletionItemKind.Text
 
-          // add keyword documentation
-          // TODO: better formatting (markdown?)
-          if (params != "") {
-            // TODO: sanitize parameter string to human-readable
-            item.detail = params
-          }
-          if (desc != "") {
-            item.documentation = desc
-          }
+            // add keyword documentation
+            // TODO: better formatting (markdown?)
+            if (params != "") {
+              // TODO: sanitize parameter string to human-readable
+              item.detail = params
+            }
+            if (desc != "") {
+              item.documentation = desc
+            }
 
-          // *** TODO: tie this to syntax, check for "!", and/or "+"
-          if (leadingSymbol == key[0]) {
-            item.insertText = key.substring(1)
+            if (replaceRange) {
+              item.textEdit = lsp.InsertReplaceEdit.create(key, replaceRange, replaceRange)
+            }
+
+            completions.push(item)
           }
-          completions.push(item)
         }
       }
     }
@@ -444,7 +467,7 @@ export class Completions {
           let keyText = key
           if (appendIndY) {
             keyText = keyText + "),y"
-            if (sourceFile.project.upperCase) {
+            if (sourceFile.opcodeUpperCase) {
               keyText = keyText.toUpperCase()
             }
           }
@@ -464,7 +487,7 @@ export class Completions {
           }
           // hack snippet for Naja graphics system
           if (key == "DRAW_PICT") {
-            const indent = "".padStart(sourceFile.project.tabStops[1], " ")
+            const indent = "".padStart(sourceFile.tabStops[1], " ")
             item = lsp.CompletionItem.create(key)
             item.sortText = `${this.addCode}_${key}`
             item.insertTextFormat = lsp.InsertTextFormat.Snippet
@@ -498,9 +521,8 @@ export class Completions {
     }
 
     // scan for locals near given statement
-    // TODO: do both cheap and zone locals based on trigger character
     if (this.addLocals) {
-      const symbolType = SymbolType.CheapLocal
+      const symbolType = syntaxDef.cheapLocalPrefixes.includes(prevChar) ? SymbolType.CheapLocal : SymbolType.ZoneLocal
       const range = getLocalRange(sourceFile, lineNumber, symbolType)
       for (let i = range.startLine; i < range.endLine; i += 1) {
         const symExp = sourceFile.statements[i].labelExp

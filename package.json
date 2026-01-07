@@ -5,7 +5,7 @@
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "2.0.3",
+	"version": "2.0.4",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -84,29 +84,6 @@
 					"type": "boolean",
 					"default": true,
 					"markdownDescription": "Enable variable width tab columns."
-				},
-				"rpw65.columns.c1": {
-					"type": "number",
-					"default": 16,
-					"minimum": 1,
-					"markdownDescription": "Width of the label column to use in tabbing and formatting."
-				},
-				"rpw65.columns.c2": {
-					"type": "number",
-					"default": 4,
-					"minimum": 1,
-					"markdownDescription": "Width of the opcode column to use in tabbing and formatting."
-				},
-				"rpw65.columns.c3": {
-					"type": "number",
-					"default": 20,
-					"minimum": 1,
-					"markdownDescription": "Width of the arguments column to use in tabbing and formatting."
-				},
-				"rpw65.case.lowerCaseCompletions": {
-					"type": "boolean",
-					"default": false,
-					"markdownDescription": "Use lowercase in auto-complete suggestions."
 				}
 			}
 		},
@@ -278,15 +255,29 @@
 				"configurationAttributes": {
 					"launch": {
 						"properties": {
-							"program": {
+
+							"platform": {
 								"type": "string",
-								"description": "Absolute path to a text file.",
-								"default": "${workspaceFolder}/${command:AskForProgramName}"
+								"description": "Type of machine emulator to launch",
+								"default": "apple2e",
+								"enum": ["apple2p", "apple2e", "atari7800"]
 							},
 							"stopOnEntry": {
 								"type": "boolean",
 								"description": "Automatically stop after launch.",
 								"default": true
+							},
+							"remote": {
+								"type": "boolean",
+								"description": "Skip launching emulator if true",
+								"default": false
+							},
+
+
+							"program": {
+								"type": "string",
+								"description": "Absolute path to a text file.",
+								"default": "${workspaceFolder}/${command:AskForProgramName}"
 							},
 							"trace": {
 								"type": "boolean",
