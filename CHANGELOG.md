@@ -9,6 +9,7 @@ Automatically determine tab tops and upper/lower case, deprecating associated pr
 * a78Header section to project file
 * Prepend Atari 7800 header to binary when saving as .a78 file
 * Write assembly results to bin directory
+* Keyword highlighting for platform-specific register names
 * Debugger: Show cpu cycle delta
 * DASM: Support RORG and REND
 * DASM: Support ORG fill value

@@ -256,7 +256,7 @@ export async function renumberCmd() {
 			editor.selection
 		]
 	})
-	if (content && content.document.version == editor.document.version && content.edits.length > 0) {
+	if (content && content.textDocument.version == editor.document.version && content.edits.length > 0) {
 		editor.edit(edit => {
 			content.edits.forEach(myEdit => {
 				const range = new vscode.Range(myEdit.range.start, myEdit.range.end)

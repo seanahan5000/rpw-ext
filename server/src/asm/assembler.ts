@@ -308,7 +308,7 @@ export class Assembler {
       this.syntaxDef.scopeSeparator)
 
     // can be set undefined externally
-    this.symUtils = new SymbolUtils()
+    this.symUtils = new SymbolUtils(this)
   }
 
   public get syntax(): Syntax {
@@ -571,7 +571,7 @@ export class Assembler {
     }
 
     // process all remaining symbols
-    // const symUtils = new SymbolUtils()
+    // const symUtils = new SymbolUtils(this)
     // for (let line of lineRecords) {
     //   const statement = line.statement
     //   if (statement) {
@@ -1444,7 +1444,11 @@ export class Assembler {
     if (fs.existsSync(refFileName)) {
       this.curSeg.refBytes = fs.readFileSync(refFileName)
       if (refFileName.endsWith(".a78")) {
-        this.curSeg.refBytes = this.curSeg.refBytes.subarray(0x80)
+        const decoder = new TextDecoder()
+        const signature = decoder.decode(this.curSeg.refBytes.slice(1, 9))
+        if (signature == "ATARI7800") {
+          this.curSeg.refBytes = this.curSeg.refBytes.subarray(0x80)
+        }
       }
     }
 
@@ -1622,12 +1626,20 @@ import { Op } from "./syntaxes/syntax_types"
 
 export class SymbolUtils {
 
+  private asm: Assembler
+
+  constructor(asm: Assembler) {
+    this.asm = asm
+  }
+
   markData(expression: exp.Expression) {
     const symExps: exp.SymbolExpression[] = []
     this.recurseSyms(expression, symExps)
     if (symExps.length == 1) {
       const symbol = symExps[0].symbol
       if (symbol) {
+
+        // *** TODO: use keywords instead
         const value = symbol.resolve()
         if (value != undefined && !Array.isArray(value)) {
           // *** do something special with Apple hardware addresses ***
@@ -1635,10 +1647,12 @@ export class SymbolUtils {
             return
           }
         }
+
         if (symbol.isConstant) {
           symExps[0].setWarning("Symbol used as both data address and constant")
         } else {
           symbol.isData = true
+          this.checkKeywords(symbol)
         }
       }
     }
@@ -1680,7 +1694,22 @@ export class SymbolUtils {
             symExps[0].setWarning("Symbol used as both ZP and constant")
           } else {
             symbol.isZPage = true
+            this.checkKeywords(symbol)
           }
+        }
+      }
+    }
+  }
+
+  private checkKeywords(symbol: Symbol) {
+    // check if zpage variable is in platform-specific keyword list
+    const symName = symbol.definition.getSimpleName().asString.toLowerCase()
+    const value = this.asm.module.project.keywords.get(symName)
+    if (value != undefined) {
+      const symValue = symbol.resolve()
+      if (symValue != undefined && !Array.isArray(symValue)) {
+        if (value == symValue) {
+          symbol.isKeyword = true
         }
       }
     }

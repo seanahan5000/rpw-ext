@@ -47,6 +47,7 @@ export class Symbol {
   public isSubroutine?: boolean
   public isData?: boolean
   public isCode?: boolean
+  public isKeyword?: boolean  // used to make platform-specific keywords
 
   // set by SUBROUTINE and .zone commands
   public isZoneStart?: boolean

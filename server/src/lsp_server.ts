@@ -1560,6 +1560,8 @@ export class LspServer {
               if (symExp.symbol.type == SymbolType.MacroName ||
                   symExp.symbol.type == SymbolType.TypeName) {
                 index = SemanticToken.macro
+              } else if (symExp.symbol.isKeyword) {
+                index = SemanticToken.keyword
               } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage
               } else if (symExp.symbol.isConstant) {

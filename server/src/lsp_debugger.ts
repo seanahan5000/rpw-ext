@@ -1628,6 +1628,10 @@ export class LspDebugger {
       const objectLine = objectDoc.getObjectLines(line)[0]
       if (objectLine?.dataBytes) {
         opBytes = objectLine.dataBytes
+        // remove data mismatch negation
+        for (let i = 0; i < opBytes.length; i += 1) {
+          opBytes[i] = Math.abs(opBytes[i])
+        }
       }
     }
     if (!opBytes) {

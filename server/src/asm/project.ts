@@ -76,6 +76,9 @@ export class Project {
   private defaultSettings?: RpwSettings
   private inferredSyntax = Syntax.UNKNOWN
 
+  public platform: string = ""
+  public keywords = new Map<string, number>()
+
   public syntax = Syntax.UNKNOWN
   public syntaxDef = SyntaxDefs[Syntax.UNKNOWN]
   public caseSensitive?: boolean    // overrides syntax definition
@@ -113,6 +116,15 @@ export class Project {
 
     this.rpwProject = rpwProject
     this.settingsChanged()
+
+    this.platform = (this.rpwProject.platform ?? "").toLowerCase()
+    if (this.platform == "atari2600") {
+      this.keywords = getAtari2600Keywords()
+    } else if (this.platform == "atari7800") {
+      this.keywords = getAtari7800Keywords()
+    } else if (this.platform.startsWith("apple")) {
+      this.keywords = getAppleKeywords()
+    }
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
@@ -845,6 +857,150 @@ function cleanPath(path: string): string {
     result = result.substring(1)
   }
   return result
+}
+
+//------------------------------------------------------------------------------
+
+function getAtari2600Keywords(): Map<string, number> {
+  return new Map<string, number>([
+    [ "cxm0p",    0x00 ],
+    [ "cxm1p",    0x01 ],
+    [ "cxp0fb",   0x02 ],
+    [ "cxp1fb",   0x03 ],
+    [ "cxm0fb",   0x04 ],
+    [ "cxm1fb",   0x05 ],
+    [ "cxblpf",   0x06 ],
+    [ "cxppmm",   0x07 ],
+    [ "inpt0",    0x08 ],
+    [ "inpt1",    0x09 ],
+    [ "inpt2",    0x0A ],
+    [ "inpt3",    0x0B ],
+    [ "inpt4",    0x0C ],
+    [ "inpt5",    0x0D ],
+    [ "vsync",    0x00 ],
+    [ "vblank",   0x01 ],
+    [ "wsync",    0x02 ],
+    [ "rsync",    0x03 ],
+    [ "nusiz0",   0x04 ],
+    [ "nusiz1",   0x05 ],
+    [ "colup0",   0x06 ],
+    [ "colup1",   0x07 ],
+    [ "colupf",   0x08 ],
+    [ "colubk",   0x09 ],
+    [ "ctrlpf",   0x0A ],
+    [ "refp0",    0x0B ],
+    [ "refp1",    0x0C ],
+    [ "pf0",      0x0D ],
+    [ "pf1",      0x0E ],
+    [ "pf2",      0x0F ],
+    [ "resp0",    0x10 ],
+    [ "resp1",    0x11 ],
+    [ "resm0",    0x12 ],
+    [ "resm1",    0x13 ],
+    [ "resbl",    0x14 ],
+    [ "audc0",    0x15 ],
+    [ "audc1",    0x16 ],
+    [ "audf0",    0x17 ],
+    [ "audf1",    0x18 ],
+    [ "audv0",    0x19 ],
+    [ "audv1",    0x1A ],
+    [ "grp0",     0x1B ],
+    [ "grp1",     0x1C ],
+    [ "enam0",    0x1D ],
+    [ "enam1",    0x1E ],
+    [ "enabl",    0x1F ],
+    [ "hmp0",     0x20 ],
+    [ "hmp1",     0x21 ],
+    [ "hmm0",     0x22 ],
+    [ "hmm1",     0x23 ],
+    [ "hmbl",     0x24 ],
+    [ "vdelp0",   0x25 ],
+    [ "vdelp1",   0x26 ],
+    [ "vdelbl",   0x27 ],
+    [ "resmp0",   0x28 ],
+    [ "resmp1",   0x29 ],
+    [ "hmove",    0x2A ],
+    [ "hmclr",    0x2B ],
+    [ "cxclr",    0x2C ],
+    [ "swcha",    0x0280 ],
+    [ "swacnt",   0x0281 ],
+    [ "swchb",    0x0282 ],
+    [ "swbcnt",   0x0283 ],
+    [ "intim",    0x0284 ],
+    [ "tim1t",    0x0294 ],
+    [ "tim8t",    0x0295 ],
+    [ "tim64t",   0x0296 ],
+    [ "tim1024t", 0x0297 ],
+  ])
+}
+
+function getAtari7800Keywords(): Map<string, number> {
+  return new Map<string, number>([
+    [ "inptctrl", 0x01 ],
+    [ "inpt0",    0x08 ],
+    [ "inpt1",    0x09 ],
+    [ "inpt2",    0x0A ],
+    [ "inpt3",    0x0B ],
+    [ "inpt4",    0x0C ],
+    [ "inpt5",    0x0D ],
+    [ "audc0",    0x15 ],
+    [ "audc1",    0x16 ],
+    [ "audf0",    0x17 ],
+    [ "audf1",    0x18 ],
+    [ "audv0",    0x19 ],
+    [ "audv1",    0x1A ],
+    [ "backgrnd", 0x20 ],
+    [ "p0c1",     0x21 ],
+    [ "p0c2",     0x22 ],
+    [ "p0c3",     0x23 ],
+    [ "wsync",    0x24 ],
+    [ "p1c1",     0x25 ],
+    [ "p1c2",     0x26 ],
+    [ "p1c3",     0x27 ],
+    [ "mstat",    0x28 ],
+    [ "p2c1",     0x29 ],
+    [ "p2c2",     0x2A ],
+    [ "p2c3",     0x2B ],
+    [ "dpph",     0x2C ],
+    [ "p3c1",     0x2D ],
+    [ "p3c2",     0x2E ],
+    [ "p3c3",     0x2F ],
+    [ "dppl",     0x30 ],
+    [ "p4c1",     0x31 ],
+    [ "p4c2",     0x32 ],
+    [ "p4c3",     0x33 ],
+    [ "charbase", 0x34 ],
+    [ "p5c1",     0x35 ],
+    [ "p5c2",     0x36 ],
+    [ "p5c3",     0x37 ],
+    [ "offset",   0x38 ],
+    [ "p6c1",     0x39 ],
+    [ "p6c2",     0x3A ],
+    [ "p6c3",     0x3B ],
+    [ "ctrl",     0x3C ],
+    [ "p7c1",     0x3D ],
+    [ "p7c2",     0x3E ],
+    [ "p7c3",     0x3F ],
+    [ "swcha",    0x0280 ],
+    [ "swacnt",   0x0281 ],
+    [ "swchb",    0x0282 ],
+    [ "swbcnt",   0x0283 ],
+    [ "swcha",    0x0280 ],
+    [ "swacnt",   0x0281 ],
+    [ "swchb",    0x0282 ],
+    [ "swbcnt",   0x0283 ],
+    [ "intim",    0x0284 ],
+    [ "tim1t",    0x0294 ],
+    [ "tim8t",    0x0295 ],
+    [ "tim64t",   0x0296 ],
+    [ "tim1024t", 0x0297 ],
+  ])
+}
+
+function getAppleKeywords(): Map<string, number> {
+  return new Map<string, number>([
+    // TODO: add some Apple II keywords
+  ])
 }
 
 //------------------------------------------------------------------------------
