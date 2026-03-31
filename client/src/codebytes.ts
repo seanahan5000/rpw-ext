@@ -314,7 +314,7 @@ class CodeList {
     let fullRange: LineRange | undefined
     for (const range of visibleRanges) {
       const rangeStart = Math.max(range.start.line - 1, 0)
-      const rangeEnd = range.end.line + 1
+      const rangeEnd = range.end.line + 2
       if (!fullRange) {
         fullRange = { startLine: rangeStart, endLine: rangeEnd }
       } else {

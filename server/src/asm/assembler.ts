@@ -511,6 +511,9 @@ export class Assembler {
             if (this.curSeg) {
               if (this.curSeg.nextPC !== undefined) {
                 this.curSeg.curPC = this.curSeg.nextPC
+                if (this.curSeg.startPC == undefined) {
+                  this.curSeg.startPC = this.curSeg.nextPC
+                }
                 this.curSeg.nextPC = undefined
               } else {
                 if (advancePC != 0) {   // *** just a hack right now ***
@@ -618,7 +621,7 @@ export class Assembler {
   // debug-only
   static dumpFile = false
 
-  public assemble_pass2() {
+  public assemble_pass2(): number {
     this.pass = 2
 
     this.statementBytes = []
@@ -697,14 +700,19 @@ export class Assembler {
     }
 
     // walk each macro invoke statement and collect errors from their children
+    let errorCount = 0
     for (let line of this.lineRecords) {
       if (!line.isHidden && line.statement?.enabled) {
         if (line.statement instanceof MacroInvokeStatement) {
           this.collectErrors(line)
         }
+        if (line.statement.hasAnyError()) {
+          errorCount += 1
+        }
       }
     }
 
+    // TODO: skip on error?
     if (this.module.saveName) {
       this.writeFile(this.module.saveName)
     }
@@ -760,6 +768,8 @@ export class Assembler {
 
     // TODO: parent/child relationship between statements is lost here
     this.lineRecords = []
+
+    return errorCount
   }
 
   private addObjectLine(line: LineRecord, byteCount: number) {
@@ -1122,9 +1132,13 @@ export class Assembler {
     if (!this.curSeg) {
       // TODO: is it correct to create default segment here?
       this.curSeg = new Segment("code", "absolute", true, nextOrg)
+    } else if (isVirtual || !this.curSeg.isInitialized) {
+      this.curSeg.nextPC = nextOrg
     } else {
-      if (!isVirtual && this.curSeg.curPC !== undefined) {
-        fillAmount = Math.max(nextOrg - this.curSeg.curPC, 0)
+      if (this.curSeg.curPC !== undefined) {
+        if (this.curSeg.curPC != this.curSeg.startPC) {
+          fillAmount = nextOrg - this.curSeg.curPC
+        }
       }
       this.curSeg.nextPC = nextOrg
     }

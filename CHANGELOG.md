@@ -10,22 +10,30 @@ Automatically determine tab tops and upper/lower case, deprecating associated pr
 * Prepend Atari 7800 header to binary when saving as .a78 file
 * Write assembly results to bin directory
 * Keyword highlighting for platform-specific register names
+* Error reported when renumbering locals is cancelled
+* Debugger: Support setting watch expression values
 * Debugger: Show cpu cycle delta
 * DASM: Support RORG and REND
 * DASM: Support ORG fill value
+* DASM: Error on immediate values > 255
+* All: Error on negative org delta
 
 #### Fixed:
 * Unneeded reparsing on file open, tab change
 * Hover over structure labels not showing values
+* All: Enforce quoted strings on include file names
+* All: Renumbering of locals with numbers and some non-numeric characters
 * DASM: Generate data for strings in .byte and dc.b statements
 * DASM: Mark closing quote as error on string constant
 * DASM: Apply opcode suffix to code generation (lda.w, etc.)
 * DASM: Fill bytes when switching between SEG.U and SEG
 * DASM: ifconst and ifnconst with undefined symbols
+* CA65: crash when using aliased functions like .def, .ismnem, etc.
 * Editor: Force cursor visible after large cut of text with codeByte decorators
 * Editor: Suppress trailing space on auto-completes for LSR, ROR, etc.
 * Editor: Handling of trigger characters in completion suggestions
 * Debugger: Watch arrays with empty dimensions ("$1000:[]", "$1000[][4]" etc.)
+* Debugger: Stale breakpoints across debugger launches
 
 #### Changed:
 * Hover over label definition no longer shows comment header block

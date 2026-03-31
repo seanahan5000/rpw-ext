@@ -95,6 +95,7 @@ export class Project {
   public includePaths: string[] = []
   public isTemporary = false
   public inWorkspace = false
+  public sawError = false
 
   constructor(defaultSettings: RpwSettings) {
     this.defaultSettings = defaultSettings
@@ -246,6 +247,8 @@ export class Project {
   }
 
   update() {
+    let errorCount = 0
+    this.sawError = false
     while (true) {
       const syntaxStats = new Array(SyntaxDefs.length).fill(0)
 
@@ -271,7 +274,7 @@ export class Project {
 
       // disable includes mechanism while prepare includes files
       preMod.update_pass01(settingsMap, undefined, precompFiles, syntaxStats)
-      preMod.update_pass2()
+      errorCount += preMod.update_pass2()
 
       // assemble first pass using precompiled files/symbols
       for (let module of this.modules) {
@@ -338,13 +341,14 @@ export class Project {
 
       for (let module of this.modules) {
         // write all output data
-        module.update_pass2()
+        errorCount += module.update_pass2()
       }
 
       for (let module of this.modules) {
         module.update_finalize()
       }
 
+      this.sawError = errorCount != 0
       break
     }
   }
@@ -700,9 +704,9 @@ export class Module {
     this.asm.assemble_pass01(fileNames, syntaxStats)
   }
 
-  public update_pass2() {
+  public update_pass2(): number {
 
-    this.asm?.assemble_pass2()
+    let errorCount = this.asm?.assemble_pass2() ?? 0
     this.asm = undefined
 
     // link up all symbols
@@ -727,6 +731,8 @@ export class Module {
     // for (let i = 0; i < this.lineRecords.length; i += 1) {
     //   this.lineRecords[i].statement?.postParse()
     // }
+
+    return errorCount
   }
 
   public update_finalize() {

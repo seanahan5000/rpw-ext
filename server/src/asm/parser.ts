@@ -1297,6 +1297,7 @@ export class Parser extends Tokenizer {
       if (aliasDef.alias) {
         throw(`ASSERT: Function alias "${functionDef.alias}" points to another alias`)
       }
+      functionDef = aliasDef
     }
 
     this.startExpression(token)

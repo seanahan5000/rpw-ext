@@ -663,9 +663,14 @@ export class OpStatement extends Statement {
                 }
 
                 // TODO: skip if 65816
-                // if (immValue > 255) {
-                //   this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
-                // }
+                if (immValue > 255) {
+                  // TODO: error in DASM -- check other syntaxes
+                  if (asm.syntax == Syntax.DASM) {
+                    this.expression.setError(`Value ${immValue} out of range`)
+                  } else {
+                    this.expression.setWarning(`Immediate value ${immValue} will be truncated`)
+                  }
+                }
               }
             }
             break
@@ -1839,7 +1844,7 @@ class FileStatement extends Statement {
       if (fileNameStr.length > 0) {
         // TODO: only strip quotes for non-Merlin?
         // TODO: require quoting for CA65? other syntaxes?
-        let quoteChar = fileNameStr[0]
+        const quoteChar = fileNameStr[0]
         if (quoteChar == "'" || quoteChar == '"' || quoteChar == "<") {
           fileNameStr = fileNameStr.substring(1)
           if (fileNameStr.length > 0) {
@@ -1848,6 +1853,8 @@ class FileStatement extends Statement {
               fileNameStr = fileNameStr.substring(0, fileNameStr.length - 1)
             }
           }
+        } else if (parser.syntax != Syntax.MERLIN) {
+          this.fileName.setError("Quoated file name required")
         }
         this.fileNameStr = fileNameStr
       }
@@ -1869,7 +1876,7 @@ export class IncludeStatement extends FileStatement {
   public override preprocess(asm: Assembler): void {
     super.preprocess(asm)
 
-    if (this.fileName && this.fileNameStr) {
+    if (this.fileName && !this.fileName.hasAnyError() && this.fileNameStr) {
       if (!asm.includeFile(this.fileNameStr)) {
         this.fileName.setError("File not found")
       }
@@ -2777,6 +2784,10 @@ export class OrgStatement extends Statement {
         // TODO: does only Merlin treat this as a virtual PC?
         const isVirtual = asm.syntax == Syntax.MERLIN
         this.fillAmount = asm.setNextOrg(orgValue, isVirtual)
+        if (this.fillAmount < 0) {
+          valueArg.setError("Origin delta is negative")
+          this.fillAmount = 0
+        }
       }
 
       const fillArg = this.findArg("fill")

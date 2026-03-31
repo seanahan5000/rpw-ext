@@ -13,7 +13,7 @@ import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
 import { Statement, OpStatement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
-import { renumberLocals, renameSymbol } from "./asm/labels"
+import { renumberLocals, renameSymbol, FileEdits } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
 import { OpcodeDef, OpMode, isaSet65xx } from "./isa65xx"
 
@@ -913,7 +913,15 @@ export class LspServer {
         return
       }
 
-      const fileEdits = renumberLocals(sourceFile, range.start.line, range.end.line)
+      let fileEdits: (FileEdits | undefined)
+      try {
+        fileEdits = renumberLocals(sourceFile, range.start.line, range.end.line)
+      } catch (e: any) {
+        if (typeof e == "string") {
+          return { error: e }
+        }
+      }
+
       if (!fileEdits || fileEdits.size > 1) {
         return
       }
@@ -1402,7 +1410,7 @@ export class LspServer {
       // TODO: for any duplicate symbol, add information link back to definition
 
     } else if (expression instanceof FileNameExpression) {
-      if (expression.hasAnyError()) {
+      if (expression.hasAnyError() && expression.errorMessage == "File not found") {
         const expRange = expression.getRange()
         if (expRange && expRange.start >= state.startOffset && expRange.end <= state.endOffset) {
           let diagRange: lsp.Range
