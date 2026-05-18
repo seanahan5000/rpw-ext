@@ -1854,7 +1854,7 @@ class FileStatement extends Statement {
             }
           }
         } else if (parser.syntax != Syntax.MERLIN) {
-          this.fileName.setError("Quoated file name required")
+          this.fileName.setError("Quoted file name required")
         }
         this.fileNameStr = fileNameStr
       }

@@ -11,6 +11,7 @@ Automatically determine tab tops and upper/lower case, deprecating associated pr
 * Write assembly results to bin directory
 * Keyword highlighting for platform-specific register names
 * Error reported when renumbering locals is cancelled
+* Editor: Support function names as document symbols
 * Debugger: Support setting watch expression values
 * Debugger: Show cpu cycle delta
 * DASM: Support RORG and REND

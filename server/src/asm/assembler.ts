@@ -1400,12 +1400,22 @@ export class Assembler {
       const a78Header = this.module.project.rpwProject?.a78Header ??
                         this.module.project.rpwProject?.a78header
       const gameName = a78Header?.gameName ?? "Your Cart Name"
-      const romSize = a78Header?.romSize ?? buffer.length
-      const cartType = a78Header?.cartType ?? 0
+      let romSize = a78Header?.romSize ?? buffer.length
+      let cartType = a78Header?.cartType ?? 0
       const controller1Type = a78Header?.controller1Type ?? 0
       const controller2Type = a78Header?.controller2Type ?? 0
       const tvFormat = a78Header?.tvFormat?.toUpperCase() ?? "NTSC"
-      const saveDevice = a78Header?.saveDevice ?? false
+      let saveDevice = a78Header?.saveDevice ?? 0
+
+      if (typeof(romSize) == "string") {
+        romSize = parseInt(romSize)
+      }
+      if (typeof(cartType) == "string") {
+        cartType = parseInt(cartType)
+      }
+      if (typeof(saveDevice) == "string") {
+        saveDevice = parseInt(saveDevice)
+      }
 
       const encoder = new TextEncoder()
       header[0] = 1   // version
@@ -1415,11 +1425,12 @@ export class Assembler {
       header[0x32] = (romSize >> 16) & 0xff
       header[0x33] = (romSize >>  8) & 0xff
       header[0x34] = (romSize >>  0) & 0xff
-      header[0x35] = cartType
+      header[0x35] = (cartType >> 8) & 0xff
+      header[0x36] = (cartType >> 0) & 0xff
       header[0x37] = controller1Type
       header[0x38] = controller2Type
       header[0x39] = tvFormat == "PAL" ? 1 : 0
-      header[0x3A] = saveDevice ? 1 : 0
+      header[0x3A] = saveDevice ?? 0
       header.set(encoder.encode("ACTUAL CART DATA STARTS HERE"), 0x64)
     }
 

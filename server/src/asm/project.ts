@@ -97,7 +97,7 @@ export class Project {
   public inWorkspace = false
   public sawError = false
 
-  constructor(defaultSettings: RpwSettings) {
+  constructor(defaultSettings?: RpwSettings) {
     this.defaultSettings = defaultSettings
     this.settingsChanged()
   }

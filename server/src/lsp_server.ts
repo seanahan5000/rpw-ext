@@ -11,7 +11,7 @@ import { Project, Module, SourceFile } from "./asm/project"
 import { ObjectDoc } from "./asm/object_doc"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
-import { Statement, OpStatement } from "./asm/statements"
+import { Statement, OpStatement, EquStatement, StorageStatement, DataStatement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
 import { renumberLocals, renameSymbol, FileEdits } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
@@ -126,7 +126,7 @@ export class LspProject extends Project {
 
   private server: LspServer
 
-  constructor(server: LspServer, defaultSettings: RpwSettings) {
+  constructor(server: LspServer, defaultSettings?: RpwSettings) {
     super(defaultSettings)
     this.server = server
   }
@@ -143,7 +143,7 @@ export class LspProject extends Project {
   }
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    this.server.removeTemporary(this, fullPath)
+    this.server.removeTemporary(module, fullPath)
     return super.openSourceFile(module, fullPath)
   }
 }
@@ -224,6 +224,7 @@ export class LspServer {
     this.connection.onReferences(this.onReferences.bind(this))
     this.connection.onPrepareRename(this.onPrepareRename.bind(this))
     this.connection.onRenameRequest(this.onRename.bind(this))
+    this.connection.onDocumentSymbol(this.onDocumentSymbol.bind(this))
     this.connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
     this.connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
 
@@ -257,10 +258,21 @@ export class LspServer {
 
   // if a file was opened in a project,
   //  remove a temporary project that already owned the file
-  removeTemporary(curProject: Project, filePath: string) {
+  removeTemporary(curModule: Module, filePath: string) {
+    const curProject = curModule.project
     for (let project of this.projects) {
       if (project != curProject && project.isTemporary) {
-        if (project.findSourceFile(filePath)) {
+        const sourceFile = project.findSourceFile(filePath)
+        if (sourceFile) {
+
+          // clear this sourceFile from openDocs state so
+          //  the new file will get refound later
+          for (const [key, state] of this.openDocs) {
+            if (state.sourceFile == sourceFile) {
+              state.sourceFile = undefined
+            }
+          }
+
           // only remove if it's alone in its project/module
           // NOTE: for now, just disable the project by removing its modules
           // Removing it completely will cause problems because caller is
@@ -302,7 +314,8 @@ export class LspServer {
         hoverProvider: true,
         renameProvider: { prepareProvider: true },
         referencesProvider: true,
-        foldingRangeProvider: true
+        foldingRangeProvider: true,
+        documentSymbolProvider: true
       }
     }
 
@@ -468,6 +481,33 @@ export class LspServer {
         project.update()
       }
 
+      // remove any temporary projects that are now empty
+      for (let i = 0; i < this.projects.length; ) {
+        const project = this.projects[i]
+        if (project.modules.length == 0) {
+          this.projects.splice(i, 1)
+          continue
+        }
+        i += 1
+      }
+
+      // check for a file becoming orphaned again
+      for (const [key, docState] of this.openDocs) {
+        const filePath = pathFromUriString(docState.document.uri)
+        if (filePath) {
+          const sourceFile = this.findSourceFile(filePath)
+          if (!sourceFile) {
+            docState.sourceFile = undefined
+            const project = this.addFileProject(filePath)
+            if (!project) {
+              // TODO: error handling?
+              return
+            }
+            project.update()
+          }
+        }
+      }
+
       this.sendUpdates()
 
       this.scheduleDiagnostics(this.updateFile)
@@ -510,7 +550,7 @@ export class LspServer {
   }
 
   // build a tempory project given a file path
-  private async addFileProject(path: string): Promise<LspProject | undefined> {
+  private addFileProject(path: string): LspProject | undefined {
     let fileName: string
     let directory: string
     let inWorkspace: boolean
@@ -535,11 +575,12 @@ export class LspServer {
     rpwProject.modules = []
     rpwProject.modules.push({src: fileName})
 
-    if (!this.defaultSettings) {
-      this.defaultSettings = this.buildRpwSettings()
-    }
+    // if (!this.defaultSettings) {
+    //   // *** this is causing addFileProject to be async ***
+    //   this.defaultSettings = this.buildRpwSettings()
+    // }
 
-    const project = new LspProject(this, await this.defaultSettings)
+    const project = new LspProject(this, undefined/*await this.defaultSettings*/)
     const isTemporary = true
     project.loadProject(directory, rpwProject, isTemporary, inWorkspace)
     this.projects.push(project)
@@ -1328,6 +1369,55 @@ export class LspServer {
         }
       }
     }
+  }
+
+  async onDocumentSymbol(params: lsp.DocumentSymbolParams): Promise<lsp.DocumentSymbol[] | lsp.SymbolInformation[]> {
+    this.executeUpdate()
+
+    const result: lsp.DocumentSymbol[] = []
+    const sourceFile = this.getSourceFile(params.textDocument.uri)
+    if (sourceFile) {
+      let startLine = -1
+      let startStatement: Statement | undefined
+      for (let lineNumber = 0; lineNumber < sourceFile.statements.length; lineNumber += 1) {
+        const statement = sourceFile.statements[lineNumber]
+        if (!statement.labelExp) {
+          continue
+        }
+        if (statement.labelExp.isLocalType()) {
+          continue
+        }
+        if (statement.labelExp.isVariableType()) {
+          continue
+        }
+        if (statement instanceof EquStatement
+          || statement instanceof StorageStatement
+          || statement instanceof DataStatement) {
+          continue
+        }
+        if (startLine != -1 && startStatement?.labelExp) {
+          const symRange = startStatement.labelExp.getRange()!
+          result.push(lsp.DocumentSymbol.create(
+            startStatement.labelExp.getSimpleName().asString,
+            undefined,
+            lsp.SymbolKind.Function,
+            lsp.Range.create(startLine, 0, lineNumber, 0),
+            lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+        }
+        startLine = lineNumber
+        startStatement = statement
+      }
+      if (startLine != -1 && startStatement?.labelExp) {
+        const symRange = startStatement.labelExp.getRange()!
+        result.push(lsp.DocumentSymbol.create(
+          startStatement.labelExp.getSimpleName().asString,
+          undefined,
+          lsp.SymbolKind.Function,
+          lsp.Range.create(startLine, 0, sourceFile.statements.length, 0),
+          lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+      }
+    }
+    return result
   }
 
   //----------------------------------------------------------------------------

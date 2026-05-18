@@ -2,11 +2,11 @@
 import * as vscode from 'vscode'
 import { openDocs } from "./extension"
 
-function getStartLineText(editor): string {
+function getStartLineText(editor: vscode.TextEditor): string {
 	return getLineText(editor, editor.selection.start.line);
 }
 
-function getLineText(editor, line: number): string {
+function getLineText(editor: vscode.TextEditor, line: number): string {
 	const range = new vscode.Range(line, 0, line + 1, 0);
 	return editor.document.getText(range);
 }
