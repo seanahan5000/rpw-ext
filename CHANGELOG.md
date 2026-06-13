@@ -12,18 +12,22 @@ Automatically determine tab tops and upper/lower case, deprecating associated pr
 * Keyword highlighting for platform-specific register names
 * Error reported when renumbering locals is cancelled
 * Editor: Support function names as document symbols
+* Debugger: Step forward command (step over branch)
 * Debugger: Support setting watch expression values
+* Debugger: Support data breakpoints
 * Debugger: Show cpu cycle delta
 * DASM: Support RORG and REND
 * DASM: Support ORG fill value
 * DASM: Error on immediate values > 255
 * All: Error on negative org delta
+* All: Support binary include
 
 #### Fixed:
 * Unneeded reparsing on file open, tab change
 * Hover over structure labels not showing values
 * All: Enforce quoted strings on include file names
 * All: Renumbering of locals with numbers and some non-numeric characters
+* All: Mark tokens after opcodes without arguments as errors
 * DASM: Generate data for strings in .byte and dc.b statements
 * DASM: Mark closing quote as error on string constant
 * DASM: Apply opcode suffix to code generation (lda.w, etc.)
@@ -33,6 +37,7 @@ Automatically determine tab tops and upper/lower case, deprecating associated pr
 * Editor: Force cursor visible after large cut of text with codeByte decorators
 * Editor: Suppress trailing space on auto-completes for LSR, ROR, etc.
 * Editor: Handling of trigger characters in completion suggestions
+* Editor: Use macro definition case for completion suggestion
 * Debugger: Watch arrays with empty dimensions ("$1000:[]", "$1000[][4]" etc.)
 * Debugger: Stale breakpoints across debugger launches
 

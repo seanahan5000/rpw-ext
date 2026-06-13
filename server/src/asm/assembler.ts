@@ -1400,19 +1400,48 @@ export class Assembler {
       const a78Header = this.module.project.rpwProject?.a78Header ??
                         this.module.project.rpwProject?.a78header
       const gameName = a78Header?.gameName ?? "Your Cart Name"
-      let romSize = a78Header?.romSize ?? buffer.length
-      let cartType = a78Header?.cartType ?? 0
-      const controller1Type = a78Header?.controller1Type ?? 0
-      const controller2Type = a78Header?.controller2Type ?? 0
-      const tvFormat = a78Header?.tvFormat?.toUpperCase() ?? "NTSC"
-      let saveDevice = a78Header?.saveDevice ?? 0
 
+      let sizeIndex = -1
+      let romSize = a78Header?.romSize ?? buffer.length
+      if (Array.isArray(romSize)) {
+        for (let i = 0; i < romSize.length; i += 1) {
+          let size = romSize[i]
+          if (typeof(size) == "string") {
+            size = parseInt(size)
+          }
+          if (size == buffer.length) {
+            sizeIndex = i
+            break
+          }
+        }
+        if (sizeIndex == -1) {
+          // throw new Error("Cart size not found in romSize array")
+          romSize = buffer.length
+        } else {
+          romSize = romSize[sizeIndex]
+        }
+      }
       if (typeof(romSize) == "string") {
         romSize = parseInt(romSize)
+      }
+
+      let cartType = a78Header?.cartType ?? 0
+      if (Array.isArray(cartType)) {
+        if (sizeIndex == -1) {
+          // throw new Error("romSize index not available for cartType array")
+          sizeIndex = 0
+        }
+        cartType = cartType[sizeIndex]
       }
       if (typeof(cartType) == "string") {
         cartType = parseInt(cartType)
       }
+
+      const controller1Type = a78Header?.controller1Type ?? 0
+      const controller2Type = a78Header?.controller2Type ?? 0
+      const tvFormat = a78Header?.tvFormat?.toUpperCase() ?? "NTSC"
+
+      let saveDevice = a78Header?.saveDevice ?? 0
       if (typeof(saveDevice) == "string") {
         saveDevice = parseInt(saveDevice)
       }
@@ -1479,6 +1508,13 @@ export class Assembler {
 
     this.curSeg.finalize()
     return true
+  }
+
+  public getBinFile(fileName: string): Uint8Array | undefined {
+    const binFileName = this.module.getBinFilePath(fileName)
+    if (fs.existsSync(binFileName) && fs.lstatSync(binFileName).isFile()) {
+      return fs.readFileSync(binFileName)
+    }
   }
 
   // #endregion

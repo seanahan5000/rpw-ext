@@ -118,11 +118,16 @@ export class Project {
     this.rpwProject = rpwProject
     this.settingsChanged()
 
+    let cartProject = false
+    let isAtari7800 = false
     this.platform = (this.rpwProject.platform ?? "").toLowerCase()
     if (this.platform == "atari2600") {
       this.keywords = getAtari2600Keywords()
+      cartProject = true
     } else if (this.platform == "atari7800") {
       this.keywords = getAtari7800Keywords()
+      cartProject = true
+      isAtari7800 = true
     } else if (this.platform.startsWith("apple")) {
       this.keywords = getAppleKeywords()
     }
@@ -166,6 +171,9 @@ export class Project {
     if (!rpwProject.modules) {
       return false
     }
+
+    let cartName: string | undefined
+
     for (let module of rpwProject.modules) {
       if (module.enabled ?? true) {
         if (module.src) {
@@ -197,12 +205,44 @@ export class Project {
               }
             }
           } else {
-            const saveName = module.save
+            let saveName = module.save
+            if (cartProject && cartName == undefined) {
+              if (saveName == undefined) {
+                const lastDot = srcName.lastIndexOf(".")
+                if (lastDot != -1) {
+                  saveName = srcName.substring(0, lastDot)
+                } else {
+                  saveName = srcName
+                }
+                if (isAtari7800) {
+                  saveName += ".a78"
+                } else {
+                  saveName += ".bin"
+                }
+              }
+              cartName = saveName
+            }
             this.modules.push(new Module(this, srcPath, srcName, saveName))
           }
         }
       }
     }
+
+    if (cartProject) {
+      if (!this.rpwProject.preloads) {
+        this.rpwProject.preloads = []
+      }
+      if (this.rpwProject.preloads.length == 0 && cartName) {
+        this.rpwProject.preloads.push({
+          entryPoint: "0xfffc",
+          bins: [{
+            name: cartName,
+            address: "auto"
+          }]
+        })
+      }
+    }
+
     return true
   }
 
@@ -503,10 +543,20 @@ export class Project {
               if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
                 const binBytes = fs.readFileSync(fullPath)
                 let binAddr
-                try {
-                  binAddr = parseInt(rpwBin.address!)
-                } catch (e: any) {
-                  throw new Error(`Invalid patch address: ${rpwBin.address!}`)
+                if (rpwBin.address == "auto") {
+                  // TODO: this will require more logic as bank switching schemes are supported
+                  // NOTE: binAddr will go negative on bank switched images (> 64K)
+                  if (rpwBin.name.endsWith(".a78")) {
+                    binAddr = 0x10080 - binBytes.length
+                  } else {
+                    binAddr = 0x10000 - binBytes.length
+                  }
+                } else {
+                  try {
+                    binAddr = parseInt(rpwBin.address!)
+                  } catch (e: any) {
+                    throw new Error(`Invalid preload address: ${rpwBin.address!}`)
+                  }
                 }
                 // if no entryPoint provided, default to address of first bin
                 //  (but don't allow 0xD000 bank 2)
@@ -641,19 +691,22 @@ export class Project {
       }
     }
 
-    // prove that addrStr is a valid number
-    if (!addrStr.startsWith("0x")) {
-      addrStr = "0x" + addrStr
-    }
-    let addrNum: number
-    try {
-      addrNum = parseInt(addrStr)
-    } catch (e: any) {
-      throw new Error(`Invalid address value: ${addrStr}`)
-    }
+    if (addrStr != "auto") {
 
-    if (addrNum == 0xd000 && !bankNum) {
-      throw new Error("Address 0xD000 must have a bank number")
+      // prove that addrStr is a valid number
+      if (!addrStr.startsWith("0x")) {
+        addrStr = "0x" + addrStr
+      }
+      let addrNum: number
+      try {
+        addrNum = parseInt(addrStr)
+      } catch (e: any) {
+        throw new Error(`Invalid address value: ${addrStr}`)
+      }
+
+      if (addrNum == 0xd000 && !bankNum) {
+        throw new Error("Address 0xD000 must have a bank number")
+      }
     }
 
     return { name: fullName, address: addrStr, bank: bankNum }

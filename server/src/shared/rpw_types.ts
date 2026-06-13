@@ -56,8 +56,8 @@ export type RpwPreload = {
 
 export type A78Header = {
   gameName?: string
-  romSize?: number
-  cartType?: number
+  romSize?: number | number[]
+  cartType?: number | number[]
   controller1Type?: number
   controller2Type?: number
   tvFormat?: string

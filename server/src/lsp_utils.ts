@@ -426,7 +426,8 @@ export class Completions {
         if (symbol.type == SymbolType.MacroName) {
           if (this.addMacros) {
             // TODO: add leading "+" for ACME syntax? trigger character?
-            const item = lsp.CompletionItem.create(key)
+            const name = symbol.definition.getSimpleName().asString
+            const item = lsp.CompletionItem.create(name)
             item.sortText = `${this.addMacros}_${key}`
             item.kind = lsp.CompletionItemKind.Function
             item.data = { filePath: symbol.definition.sourceFile?.fullPath, line: symbol.definition.lineNumber }

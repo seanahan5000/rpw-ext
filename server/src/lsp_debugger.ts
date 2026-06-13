@@ -70,6 +70,16 @@ type SetBreakpointsRequest = RequestHeader & {
   entries: BreakpointEntry[]
 }
 
+type DataBreakpointEntry = {
+  address: number
+  length: number
+  access: number  // 1: read, 2: write, 3: readWrite
+}
+
+type SetDataBreakpointsRequest = RequestHeader & {
+  entries: DataBreakpointEntry[]
+}
+
 type StackResponse = RequestHeader & {
   entries: StackEntry[]
 }
@@ -806,13 +816,14 @@ export class LspDebugger {
 
       case "cpuStopped": {
         const msg = <StopNotification>message
-        if (msg.reason == "breakpoint" && this.mainProject) {
+        const isDataBreakpoint =  msg.reason == "dataBreakpoint"
+        if ((msg.reason == "breakpoint" || isDataBreakpoint) && this.mainProject) {
           let dataRange: DataRange | undefined
           if (msg.dataAddress && msg.dataString) {
             dataRange = new DataRange(msg.dataAddress, base64.toByteArray(msg.dataString))
           }
           let result = this.mainProject.findSourceByAddress(msg.pc, dataRange)
-          if (result) {
+          if (result && !isDataBreakpoint) {
             const addresses = this.breakpoints.get(result.objectDoc.sourceFile.fullPath)
             let matched = false
             if (addresses) {
@@ -828,10 +839,12 @@ export class LspDebugger {
             }
           }
           if (!result) {
-            // if breakpoint address is in file that isn't loaded,
-            //  restart target and don't report stop
-            this.sendCommand("startCpu")
-            break
+            if (!isDataBreakpoint) {
+              // if breakpoint address is in file that isn't loaded,
+              //  restart target and don't report stop
+              this.sendCommand("startCpu")
+              break
+            }
           }
         }
         this.prevStopCycles = this.curStopCycles
@@ -960,7 +973,10 @@ export class LspDebugger {
         this.sendCommand("stepCpuOutOf")
         break
 
-      // TODO: step forward
+      // NOTE: this is not a standard debugger command
+      case "stepForward":
+        this.sendCommand("stepCpuForward")
+        break
 
       case "breakpointLocations":
         return this.onBreakpointLocations(<DebugProtocol.BreakpointLocationsArguments>params.arguments![1])
@@ -969,7 +985,7 @@ export class LspDebugger {
       case "dataBreakpointInfo":
         return this.onDataBreakpointInfo(<DebugProtocol.DataBreakpointInfoArguments>params.arguments![1])
       case "setDataBreakpoints":
-        return this.onDataBreakpointsInfo(<DebugProtocol.SetDataBreakpointsArguments>params.arguments![1])
+        return this.onSetDataBreakpoints(<DebugProtocol.SetDataBreakpointsArguments>params.arguments![1])
 
       case "stackTrace":
         return this.onStackTrace(<DebugProtocol.StackTraceArguments>params.arguments![1])
@@ -1183,12 +1199,135 @@ export class LspDebugger {
     return { breakpoints }
   }
 
-  // TODO: support these
-
-  private onDataBreakpointInfo(args: DebugProtocol.DataBreakpointInfoArguments) {
+  private parseNumber(s: string): number | undefined {
+    let radix: number | undefined
+    if (s[0] == "$") {
+      s = s.substring(1)
+      radix = 16
+    } else if (s[0] == "#") {
+      s = s.substring(1)
+      radix = 10
+    }
+    const n = parseInt(s, radix)
+    return isNaN(n) ? undefined : n
   }
 
-  private onDataBreakpointsInfo(args: DebugProtocol.SetDataBreakpointsArguments) {
+  private async onDataBreakpointInfo(args: DebugProtocol.DataBreakpointInfoArguments) {
+
+    let address: number | undefined
+    let bytes = args.bytes ?? 1
+    let description = ""
+
+    let canPersist = false
+
+    if (args.asAddress) {
+      address = this.parseNumber(args.name)
+      if (address == undefined) {
+        return { dataId: null, description: `Invalid address: ${args.name}` }
+      }
+      description = args.name
+      canPersist = true
+    } else if (args.variablesReference) {
+      return { dataId: null, description: `Expression not supported: ${args.name}` }
+    } else {
+      const ev = this.preEvaluate(args.name, args.frameId)
+      if (ev.parseError) {
+        return { dataId: null, description: `Invalid expression: ${args.name}` }
+      }
+      if (ev.typeDef) {
+        return { dataId: null, description: `Expression not supported: ${args.name}` }
+      }
+
+      const request: ReadOpMemoryRequest = {
+        command: "readOpMemory",
+        opBytes: ev.opBytes!
+      }
+
+      let typeSize
+      if (ev.typeName == "byte" || ev.typeName == "text") {
+        typeSize = 1
+      } else if (ev.typeName == "word") {
+        typeSize = 2
+      } else if (ev.typeName == "long") {
+        typeSize = 3
+      } else {
+        // TODO: choose length implicitly from opcode
+        typeSize = 1
+      }
+      request.typeSize = typeSize
+
+      // TODO: share this code
+      if (ev.columns != undefined) {
+        if (ev.columns == 0) {
+          ev.columns = 8
+          if (ev.rows == undefined || ev.rows == 0) {
+            ev.rows = 4
+          }
+        } else {
+          ev.columns = Math.max(Math.min(ev.columns, 16), 1)
+        }
+        if (ev.rows == undefined) {
+          ev.rows = 1
+        } if (ev.rows == 0) {
+          ev.rows = Math.ceil(16 / ev.columns)
+        } else {
+          ev.rows = Math.max(Math.min(ev.rows, 32), 1)
+        }
+        request.typeSize = ev.columns * typeSize * ev.rows
+      }
+
+      const response: ReadOpMemoryResponse = await this.sendRequest(request)
+      address = response.dataAddress
+      bytes = request.typeSize
+      description = args.name
+      // *** add address/size info? ***
+
+      // *** only canPersist if dataId is encoded in a way to works across sessions
+    }
+
+    const dataId = `addr:${address.toString(16)}:size:${bytes}`
+
+    // DebugProtocol.DataBreakpointInfoResponse.body
+    return {
+      dataId,
+      description,
+      accessTypes: ["read", "write", "readWrite"],
+      canPersist
+    }
+  }
+
+  private async onSetDataBreakpoints(args: DebugProtocol.SetDataBreakpointsArguments) {
+
+    const breakpoints: DebugProtocol.Breakpoint[] = []
+
+    const request: SetDataBreakpointsRequest = {
+      command: "setDataBreakpoints",
+      entries: []
+    }
+
+    for (const entry of args.breakpoints) {
+      const parts = entry.dataId.split(":")
+      const address = parseInt(parts[1], 16)
+      const length = parseInt(parts[3], 10)
+      let access = 0
+      if (entry.accessType == "read") {
+        access = 1
+      } else if (entry.accessType == "write") {
+        access = 2
+      } else {
+        access = 3
+      }
+      request.entries.push({ address, length, access})
+
+      // TODO: could push these after sendRequest response
+      breakpoints.push(new Breakpoint(true))
+    }
+
+    const response = await this.sendRequest(request)
+    // TODO: build breakpoints here instead based on validity?
+
+    // DebugProtocol.SetDataBreakpointsResponse.body
+    return { breakpoints }
   }
 
   //--------------------------------------------------------
@@ -1353,8 +1492,8 @@ export class LspDebugger {
     }
   }
 
-  private preEvaluate(args: DebugProtocol.EvaluateArguments |
-                            DebugProtocol.SetExpressionArguments) {
+  private preEvaluate(expression: string, frameId?: number) {
+
     let opBytes = undefined
     let rows = undefined
     let columns = undefined
@@ -1363,8 +1502,8 @@ export class LspDebugger {
     let parseError = false
 
     let scopeModule: Module | undefined
-    if (args.frameId != undefined) {
-      const stackEntry = this.stackFrameHandles.get(args.frameId)
+    if (frameId != undefined) {
+      const stackEntry = this.stackFrameHandles.get(frameId)
       if (stackEntry) {
         const objectDoc: ObjectDoc = (stackEntry as any).objectDoc
         if (objectDoc) {
@@ -1374,7 +1513,7 @@ export class LspDebugger {
     }
 
     // look for type name at end of expression and strip it off
-    let expStr = args.expression.trim()
+    let expStr = expression.trim()
     let typeStr = ""
     const n = expStr.lastIndexOf(":")
     if (n >= 0) {
@@ -1494,7 +1633,7 @@ export class LspDebugger {
       return
     }
 
-    const ev = this.preEvaluate(args)
+    const ev = this.preEvaluate(args.expression, args.frameId)
     if (ev.parseError) {
       return
     }
@@ -1586,7 +1725,7 @@ export class LspDebugger {
 
   private async onSetExpression(args: DebugProtocol.SetExpressionArguments) {
 
-    const ev = this.preEvaluate(args)
+    const ev = this.preEvaluate(args.expression, args.frameId)
     if (ev.parseError || ev.typeDef != undefined) {
       return
     }

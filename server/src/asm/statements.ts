@@ -251,6 +251,12 @@ export class OpStatement extends Statement {
 
     if (token) {
 
+      if (this.opcode.get(OpMode.NONE)) {
+        parser.addToken(token)
+        token.setError("Opcode does not support this addressing mode")
+        return
+      }
+
       // special case 65816 mvp/mvn SD mode "#$FF,#$FF"
 
       if (this.opcode.get(OpMode.SD)) {
@@ -446,7 +452,6 @@ export class OpStatement extends Statement {
         }
         return
       }
-
 
       const isDefinition = false
       if (str == ">" || str == "<") {
@@ -1944,9 +1949,77 @@ export class IncDirStatement extends FileStatement {
 
 export class IncBinStatement extends FileStatement {
 
+  private dataBytes?: Uint8Array
+  private offset?: number
+  private size?: number
+
+  public override preprocess(asm: Assembler): void {
+    super.preprocess(asm)
+
+    if (this.fileName && !this.fileName.hasAnyError() && this.fileNameStr) {
+      this.dataBytes = asm.getBinFile(this.fileNameStr)
+      if (!this.dataBytes) {
+        this.fileName.setError("File not found")
+        return
+      }
+
+      this.offset = 0
+      const offsetArg = this.findArg("offset")
+      if (offsetArg) {
+        const value = offsetArg.resolve()
+        if (value === undefined) {
+          offsetArg.setErrorWeak("Must resolve on first pass")
+          return
+        }
+        if (Array.isArray(value)) {
+          offsetArg.setError("String/array not allowed")
+          return
+        }
+        this.offset = value
+      }
+
+      this.size = this.dataBytes.length - this.offset
+      const sizeArg = this.findArg("size")
+      if (sizeArg) {
+        const value = sizeArg.resolve()
+        if (value === undefined) {
+          sizeArg.setErrorWeak("Must resolve on first pass")
+          return
+        }
+        if (Array.isArray(value)) {
+          sizeArg.setError("String/array not allowed")
+          return
+        }
+        this.size = value
+      }
+
+      if (this.offset > this.dataBytes.length) {
+        if (offsetArg) {
+          offsetArg.setError("Offset past end of data")
+          return
+        }
+      }
+      if (this.offset + this.size > this.dataBytes.length) {
+        if (sizeArg) {
+          sizeArg.setError("Offset+size past end of data")
+          return
+        }
+      }
+    }
+  }
+
   pass1(asm: Assembler): number {
-    // TODO: return actual data size
+    if (this.dataBytes) {
+      return this.size!
+    }
     return 0
+  }
+
+  pass2(asm: Assembler): void {
+    if (this.dataBytes) {
+      const bytes = Array.from(this.dataBytes.subarray(this.offset!, this.offset! + this.size!));
+      asm.writeBytes(bytes)
+    }
   }
 }
 

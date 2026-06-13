@@ -493,11 +493,14 @@ export class LspServer {
 
       // check for a file becoming orphaned again
       for (const [key, docState] of this.openDocs) {
+
+        // always clear cached source file so new version will be found
+        docState.sourceFile = undefined
+
         const filePath = pathFromUriString(docState.document.uri)
         if (filePath) {
           const sourceFile = this.findSourceFile(filePath)
           if (!sourceFile) {
-            docState.sourceFile = undefined
             const project = this.addFileProject(filePath)
             if (!project) {
               // TODO: error handling?
@@ -1397,24 +1400,32 @@ export class LspServer {
         }
         if (startLine != -1 && startStatement?.labelExp) {
           const symRange = startStatement.labelExp.getRange()!
-          result.push(lsp.DocumentSymbol.create(
-            startStatement.labelExp.getSimpleName().asString,
-            undefined,
-            lsp.SymbolKind.Function,
-            lsp.Range.create(startLine, 0, lineNumber, 0),
-            lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+          const name = startStatement.labelExp.getSimpleName().asString
+          if (name != "") {
+            result.push(lsp.DocumentSymbol.create(
+              name,
+              undefined,
+              lsp.SymbolKind.Function,
+              lsp.Range.create(startLine, 0, lineNumber, 0),
+              lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+          } else {
+            continue
+          }
         }
         startLine = lineNumber
         startStatement = statement
       }
       if (startLine != -1 && startStatement?.labelExp) {
         const symRange = startStatement.labelExp.getRange()!
-        result.push(lsp.DocumentSymbol.create(
-          startStatement.labelExp.getSimpleName().asString,
-          undefined,
-          lsp.SymbolKind.Function,
-          lsp.Range.create(startLine, 0, sourceFile.statements.length, 0),
-          lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+        const name = startStatement.labelExp.getSimpleName().asString
+        if (name != "") {
+          result.push(lsp.DocumentSymbol.create(
+            name,
+            undefined,
+            lsp.SymbolKind.Function,
+            lsp.Range.create(startLine, 0, sourceFile.statements.length, 0),
+            lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+        }
       }
     }
     return result

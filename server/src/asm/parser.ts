@@ -71,18 +71,15 @@ export class ParserStats {
   }
 
   public getTabStops(): number[] | undefined {
-    const opCol = this.pickColumn(this.opKeyCols)
+    let opCol = this.pickColumn(this.opKeyCols)
     if (opCol == undefined) {
-      return
-    }
-    let argCol = this.pickColumn(this.opArgCols)
-    if (argCol == undefined) {
-      argCol = this.pickColumn(this.keyArgCols)
-      if (argCol == undefined) {
+      opCol = this.pickColumn(this.keyArgCols)
+      if (opCol == undefined) {
         return
       }
     }
-    if (argCol <= opCol) {
+    const argCol = this.pickColumn(this.opArgCols)
+    if (argCol == undefined || argCol <= opCol) {
       return
     }
     let commentCol = this.pickColumn(this.commentCols) ?? 40

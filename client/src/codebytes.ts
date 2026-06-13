@@ -56,7 +56,7 @@ function decodeObjectRanges(obParams: ObjectBytesChangedParams): CodeBytes {
     let dataArray: number[] | undefined
     if (obRange.dataString) {
       dataBytes = base64.toByteArray(obRange.dataString)
-      dataArray = new Array(...dataBytes)
+      dataArray = [...dataBytes]
     }
 
     let refDataBytes: Uint8Array | undefined

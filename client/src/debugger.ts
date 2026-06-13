@@ -148,6 +148,8 @@ export class RpwDebugSession extends DebugSession {
     response.body.supportsSetVariable = true
     response.body.supportsSetExpression = true
     response.body.supportsBreakpointLocationsRequest = true
+    response.body.supportsDataBreakpoints = true
+    response.body.supportsDataBreakpointBytes = true
 
     // TODO: enable/support this if stack trace loading is slow
     // response.body.supportsDelayedStackTraceLoading = true
