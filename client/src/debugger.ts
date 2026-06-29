@@ -70,6 +70,7 @@ class AwaitEvent {
 export class RpwDebugSession extends DebugSession {
 
   private configDone? = new AwaitEvent()
+  private delayedEvents: any[] = []
 
   constructor() {
     super()
@@ -78,7 +79,10 @@ export class RpwDebugSession extends DebugSession {
     this.setDebuggerColumnsStartAt1(false)
 
     client.onNotification("rpw65.debuggerStarted", () => {
-      this.sendEvent(new ContinuedEvent(1))
+      // NOTE: This delay is needed to adjust for the
+      //  stopping delay below.  Without out, a quick stop/start
+      //  gets reordered to start/stop
+      this.delayedSend(new ContinuedEvent(1))
     })
 
     client.onNotification("rpw65.debuggerStopped", (params) => {
@@ -97,15 +101,12 @@ export class RpwDebugSession extends DebugSession {
       // NOTE: Without this delay, the VSCode debugger gets in a state
       //  where it knows the target has stopped but the UI doesn't reflect that.
       //  Only clicking on the Pause button would get it out of that state.
-      setTimeout(() => {
-        // TODO: choose event based on reason
-        const stoppedEvent = new StoppedEvent('step', 1)
-        this.sendEvent(stoppedEvent)
-      }, 100)
+      // TODO: choose event based on reason
+      this.delayedSend(new StoppedEvent('step', 1))
     })
 
     client.onNotification("rpw65.debuggerClosed", () => {
-      this.sendEvent(new TerminatedEvent())
+      this.delayedSend(new TerminatedEvent())
     })
 
     client.onNotification("rpw65.debuggerError", (params) => {
@@ -114,8 +115,29 @@ export class RpwDebugSession extends DebugSession {
         error = "Debugger: " + params.error
       }
       vscode.window.showErrorMessage(error)
-      this.sendEvent(new TerminatedEvent())
+      this.delayedSend(new TerminatedEvent())
     })
+  }
+
+  // Space out the sending of events to prevent VS code debugger state
+  //  from getting confused.
+  private delayedSend(event: any) {
+    this.delayedEvents.push(event)
+    if (this.delayedEvents.length == 1) {
+      this.delayedFlush()
+    }
+  }
+
+  private delayedFlush() {
+    setTimeout(() => {
+      const event = this.delayedEvents.shift()
+      if (event != undefined) {
+        this.sendEvent(event)
+      }
+      if (this.delayedEvents.length > 0) {
+        this.delayedFlush()
+      }
+    }, 100)
   }
 
   protected initializeRequest(response: DebugProtocol.InitializeResponse, args: DebugProtocol.InitializeRequestArguments): void {
@@ -124,7 +146,10 @@ export class RpwDebugSession extends DebugSession {
     response.body.supportsConfigurationDoneRequest = true
     response.body.supportsGotoTargetsRequest = true
     response.body.supportsSetVariable = true
+    response.body.supportsSetExpression = true
     response.body.supportsBreakpointLocationsRequest = true
+    response.body.supportsDataBreakpoints = true
+    response.body.supportsDataBreakpointBytes = true
 
     // TODO: enable/support this if stack trace loading is slow
     // response.body.supportsDelayedStackTraceLoading = true
@@ -154,7 +179,7 @@ export class RpwDebugSession extends DebugSession {
 
     const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
       command: "rpw65.debugger",
-      arguments: [ "launch", args ]
+      arguments: ["launch", args]
     })
 
     // NOTE: This wait for all initial configuration
@@ -176,7 +201,7 @@ export class RpwDebugSession extends DebugSession {
 
     const result = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
       command: "rpw65.debugger",
-      arguments: [ "attach", args ]
+      arguments: ["attach", args]
     })
 
     // NOTE: This wait for all initial configuration

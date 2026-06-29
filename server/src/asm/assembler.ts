@@ -308,7 +308,7 @@ export class Assembler {
       this.syntaxDef.scopeSeparator)
 
     // can be set undefined externally
-    this.symUtils = new SymbolUtils()
+    this.symUtils = new SymbolUtils(this)
   }
 
   public get syntax(): Syntax {
@@ -511,6 +511,9 @@ export class Assembler {
             if (this.curSeg) {
               if (this.curSeg.nextPC !== undefined) {
                 this.curSeg.curPC = this.curSeg.nextPC
+                if (this.curSeg.startPC == undefined) {
+                  this.curSeg.startPC = this.curSeg.nextPC
+                }
                 this.curSeg.nextPC = undefined
               } else {
                 if (advancePC != 0) {   // *** just a hack right now ***
@@ -571,7 +574,7 @@ export class Assembler {
     }
 
     // process all remaining symbols
-    // const symUtils = new SymbolUtils()
+    // const symUtils = new SymbolUtils(this)
     // for (let line of lineRecords) {
     //   const statement = line.statement
     //   if (statement) {
@@ -618,7 +621,7 @@ export class Assembler {
   // debug-only
   static dumpFile = false
 
-  public assemble_pass2() {
+  public assemble_pass2(): number {
     this.pass = 2
 
     this.statementBytes = []
@@ -697,14 +700,19 @@ export class Assembler {
     }
 
     // walk each macro invoke statement and collect errors from their children
+    let errorCount = 0
     for (let line of this.lineRecords) {
       if (!line.isHidden && line.statement?.enabled) {
         if (line.statement instanceof MacroInvokeStatement) {
           this.collectErrors(line)
         }
+        if (line.statement.hasAnyError()) {
+          errorCount += 1
+        }
       }
     }
 
+    // TODO: skip on error?
     if (this.module.saveName) {
       this.writeFile(this.module.saveName)
     }
@@ -760,6 +768,8 @@ export class Assembler {
 
     // TODO: parent/child relationship between statements is lost here
     this.lineRecords = []
+
+    return errorCount
   }
 
   private addObjectLine(line: LineRecord, byteCount: number) {
@@ -1122,9 +1132,13 @@ export class Assembler {
     if (!this.curSeg) {
       // TODO: is it correct to create default segment here?
       this.curSeg = new Segment("code", "absolute", true, nextOrg)
+    } else if (isVirtual || !this.curSeg.isInitialized) {
+      this.curSeg.nextPC = nextOrg
     } else {
-      if (!isVirtual && this.curSeg.curPC !== undefined) {
-        fillAmount = Math.max(nextOrg - this.curSeg.curPC, 0)
+      if (this.curSeg.curPC !== undefined) {
+        if (this.curSeg.curPC != this.curSeg.startPC) {
+          fillAmount = nextOrg - this.curSeg.curPC
+        }
       }
       this.curSeg.nextPC = nextOrg
     }
@@ -1359,6 +1373,7 @@ export class Assembler {
     }
 
     const binFileName = this.module.getBinFilePath(fileName)
+    const refFileName = this.module.getBinFilePath("ref_" + fileName)
 
     if (Assembler.verifyOnWrite) {
       console.log(`Checking ${binFileName}`)
@@ -1376,14 +1391,30 @@ export class Assembler {
 
     const buffer = new Uint8Array(<number[]>this.curSeg.dataArray)
 
-    // TODO: eventually write out final data
-    // fs.writeFileSync(binFileName + "_new", buffer, { encoding: null, flag: "w" })
+    let header: Uint8Array | undefined
+    if (binFileName.endsWith(".a78")) {
+      header = this.buildA78Header(buffer)
+    }
+
+    let imageData = buffer
+    if (header) {
+      imageData = new Uint8Array(header.length + buffer.length)
+      imageData.set(header, 0)
+      imageData.set(buffer, header.length)
+    }
+
+    try {
+      fs.writeFileSync(binFileName, imageData, { encoding: null, flag: "w" })
+    } catch (err) {
+      console.log(`Unable to write ${binFileName}`)
+      return false
+    }
 
     // TODO: debug code, to be removed
     if (Assembler.verifyOnWrite) {
-      if (fs.existsSync(binFileName)) {
+      if (fs.existsSync(refFileName)) {
         // compare file results with previously written data
-        const refData = fs.readFileSync(binFileName)
+        const refData = fs.readFileSync(refFileName)
         if (refData) {
           if (refData.length != buffer.length) {
             console.log(`size mismatch (${refData.length} vs ${buffer.length}`)
@@ -1399,16 +1430,130 @@ export class Assembler {
           }
         }
       } else {
-        console.log("File missing: " + binFileName)
+        console.log("File missing: " + refFileName)
       }
     }
 
-    if (fs.existsSync(binFileName)) {
-      this.curSeg.refBytes = fs.readFileSync(binFileName)
+    if (fs.existsSync(refFileName)) {
+      this.curSeg.refBytes = fs.readFileSync(refFileName)
+      if (refFileName.endsWith(".a78")) {
+        const decoder = new TextDecoder()
+        const signature = decoder.decode(this.curSeg.refBytes.slice(1, 9))
+        if (signature == "ATARI7800") {
+          this.curSeg.refBytes = this.curSeg.refBytes.subarray(0x80)
+        }
+      }
     }
 
     this.curSeg.finalize()
     return true
+  }
+
+  private buildA78Header(buffer: Uint8Array): Uint8Array {
+    const header = new Uint8Array(128).fill(0)
+
+    // catch easy-to-make typo
+    const a78Header = this.module.project.rpwProject?.a78Header ??
+                      this.module.project.rpwProject?.a78header
+    const gameName = a78Header?.gameName ?? "Your Cart Name"
+
+    let sizeIndex = -1
+    let romSize = a78Header?.romSize ?? buffer.length
+    if (Array.isArray(romSize)) {
+      for (let i = 0; i < romSize.length; i += 1) {
+        let size = romSize[i]
+        if (typeof(size) == "string") {
+          size = parseInt(size)
+        }
+        if (size == buffer.length) {
+          sizeIndex = i
+          break
+        }
+      }
+      if (sizeIndex == -1) {
+        // throw new Error("Cart size not found in romSize array")
+        romSize = buffer.length
+      } else {
+        romSize = romSize[sizeIndex]
+      }
+    }
+    if (typeof(romSize) == "string") {
+      romSize = parseInt(romSize)
+    }
+
+    let cartType = a78Header?.cartType ?? 0
+    if (Array.isArray(cartType)) {
+      if (sizeIndex == -1) {
+        // throw new Error("romSize index not available for cartType array")
+        sizeIndex = 0
+      }
+      cartType = cartType[sizeIndex]
+    }
+    if (typeof(cartType) == "string") {
+      const cartTypes = cartType.split(" ")
+      cartType = 0
+      for (const type of cartTypes) {
+        const typeName = type.toLowerCase()
+        if (typeName == "linear") {
+          // do nothing
+        } else if (typeName == "supergame") {
+          cartType |= 0x02
+        } else if (typeName == "ram@4000") {
+          cartType |= 0x04
+        } else if (typeName == "bank6@4000") {
+          cartType |= 0x10
+        } else if (typeName == "pokey@450") {
+          cartType |= 0x40
+        // *** else others ***
+        } else {
+          throw new Error(`Unknown cartType value "${typeName}"`)
+        }
+      }
+    }
+
+    const controller1Type = a78Header?.controller1Type ?? 0
+    const controller2Type = a78Header?.controller2Type ?? 0
+    const tvFormat = a78Header?.tvFormat?.toLowerCase() ?? "ntsc"
+
+    let saveDevice = a78Header?.saveDevice ?? 0
+    if (typeof(saveDevice) == "string") {
+      const devices = saveDevice.split(" ")
+      saveDevice = 0
+      for (const device of devices) {
+        const devName = device.toLowerCase()
+        if (devName == "hsc") {
+          saveDevice |= 1
+        } else if (devName == "savekey") {
+          saveDevice |= 2
+        } else {
+          throw new Error(`Unknown saveDevice value "${devName}"`)
+        }
+      }
+    }
+
+    const encoder = new TextEncoder()
+    header[0] = 1   // version
+    header.set(encoder.encode("ATARI7800       "), 0x01)
+    header.set(encoder.encode(gameName), 0x11)
+    header[0x31] = (romSize >> 24) & 0xff
+    header[0x32] = (romSize >> 16) & 0xff
+    header[0x33] = (romSize >>  8) & 0xff
+    header[0x34] = (romSize >>  0) & 0xff
+    header[0x35] = (cartType >> 8) & 0xff
+    header[0x36] = (cartType >> 0) & 0xff
+    header[0x37] = controller1Type
+    header[0x38] = controller2Type
+    header[0x39] = tvFormat == "pal" ? 1 : 0
+    header[0x3A] = saveDevice ?? 0
+    header.set(encoder.encode("ACTUAL CART DATA STARTS HERE"), 0x64)
+    return header
+  }
+
+  public getBinFile(fileName: string): Uint8Array | undefined {
+    const binFileName = this.module.getBinFilePath(fileName)
+    if (fs.existsSync(binFileName) && fs.lstatSync(binFileName).isFile()) {
+      return fs.readFileSync(binFileName)
+    }
   }
 
   // #endregion
@@ -1581,21 +1726,33 @@ import { Op } from "./syntaxes/syntax_types"
 
 export class SymbolUtils {
 
+  private asm: Assembler
+
+  constructor(asm: Assembler) {
+    this.asm = asm
+  }
+
   markData(expression: exp.Expression) {
     const symExps: exp.SymbolExpression[] = []
     this.recurseSyms(expression, symExps)
     if (symExps.length == 1) {
       const symbol = symExps[0].symbol
       if (symbol) {
+
+        // *** TODO: use keywords instead
         const value = symbol.resolve()
-        // *** do something special with Apple hardware addresses ***
-        if (value && value >= 0xC000 && value <= 0xCFFF) {
-          return
+        if (value != undefined && !Array.isArray(value)) {
+          // *** do something special with Apple hardware addresses ***
+          if (value && value >= 0xC000 && value <= 0xCFFF) {
+            return
+          }
         }
+
         if (symbol.isConstant) {
           symExps[0].setWarning("Symbol used as both data address and constant")
         } else {
           symbol.isData = true
+          this.checkKeywords(symbol)
         }
       }
     }
@@ -1637,7 +1794,22 @@ export class SymbolUtils {
             symExps[0].setWarning("Symbol used as both ZP and constant")
           } else {
             symbol.isZPage = true
+            this.checkKeywords(symbol)
           }
+        }
+      }
+    }
+  }
+
+  private checkKeywords(symbol: Symbol) {
+    // check if zpage variable is in platform-specific keyword list
+    const symName = symbol.definition.getSimpleName().asString.toLowerCase()
+    const value = this.asm.module.project.keywords.get(symName)
+    if (value != undefined) {
+      const symValue = symbol.resolve()
+      if (symValue != undefined && !Array.isArray(symValue)) {
+        if (value == symValue) {
+          symbol.isKeyword = true
         }
       }
     }

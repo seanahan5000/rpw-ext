@@ -123,7 +123,7 @@ export class Expression extends Node {
 
   // TODO: make these abstract?
   // TODO: or also resolve to number array?
-  resolve(): number | undefined {
+  resolve(): number | number[] | undefined {
     return
   }
 
@@ -200,7 +200,7 @@ export class ParenExpression extends Expression {
     }
   }
 
-  resolve(): number | undefined {
+  resolve(): number | number[] | undefined {
     return this.arg?.resolve()
   }
 
@@ -223,42 +223,58 @@ export class StringExpression extends Expression {
   }
 
   // only resolve if string is a single character (string literal)
-  resolve(): number | undefined {
-    if (!this.children || this.children.length != 3) {
+  resolve(): number | number[] | undefined {
+    if (!this.children || this.children.length == 0) {
       return
     }
-    let str = this.children[0].getString()
+
+    const quote = this.children[0].getString()
 
     // CA65 only allows single character string with single quote
     if (this.syntax == Syntax.CA65) {
-      if (str != "'") {
+      if (quote != "'") {
         return
       }
     }
 
-    // TODO: DASM forbids(!) closing single quote on character
+    // DASM forbids(!) closing single quote on character
+    if (this.syntax == Syntax.DASM) {
+      if (this.children.length >= 3) {
+        if (quote == "'" && this.children[2].getString() == "'") {
+          if (this.children[1].getString().length == 1) {
+            this.setError("Closing quote not allowed")
+            return
+          }
+        }
+      }
+    }
 
     let highFlip = 0x00
     if (this.syntax == Syntax.MERLIN) {
-      if (str == '"') {
+      if (quote == '"') {
         highFlip = 0x80
       }
     }
 
-    str = this.children[1].getString()
-    if (str.length == 1) {
-      return str.charCodeAt(0) ^ highFlip
+    const result: number[] = []
+    const str = this.children[1].getString()
+    for (let i = 0; i < str.length; i += 1) {
+      result.push(str.charCodeAt(i) ^ highFlip)
     }
+
+    return result.length == 1 ? result[0] : result
   }
 
   getSize(): number | undefined {
-    if (this.resolve() !== undefined) {
-      return 1
+    const result = this.resolve()
+    if (result != undefined) {
+      if (Array.isArray(result)) {
+        return result.length
+      } else {
+        return 1
+      }
     }
   }
-
-  // return a single string containing all segments, without quotes
-  // *** getStringContents
 }
 
 //------------------------------------------------------------------------------
@@ -270,7 +286,7 @@ export class SymbolExpression extends Expression {
   public sourceFile?: SourceFile
   public lineNumber: number
   public symbol?: Symbol
-  private value?: number
+  private value?: number | number[]
   private _isImport?: boolean
   private _isExport?: boolean
 
@@ -350,7 +366,7 @@ export class SymbolExpression extends Expression {
     return isLocalType(this.symbolType)
   }
 
-  resolve(): number | undefined {
+  resolve(): number | number[] | undefined {
     if (this.value !== undefined) {
       return this.value
     }
@@ -408,40 +424,41 @@ export class UnaryExpression extends Expression {
 
   resolve(): number | undefined {
     let value = this.arg.resolve()
-    if (value !== undefined) {
-      switch (this.opType) {
-        case Op.Neg:
-          value = -value
-          break
-        case Op.Pos:
-          // TODO: check that this is correct (maybe absolute value?)
-          value = value
-          break
-        case Op.LogNot:
-          value = value ? 0 : 1
-          break
-        case Op.BitNot:
-          value = ~value
-          break
-        case Op.LowByte:
-          value = value & 255
-          break
-        case Op.HighByte:
-          value = (value >> 8) & 255
-          break
-        case Op.BankByte:
-          value = (value >> 16) & 255
-          break
-        case Op.SwappedWord:
-          value = ((value & 255) << 8) + ((value >> 8) & 255)
-          break
-        case Op.HighWord:
-          value = (value >> 8) & 0xFFFF
-          break
-        case Op.Word:
-          value = value & 0xFFFF
-          break
-      }
+    if (value == undefined || Array.isArray(value)) {
+      return
+    }
+    switch (this.opType) {
+      case Op.Neg:
+        value = -value
+        break
+      case Op.Pos:
+        // TODO: check that this is correct (maybe absolute value?)
+        value = value
+        break
+      case Op.LogNot:
+        value = value ? 0 : 1
+        break
+      case Op.BitNot:
+        value = ~value
+        break
+      case Op.LowByte:
+        value = value & 255
+        break
+      case Op.HighByte:
+        value = (value >> 8) & 255
+        break
+      case Op.BankByte:
+        value = (value >> 16) & 255
+        break
+      case Op.SwappedWord:
+        value = ((value & 255) << 8) + ((value >> 8) & 255)
+        break
+      case Op.HighWord:
+        value = (value >> 8) & 0xFFFF
+        break
+      case Op.Word:
+        value = value & 0xFFFF
+        break
     }
     return value
   }
@@ -484,77 +501,81 @@ export class BinaryExpression extends Expression {
   resolve(): number | undefined {
     let value: number | undefined
     let value1 = this.arg1.resolve()
+    if (value1 == undefined || Array.isArray(value1)) {
+      return
+    }
     let value2 = this.arg2.resolve()
-    if (value1 !== undefined && value2 !== undefined) {
-      switch (this.opType) {
-        case Op.Pow:
-          value = Math.pow(value1, value2)
-          break
-        case Op.Mul:
-          value = value1 * value2
-          break
-        case Op.FDiv:
-          value = value1 / value2
-          break
-        case Op.IDiv:
-          value = Math.floor(value1 / value2)
-          break
-        case Op.Mod:
-          value = value1 % value2
-          break
-        case Op.Add:
-          value = value1 + value2
-          break
-        case Op.Sub:
-          value = value1 - value2
-          break
-        case Op.ASL:
-          value = value1 << value2
-          break
-        case Op.ASR:
-          value = value1 >> value2
-          break
-        case Op.LSR:
-          // TODO: is this the right limit?
-          value = (value1 & 0xFFFF) >> value2
-          break
-        case Op.LT:
-          value = value1 < value2 ? 1 : 0
-          break
-        case Op.LE:
-          value = value1 <= value2 ? 1 : 0
-          break
-        case Op.GT:
-          value = value1 > value2 ? 1 : 0
-          break
-        case Op.GE:
-          value = value1 >= value2 ? 1 : 0
-          break
-        case Op.NE:
-          value = value1 != value2 ? 1 : 0
-          break
-        case Op.EQ:
-          value = value1 == value2 ? 1 : 0
-          break
-        case Op.BitAnd:
-          value = value1 & value2
-          break
-        case Op.BitXor:
-          value = value1 ^ value2
-          break
-        case Op.BitOr:
-          value = value1 | value2
-          break
-        case Op.LogAnd:
-          value = value1 && value2 ? 1 : 0
-          break
-        case Op.LogXor:
-          value = (value1 && value2) || (!value1 && !value2) ? 1 : 0
-          break
-        case Op.LogOr:
-          value = value1 || value2 ? 1 : 0
-          break
-      }
+    if (value2 == undefined || Array.isArray(value2)) {
+      return
+    }
+    switch (this.opType) {
+      case Op.Pow:
+        value = Math.pow(value1, value2)
+        break
+      case Op.Mul:
+        value = value1 * value2
+        break
+      case Op.FDiv:
+        value = value1 / value2
+        break
+      case Op.IDiv:
+        value = Math.floor(value1 / value2)
+        break
+      case Op.Mod:
+        value = value1 % value2
+        break
+      case Op.Add:
+        value = value1 + value2
+        break
+      case Op.Sub:
+        value = value1 - value2
+        break
+      case Op.ASL:
+        value = value1 << value2
+        break
+      case Op.ASR:
+        value = value1 >> value2
+        break
+      case Op.LSR:
+        // TODO: is this the right limit?
+        value = (value1 & 0xFFFF) >> value2
+        break
+      case Op.LT:
+        value = value1 < value2 ? 1 : 0
+        break
+      case Op.LE:
+        value = value1 <= value2 ? 1 : 0
+        break
+      case Op.GT:
+        value = value1 > value2 ? 1 : 0
+        break
+      case Op.GE:
+        value = value1 >= value2 ? 1 : 0
+        break
+      case Op.NE:
+        value = value1 != value2 ? 1 : 0
+        break
+      case Op.EQ:
+        value = value1 == value2 ? 1 : 0
+        break
+      case Op.BitAnd:
+        value = value1 & value2
+        break
+      case Op.BitXor:
+        value = value1 ^ value2
+        break
+      case Op.BitOr:
+        value = value1 | value2
+        break
+      case Op.LogAnd:
+        value = value1 && value2 ? 1 : 0
+        break
+      case Op.LogXor:
+        value = (value1 && value2) || (!value1 && !value2) ? 1 : 0
+        break
+      case Op.LogOr:
+        value = value1 || value2 ? 1 : 0
+        break
     }
     return value
   }

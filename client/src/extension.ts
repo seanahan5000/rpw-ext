@@ -4,7 +4,7 @@ import * as path from 'path'
 import * as vsclnt from 'vscode-languageclient'
 import * as cmd from "./commands"
 import { RpwDebugSession } from "./debugger"
-import { CodeDecorator } from "./codebytes"
+import { CodeDecorator, LineRange } from "./codebytes"
 
 // TODO:
 //	? step instructions could be used to step into/through macros
@@ -20,6 +20,45 @@ import {
 export let client: LanguageClient
 let statusBarItem: vscode.StatusBarItem
 export let decorator: CodeDecorator
+
+//------------------------------------------------------------------------------
+// also in server/src/lsp_server.ts
+// TODO: figure out how to share this with client extension
+
+export type ObjectBytesRange = {
+  startLine: number
+  startAddress: number
+  offsetsString?: string
+  dataString?: string
+  refDataString?: string
+  cyclesString?: string
+}
+
+export type ObjectBytesChangedParams = {
+  uri: string
+  version: number
+  ranges?: ObjectBytesRange[]
+  cyclesNames?: string[]
+}
+
+type ParsingChangedParams = {
+	uri: string
+	version: number
+	syntax: string
+	tabStops: number[]
+	opcodeUpperCase: boolean
+	keywordUpperCase: boolean
+}
+
+// NOTE: intentionally different than version in lsp_server.ts
+type OpenDocState = {
+  parsingState?: ParsingChangedParams
+  objectState?: ObjectBytesChangedParams
+}
+
+export let openDocs = new Map<string, OpenDocState>()
+
+//------------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -54,6 +93,7 @@ export function activate(context: vscode.ExtensionContext) {
 	client.start()		// also starts server
 
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.renumberLocals", renumberCmd))
+	context.subscriptions.push(vscode.commands.registerCommand("rpw65.stepForward", stepForwardCmd ))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabIndent", () => { cmd.tabIndentCmd(false) }))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.tabOutdent", () => { cmd.tabIndentCmd(true) }))
 	context.subscriptions.push(vscode.commands.registerCommand("rpw65.delIndent", cmd.delIndentCmd))
@@ -66,16 +106,81 @@ export function activate(context: vscode.ExtensionContext) {
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateStatusItem()))
 
-  client.onNotification("rpw65.syntaxChanged", () => { updateStatusItem() })
-  client.onNotification("rpw65.codeBytesChanged", () => { decorator.scheduleUpdate() })
+	client.onNotification("rpw65.parsingChanged", (params: ParsingChangedParams) => {
+		const document = vscode.workspace.textDocuments.find((doc) => {
+			return doc.uri.toString() == params.uri
+		})
+		if (document == undefined) {
+			return
+		}
+		if (params.version != document.version) {
+			return
+		}
+    let state = openDocs.get(params.uri)
+    if (!state) {
+      state = {}
+    }
+    state.parsingState = params
+		openDocs.set(params.uri, state)
+		if (document == vscode.window.activeTextEditor.document) {
+      updateStatusItem()
+		}
+	})
+
+	client.onNotification("rpw65.objectBytesChanged", (params: ObjectBytesChangedParams) => {
+		const document = vscode.workspace.textDocuments.find((doc) => {
+			return doc.uri.toString() == params.uri
+		})
+		if (document == undefined) {
+			return
+		}
+		if (params.version != document.version) {
+			return
+		}
+    let state = openDocs.get(params.uri)
+    if (!state) {
+      state = {}
+    }
+    state.objectState = params
+		openDocs.set(params.uri, state)
+    decorator.scheduleUpdate()
+	})
 
   vscode.window.onDidChangeVisibleTextEditors(event => {
+
+		// do this as quickly as possible to minimize text jumping left to right
+		decorator.updateVisibleEditors()
     decorator.scheduleUpdate()
+
+    // tell server about change in visibility so it can prioritize updates
+    const cmd: any = {
+      command: "rpw65.visibleEditorsChanged",
+      arguments: []
+    }
+    for (const editor of vscode.window.visibleTextEditors) {
+      cmd.argument.push(editor.document.uri.toString())
+    }
+    client.sendRequest(vsclnt.ExecuteCommandRequest.type, cmd)
+  })
+
+  vscode.window.onDidChangeTextEditorVisibleRanges(event => {
+    decorator.changeActiveRange(event.textEditor, event.visibleRanges)
+  })
+
+  vscode.workspace.onDidOpenTextDocument(event => {
+		// do this as quickly as possible to minimize text jumping left to right
+		decorator.updateVisibleEditors()
   })
 
   vscode.workspace.onDidChangeTextDocument(event => {
+    // NOTE: server will know about this and reassemble/resend object bytes
     decorator.onTextChanged(event.document, event.contentChanges)
   })
+
+	vscode.workspace.onDidCloseTextDocument(document => {
+    const uri = document.uri.toString()
+    openDocs.delete(uri)
+	})
 
   vscode.workspace.onDidChangeConfiguration(event => {
     if (event.affectsConfiguration("rpw65.showCodeBytes")) {
@@ -110,31 +215,29 @@ class RpwDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | undefined>
 	{
 		// if launch.json is missing or empty
-		// TODO: is this really needed?
 		if (!config.type && !config.request && !config.name) {
 			const editor = vscode.window.activeTextEditor
 			if (editor && editor.document.languageId === 'rpw65') {
 				config.type = 'rpw65'
 				config.name = 'Launch RPW Debugger'
 				config.request = 'launch'
+				config.platform = 'apple2e'
 				config.stopOnEntry = true
+				config.remote = false
 				config.internalConsoleOptions = "neverOpen"
 			}
 		}
-
-		if (config.request == "launch" || config.request == "attach") {
+		if (config.request == "launch" && !config.remote) {
 			const ext = vscode.extensions.getExtension("seanahan5000.rpwa2")
 			if (ext) {
 				await ext.activate()
-				// TODO: choose machine based on args
+				const platform = config.platform ?? "apple2e"
 				const stopOnEntry = config.stopOnEntry ?? true
-				await vscode.commands.executeCommand("rpwa2.LaunchEmulatorIIe", stopOnEntry)
-				// await vscode.commands.executeCommand("rpwa2.LaunchEmulatorIIp", stopOnEntry)
+				await vscode.commands.executeCommand("rpwa2.LaunchEmulator", platform, stopOnEntry)
 			} else {
 				throw new Error("RPWA2 extension not installed")
 			}
 		}
-
     return config
 	}
 }
@@ -154,37 +257,41 @@ export async function renumberCmd() {
 			editor.selection
 		]
 	})
-	if (content && content.edits.length > 0) {
-		editor.edit(edit => {
-			content.edits.forEach(myEdit => {
-				const range = new vscode.Range(myEdit.range.start, myEdit.range.end)
-				edit.replace(range, myEdit.newText)
+	if (content) {
+		if (content.error) {
+			throw new Error(content.error)
+		}
+		if (content.textDocument.version == editor.document.version && content.edits.length > 0) {
+			editor.edit(edit => {
+				content.edits.forEach(myEdit => {
+					const range = new vscode.Range(myEdit.range.start, myEdit.range.end)
+					edit.replace(range, myEdit.newText)
+				})
 			})
-		})
+		}
 	}
 }
 
-async function updateStatusItem() {
-	const editor = vscode.window.activeTextEditor
+function updateStatusItem() {
+  const editor = vscode.window.activeTextEditor
 
-	// this happens while in the middle of switching active text editor
-	if (!editor?.document) {
-		return
-	}
+  // this happens while in the middle of switching active text editor
+  if (!editor?.document) {
+    return
+  }
 
-	const content = await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
-		command: "rpw65.getSyntax",
-		arguments: [
-			editor.document.uri.toString()
-		]
+  const docState = openDocs.get(editor.document.uri.toString())
+  if (docState?.parsingState?.syntax) {
+    statusBarItem.text = docState.parsingState.syntax
+    statusBarItem.show()
+  } else {
+    statusBarItem.hide()
+  }
+}
+
+export async function stepForwardCmd() {
+	await client.sendRequest(vsclnt.ExecuteCommandRequest.type, {
+		command: "rpw65.debugger",
+		arguments: ["stepForward"]
 	})
-
-	if (content?.syntax && content.syntax != "") {
-		statusBarItem.text = content.syntax
-		statusBarItem.show()
-	} else {
-		statusBarItem.hide()
-	}
 }
-
-//------------------------------------------------------------------------------

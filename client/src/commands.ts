@@ -1,10 +1,12 @@
-import * as vscode from 'vscode';
 
-function getStartLineText(editor): string {
+import * as vscode from 'vscode'
+import { openDocs } from "./extension"
+
+function getStartLineText(editor: vscode.TextEditor): string {
 	return getLineText(editor, editor.selection.start.line);
 }
 
-function getLineText(editor, line: number): string {
+function getLineText(editor: vscode.TextEditor, line: number): string {
 	const range = new vscode.Range(line, 0, line + 1, 0);
 	return editor.document.getText(range);
 }
@@ -79,12 +81,10 @@ function getNextTabColumn(tabStops: number[], ch: number): number {
 	return stop;
 }
 
-function getTabStops(): number[] {
-	const config = vscode.workspace.getConfiguration("rpw65")
-	const c1 = config.get<number>("columns.c1", 16)
-	const c2 = config.get<number>("columns.c2", 4)
-	const c3 = config.get<number>("columns.c3", 20)
-	return [0, c1, c1 + c2, c1 + c2 + c3]
+function getTabStops(document: vscode.TextDocument): number[] {
+  const uri = document.uri.toString()
+  const state = openDocs.get(uri)
+  return state?.parsingState?.tabStops ?? [0, 0, 0, 0]
 }
 
 // tab:
@@ -98,8 +98,8 @@ function getTabStops(): number[] {
 	// use first non-space to pick stop
 
 export async function tabIndentCmd(shift: boolean) {
-	const tabStops = getTabStops()
 	const editor = vscode.window.activeTextEditor
+	const tabStops = getTabStops(editor.document)
 	const oldSelections = editor.selections
 	const newSelections: vscode.Selection[] = []
 
@@ -206,8 +206,8 @@ export async function tabIndentCmd(shift: boolean) {
 	// unless inside comment, then just delete character
 
 export async function delIndentCmd() {
-	const tabStops = getTabStops()
 	const editor = vscode.window.activeTextEditor
+	const tabStops = getTabStops(editor.document)
 	editor.edit(edit => {
 		for (let selection of editor.selections) {
 			if (selection.isEmpty) {
@@ -248,9 +248,9 @@ export async function delIndentCmd() {
 }
 
 export async function arrowIndentCmd(left: boolean) {
-	const tabStops = getTabStops()
-	const moveBy = { to: left ? "left" : "right", by: "character", value: 1 }
 	const editor = vscode.window.activeTextEditor
+	const tabStops = getTabStops(editor.document)
+	const moveBy = { to: left ? "left" : "right", by: "character", value: 1 }
 	const sel = editor.selections[0]
 	if (sel.start.line == sel.end.line) {
 		const lineText = getStartLineText(editor)

@@ -67,11 +67,11 @@ class ObjectRange {
   public startLine: number = 0
 
   // valid after finalize
-  private dataRange?: DataRange
-  private refRange?: DataRange
+  public dataRange?: DataRange
+  public refRange?: DataRange
 
   // one per source line, plus terminator, relative to dataRange
-  private offsets: number[] = [0]
+  public offsets: number[] = [0]
 
   // used while collecting object data
   public buildSegment: Segment
@@ -198,6 +198,9 @@ export class ObjectDoc {
 
   // zero or more ranges of memory covered by file
   public objectRanges: ObjectRange[] = []
+
+  // state captured by lsp_server and used to send refreshes to client
+  public snapshot?: any
 
   constructor(sourceFile: SourceFile) {
     this.sourceFile = sourceFile

@@ -14,6 +14,96 @@ import { isaSet65xx } from "../isa65xx"
 
 //------------------------------------------------------------------------------
 
+// collect stats to infer syntax, upper/lower case, and tab columns
+
+export class ParserStats {
+  public syntax: number[]
+
+  private opCount: number = 0
+  private opUpperCount: number = 0
+
+  private keyCount: number = 0
+  private keyUpperCount: number = 0
+
+  private opKeyCols = new Map<number, number>()
+  private opArgCols = new Map<number, number>()
+  private keyArgCols = new Map<number, number>()
+  private commentCols = new Map<number, number>()
+
+  constructor(syntax?: number[]) {
+    this.syntax = syntax ?? new Array(SyntaxDefs.length).fill(0)
+  }
+
+  public sawOpcode(column: number, upperCase: boolean) {
+    this.opKeyCols.set(column, (this.opKeyCols.get(column) ?? 0) + 1)
+    this.opCount += 1
+    if (upperCase) {
+      this.opUpperCount += 1
+    }
+  }
+
+  public sawKeyword(column: number, upperCase: boolean) {
+    this.opKeyCols.set(column, (this.opKeyCols.get(column) ?? 0) + 1)
+    this.keyCount += 1
+    if (upperCase) {
+      this.keyUpperCount += 1
+    }
+  }
+
+  public sawOpArgs(column: number) {
+    this.opArgCols.set(column, (this.opArgCols.get(column) ?? 0) + 1)
+  }
+
+  public sawKeyArgs(column: number) {
+    this.keyArgCols.set(column, (this.keyArgCols.get(column) ?? 0) + 1)
+  }
+
+  public sawComment(column: number) {
+    this.commentCols.set(column, (this.commentCols.get(column) ?? 0) + 1)
+  }
+
+  public get opcodeUpperCase(): boolean {
+    return this.opUpperCount / this.opCount > .5
+  }
+
+  public get keywordUpperCase(): boolean {
+    return this.keyUpperCount / this.keyCount > .5
+  }
+
+  public getTabStops(): number[] | undefined {
+    let opCol = this.pickColumn(this.opKeyCols)
+    if (opCol == undefined) {
+      opCol = this.pickColumn(this.keyArgCols)
+      if (opCol == undefined) {
+        return
+      }
+    }
+    const argCol = this.pickColumn(this.opArgCols)
+    if (argCol == undefined || argCol <= opCol) {
+      return
+    }
+    let commentCol = this.pickColumn(this.commentCols) ?? 40
+    if (commentCol <= argCol) {
+      commentCol = argCol + 24
+    }
+    return [0, opCol, argCol, commentCol]
+  }
+
+  private pickColumn(map: Map<number, number>): number | undefined {
+    let column: number | undefined
+    let count = -1
+    for (const [key, value] of map) {
+      if (key != 0 && value > count) {
+        count = value
+        column = key
+      }
+    }
+    return column
+  }
+}
+
+//------------------------------------------------------------------------------
+
 export class Parser extends Tokenizer {
 
   // valid for entire parseLines call
@@ -29,7 +119,7 @@ export class Parser extends Tokenizer {
   public requireBrackets = false
   public allowBrackets = true
 
-  private syntaxStats: number[] = []
+  private stats!: ParserStats
   public paramsParser = new ParamsParser()
 
   // TODO: add requireTrailingColon, allowTrailingColon
@@ -157,10 +247,10 @@ export class Parser extends Tokenizer {
     return expression
   }
 
-  public parseStatements(sourceFile: SourceFile, lines: string[], syntaxStats: number[]) {
+  public parseStatements(sourceFile: SourceFile, lines: string[], stats: ParserStats) {
     const statements = []
     this.sourceFile = sourceFile
-    this.syntaxStats = syntaxStats
+    this.stats = stats
     this.lineNumber = 0
     this.syntax = sourceFile.project.syntax
 
@@ -213,7 +303,7 @@ export class Parser extends Tokenizer {
 
   public reparseAsMacroInvoke(sourceFile: SourceFile, lineNumber: number, sourceLine: string, syntax: Syntax): stm.Statement | undefined {
     this.syntax = syntax
-    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.stats = new ParserStats()
     this.sourceFile = sourceFile
     this.lineNumber = lineNumber
     this.setSourceLine(sourceLine)
@@ -225,7 +315,7 @@ export class Parser extends Tokenizer {
 
   public reparseAsEnumValue(sourceFile: SourceFile, lineNumber: number, sourceLine: string, syntax: Syntax): stm.Statement | undefined {
     this.syntax = syntax
-    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.stats = new ParserStats()
     this.sourceFile = sourceFile
     this.lineNumber = lineNumber
     this.setSourceLine(sourceLine)
@@ -245,7 +335,7 @@ export class Parser extends Tokenizer {
 
   public reparseStatement(sourceLine: string, syntax: Syntax): stm.Statement {
     this.sourceFile = undefined
-    this.syntaxStats = new Array(SyntaxDefs.length).fill(0)
+    this.stats = new ParserStats()
     this.lineNumber = 0
     this.syntax = syntax
     this.setSourceLine(sourceLine)
@@ -427,7 +517,8 @@ export class Parser extends Tokenizer {
   private parseKeyword(token: Token): stm.Statement | undefined {
     let statement: stm.Statement | undefined
 
-    let keywordLC = token.getString().toLowerCase()
+    let keywordXC = token.getString()
+    let keywordLC = keywordXC.toLowerCase()
     let altwordLC: string | undefined
 
     if (this.syntax == Syntax.CA65) {
@@ -449,7 +540,8 @@ export class Parser extends Tokenizer {
         const altToken = this.getVeryNextToken()
         if (altToken) {
           token.end = altToken.end
-          keywordLC = token.getString().toLowerCase()
+          keywordXC = token.getString()
+          keywordLC = keywordXC.toLowerCase()
         }
       }
       if (keywordLC[0] == "." || keywordLC[0] == "#") {
@@ -465,12 +557,12 @@ export class Parser extends Tokenizer {
         if (elseToken) {
           if (elseToken.getString().toLowerCase() == "else") {
             statement = new stm.AcmeElseStatement()
-            this.syntaxStats[Syntax.ACME] += 1
+            this.stats.syntax[Syntax.ACME] += 1
             // TODO: may need to look for another opening brace here?
           }
         } else {
           statement = new stm.ClosingBraceStatement()
-          this.syntaxStats[Syntax.ACME] += 1
+          this.stats.syntax[Syntax.ACME] += 1
         }
       }
     }
@@ -480,6 +572,7 @@ export class Parser extends Tokenizer {
     }
 
     if (this.syntax) {
+      this.stats.sawKeyword(token.start, keywordXC != keywordLC)
       return this.buildStatement(token, keywordLC, altwordLC)
     }
 
@@ -509,7 +602,7 @@ export class Parser extends Tokenizer {
           failureCount += 1
         } else {
           successCount += 1
-          this.syntaxStats[i] += 1
+          this.stats.syntax[i] += 1
           if (firstSuccess == -1) {
             firstSuccess = i
           }
@@ -526,7 +619,7 @@ export class Parser extends Tokenizer {
     if (successCount == 0 && failureCount > 0) {
       for (let i = 1; i < statements.length; i += 1) {
         if (statements[i] !== undefined) {
-          this.syntaxStats[i] += 1
+          this.stats.syntax[i] += 1
           if (firstSuccess < 0) {
             firstSuccess = i
           }
@@ -576,12 +669,14 @@ export class Parser extends Tokenizer {
   }
 
   private parseOpcode(token: Token): stm.Statement | undefined {
-    let opNameLC = token.getString().toLowerCase()
+    let opNameXC = token.getString()
+    let opNameLC = opNameXC.toLowerCase()
     let opSuffix = ""
     const n = opNameLC.indexOf(".")
     if (n > 0) {  // ignore prefix "."
       opSuffix = opNameLC.substring(n + 1)
       opNameLC = opNameLC.substring(0, n)
+      opNameXC = opNameXC.substring(0, n)
       // TODO: check for known suffixes here?
     }
 
@@ -590,6 +685,7 @@ export class Parser extends Tokenizer {
 
     const opcode = isa.findByName(opNameLC)
     if (opcode) {
+      this.stats.sawOpcode(token.start, opNameXC != opNameLC)
       token.type = TokenType.Opcode
       let forceLong = false
       if (!this.syntax || this.syntax == Syntax.MERLIN) {
@@ -601,6 +697,12 @@ export class Parser extends Tokenizer {
           forceLong = true
         }
       }
+
+      const argToken = this.peekNextToken()
+      if (argToken) {
+        this.stats.sawOpArgs(argToken.start)
+      }
+
       return this.initStatement(new stm.OpStatement(opcode, opSuffix, forceLong), token)
     }
   }
@@ -633,6 +735,14 @@ export class Parser extends Tokenizer {
       this.addExpression(opTokenExp)
     }
     statement.init(this.sourceLine, this.endExpression(), this.labelExp, opTokenExp, keywordDef)
+
+    if (!(statement instanceof stm.OpStatement)) {
+      const argToken = this.peekNextToken()
+      if (argToken) {
+        this.stats.sawKeyArgs(argToken.start)
+      }
+    }
+
     statement.parse(this)
     statement.postParse(this)
     return statement
@@ -666,7 +776,7 @@ export class Parser extends Tokenizer {
       //     for (let i = 1; i < SyntaxDefs.length; i += 1) {
       //       const k = SyntaxDefs[i].keywordMap.get(keywordLC)
       //       if (k) {
-      //         this.syntaxStats[i] += 1
+      //         this.stats.syntax[i] += 1
       //       }
       //     }
       //     this.position = savedPosition
@@ -691,9 +801,9 @@ export class Parser extends Tokenizer {
         if (t2str == "=") {
           if (this.syntaxDef.allowIndentedAssignment) {
             // TODO: move away from this mechanism
-            this.syntaxStats[Syntax.ACME] += 1
-            this.syntaxStats[Syntax.CA65] += 1
-            this.syntaxStats[Syntax.TASS64] += 1
+            this.stats.syntax[Syntax.ACME] += 1
+            this.stats.syntax[Syntax.CA65] += 1
+            this.stats.syntax[Syntax.TASS64] += 1
             token = t1
             this.position = savedPosition2
           } else {
@@ -703,8 +813,8 @@ export class Parser extends Tokenizer {
         } else if (t2str == ":=" || t2str == ".set") {
           if (this.syntaxDef.allowIndentedAssignment) {
             // TODO: move away from this mechanism
-            this.syntaxStats[Syntax.CA65] += 1
-            this.syntaxStats[Syntax.TASS64] += 1
+            this.stats.syntax[Syntax.CA65] += 1
+            this.stats.syntax[Syntax.TASS64] += 1
             token = t1
             this.position = savedPosition2
           } else {
@@ -748,7 +858,7 @@ export class Parser extends Tokenizer {
     // handle Merlin vars before everything else
     // if (str[0] == "]") {
     //   if (!this.syntax || this.syntax == Syntax.MERLIN) {
-    //     this.syntaxStats[Syntax.MERLIN] += 1
+    //     this.stats.syntax[Syntax.MERLIN] += 1
     //     // *** enforce/handle var assignment
     //       // peekNextToken == "=" ?
     //     return this.parseVarExpression(token, isDefinition)
@@ -808,7 +918,7 @@ export class Parser extends Tokenizer {
       if (isDefinition) {
         if (str == "^") {
           if (!this.syntax || this.syntax == Syntax.LISA) {
-            this.syntaxStats[Syntax.LISA] += 1
+            this.stats.syntax[Syntax.LISA] += 1
             return this.parseLisaLocal(token, isDefinition)
           }
         } else if (str == ":") {
@@ -818,7 +928,7 @@ export class Parser extends Tokenizer {
               // Flag this local label definition as CA65 only if
               //  it is not followed by more text, in order to disambiguate
               //  from Merlin local labels.
-              this.syntaxStats[Syntax.CA65] += 1
+              this.stats.syntax[Syntax.CA65] += 1
             }
           }
           if (this.syntax == Syntax.CA65) {
@@ -845,8 +955,8 @@ export class Parser extends Tokenizer {
       if (this.syntaxDef.anonLocalChars && this.syntaxDef.anonLocalChars.includes(str[0])) {
         if (str[0] == str[str.length - 1]) {
           // TODO: move away from this mechanism
-          this.syntaxStats[Syntax.ACME] += 1
-          this.syntaxStats[Syntax.TASS64] += 1
+          this.stats.syntax[Syntax.ACME] += 1
+          this.stats.syntax[Syntax.TASS64] += 1
           if (str.length > 9) {
             token.setError("Anonymous local is too long")
             return new exp.BadExpression([token])
@@ -1184,6 +1294,7 @@ export class Parser extends Tokenizer {
       if (aliasDef.alias) {
         throw(`ASSERT: Function alias "${functionDef.alias}" points to another alias`)
       }
+      functionDef = aliasDef
     }
 
     this.startExpression(token)
@@ -1527,6 +1638,7 @@ export class Parser extends Tokenizer {
     } else if (beginChar == "<") {
       endChar = ">"
     } else {
+      // TODO: only merlin allows unquoted file names
       this.position -= 1
     }
 
@@ -1596,6 +1708,7 @@ export class Parser extends Tokenizer {
       }
 
       const token = new Token(this.sourceLine, this.position, this.sourceLine.length, TokenType.Comment)
+      this.stats.sawComment(token.start)
 
       // *** for debugging, scan comment for syntax setting ***
         // *** remove need to scan entire comment ***

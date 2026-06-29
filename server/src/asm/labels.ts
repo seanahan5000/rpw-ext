@@ -115,12 +115,12 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
 
     // for now, cancel completely when conditionals are involved
     if (!statement.enabled) {
-      return
+      throw "Renumber cancelled due to conditional statements (not supported yet)"
     }
 
     // cancel completely if a statement has an error
-    if (statement.hasError()) {
-      return
+    if (statement.hasAnyError()) {
+      throw "Renumber cancelled due to statement errors"
     }
 
     if (!statement.labelExp) {
@@ -138,8 +138,7 @@ function renumberRange(sourceFile: SourceFile, startLine: number, endLine: numbe
     }
 
     const oldName = statement.labelExp.getSimpleName().asString
-    const simpleIndex = parseInt(oldName)
-    if (simpleIndex != simpleIndex) {   // NaN != NaN
+    if (!(/^[0-9]+$/.test(oldName))) {
       // look for :SKIPA and :LOOP1 locals, common in old Naja source code
       if (!oldName.startsWith("SKIP") && !oldName.startsWith("LOOP")) {
         continue

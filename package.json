@@ -5,7 +5,7 @@
 	"author": "Sean Callahan",
 	"publisher": "seanahan5000",
 	"license": "MIT",
-	"version": "2.0.3",
+	"version": "2.0.4",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/seanahan5000/rpw-ext.git"
@@ -84,29 +84,6 @@
 					"type": "boolean",
 					"default": true,
 					"markdownDescription": "Enable variable width tab columns."
-				},
-				"rpw65.columns.c1": {
-					"type": "number",
-					"default": 16,
-					"minimum": 1,
-					"markdownDescription": "Width of the label column to use in tabbing and formatting."
-				},
-				"rpw65.columns.c2": {
-					"type": "number",
-					"default": 4,
-					"minimum": 1,
-					"markdownDescription": "Width of the opcode column to use in tabbing and formatting."
-				},
-				"rpw65.columns.c3": {
-					"type": "number",
-					"default": 20,
-					"minimum": 1,
-					"markdownDescription": "Width of the arguments column to use in tabbing and formatting."
-				},
-				"rpw65.case.lowerCaseCompletions": {
-					"type": "boolean",
-					"default": false,
-					"markdownDescription": "Use lowercase in auto-complete suggestions."
 				}
 			}
 		},
@@ -142,6 +119,11 @@
 					"when": "resourceLangId == rpw65",
 					"command": "rpw65.renumberLocals",
 					"group": "1_modification"
+				},
+				{
+					"when": "inDebugMode && debugType == 'rpw65'&& debugState == 'stopped' && editorTextFocus",
+					"command": "rpw65.stepForward",
+					"group": "debug@25"
 				}
 			]
 		},
@@ -149,6 +131,10 @@
 			{
 				"command": "rpw65.renumberLocals",
 				"title": "Renumber Locals"
+			},
+			{
+				"command": "rpw65.stepForward",
+				"title": "Step Forward"
 			},
 			{
 				"command": "rpw65.tabIndent",
@@ -172,6 +158,12 @@
 			}
 		],
 		"keybindings": [
+			{
+				"command": "rpw65.stepForward",
+        "key": "ctrl+f10",
+        "mac": "cmd+f10",
+        "when": "debugType == 'rpw65' && inDebugMode && debugState == 'stopped' && editorTextFocus"
+			},
 			{
 				"command": "rpw65.tabIndent",
 				"key": "tab",
@@ -211,11 +203,11 @@
 						"constant.character.escape"
 					],
 					"opcode": [
-						"keyword.mnemonic"
+						"keyword.control.assembly"
 					],
 					"constant": [
 						"entity.name.constant",
-						"keyword.control"
+						"keyword"
 					],
 					"zpage": [
 						"variable.zpage",
@@ -230,7 +222,7 @@
 						"entity.name.label"
 					],
 					"function": [
-						"entity.name.function"
+						"entity.name.function.assembly"
 					],
 					"function.external": [
 						"meta.embedded.assembly"
@@ -239,19 +231,19 @@
 						"entity.name.type"
 					],
 					"macro": [
-						"entity.name.type.macro"
+						"entity.name.function.macro.assembly"
 					],
 					"buffer": [
 						"variable.other.constant"
 					],
 					"keyword": [
-						"keyword.control"
+						"keyword.other.directive.assembly"
 					],
 					"operator": [
-						"keyword.other"
+						"keyword.operator.assembly"
 					],
 					"number": [
-						"constant.numeric"
+						"constant.numeric.assembly"
 					],
 					"var": [
 						"support.variable"
@@ -278,15 +270,30 @@
 				"configurationAttributes": {
 					"launch": {
 						"properties": {
-							"program": {
+							"platform": {
 								"type": "string",
-								"description": "Absolute path to a text file.",
-								"default": "${workspaceFolder}/${command:AskForProgramName}"
+								"description": "Type of machine emulator to launch",
+								"default": "apple2e",
+								"enum": [
+									"apple2p",
+									"apple2e",
+									"atari7800"
+								]
 							},
 							"stopOnEntry": {
 								"type": "boolean",
 								"description": "Automatically stop after launch.",
 								"default": true
+							},
+							"remote": {
+								"type": "boolean",
+								"description": "Skip launching emulator if true",
+								"default": false
+							},
+							"program": {
+								"type": "string",
+								"description": "Absolute path to a text file.",
+								"default": "${workspaceFolder}/${command:AskForProgramName}"
 							},
 							"trace": {
 								"type": "boolean",
@@ -340,11 +347,11 @@
 		"postinstall": "cd client && npm install && cd ../server && npm install && cd .."
 	},
 	"devDependencies": {
-		"@types/node": "^16.18.34",
+		"@types/node": "^16.18.126",
 		"@types/ws": "^8.5.13",
 		"base64-js": "^1.5.1",
 		"esbuild": "^0.25.2",
-		"typescript": "^5.1.3"
+		"typescript": "^5.9.3"
 	},
 	"dependencies": {
 		"fs-extra": "^11.1.1",

@@ -78,10 +78,10 @@ export class DasmSyntax extends SyntaxDef {
       [ "org",        { create: () => { return new stm.OrgStatement() },
                         params: "<expression>[, <fill>]",
                         desc:   "Set the current origin" } ],
-      [ "rorg",       { // TODO
+      [ "rorg",       { create: () => { return new stm.ReorgStatement() },
                         params: "<expression>",
                         desc:   "Activate the relocatable origin" } ],
-      [ "rend",       { // TODO
+      [ "rend",       { create: () => { return new stm.RendStatement() },
                         params: "",
                         desc:   "Deactivate the relocatable origin" } ],
 
@@ -182,10 +182,10 @@ export class DasmSyntax extends SyntaxDef {
                         params: "<condition>",
                         desc:   "Compile if condition is true" } ],
       [ "ifconst",    { create: () => { return new stm.IfConstStatement(true) },
-                        params: "<condition>",
+                        params: "<symbol-weakref>",
                         desc:   "Compile if condition is constant" } ],
       [ "ifnconst",   { create: () => { return new stm.IfConstStatement(false) },
-                        params: "<condition>",
+                        params: "<symbol-weakref>",
                         desc:   "Compile if condition is not constant" } ],
       [ "else",       { create: () => { return new stm.ElseStatement() },
                         params: "",

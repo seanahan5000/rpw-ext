@@ -1,5 +1,49 @@
 # RPW 65 Changelog
 
+### [2.0.4] - 2026-06-29
+
+Rewrite object bytes and cycle counts decorator mechanism for performance.
+Automatically determine tab tops and upper/lower case, deprecating associated project settings.
+
+#### Added:
+* a78Header section to project file
+* Prepend Atari 7800 header to binary when saving as .a78 file
+* Write assembly results to bin directory
+* Keyword highlighting for platform-specific register names
+* Error reported when renumbering locals is cancelled
+* Editor: Support function names as document symbols
+* Debugger: Step forward command (step over branch)
+* Debugger: Support setting watch expression values
+* Debugger: Support data breakpoints
+* Debugger: Show cpu cycle delta
+* DASM: Support RORG and REND
+* DASM: Support ORG fill value
+* DASM: Error on immediate values > 255
+* All: Error on negative org delta
+* All: Support binary include
+
+#### Fixed:
+* Unneeded reparsing on file open, tab change
+* Hover over structure labels not showing values
+* All: Enforce quoted strings on include file names
+* All: Renumbering of locals with numbers and some non-numeric characters
+* All: Mark tokens after opcodes without arguments as errors
+* DASM: Generate data for strings in .byte and dc.b statements
+* DASM: Mark closing quote as error on string constant
+* DASM: Apply opcode suffix to code generation (lda.w, etc.)
+* DASM: Fill bytes when switching between SEG.U and SEG
+* DASM: ifconst and ifnconst with undefined symbols
+* CA65: crash when using aliased functions like .def, .ismnem, etc.
+* Editor: Force cursor visible after large cut of text with codeByte decorators
+* Editor: Suppress trailing space on auto-completes for LSR, ROR, etc.
+* Editor: Handling of trigger characters in completion suggestions
+* Editor: Use macro definition case for completion suggestion
+* Debugger: Watch arrays with empty dimensions ("$1000:[]", "$1000[][4]" etc.)
+* Debugger: Stale breakpoints across debugger launches
+
+#### Changed:
+* Hover over label definition no longer shows comment header block
+
 ### [2.0.3] - 2025-09-16
 
 #### Fixed:

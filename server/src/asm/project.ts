@@ -1,10 +1,10 @@
 
 import * as fs from 'fs'
 import { RpwProject, RpwSettings, RpwDefine, RpwBin } from "../shared/rpw_types"
-import { Syntax, SyntaxMap } from "./syntaxes/syntax_types"
+import { Syntax, SyntaxMap, SyntaxNames } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
-import { Parser } from "./parser"
+import { Parser, ParserStats } from "./parser"
 import { Assembler } from "./assembler"
 import { Symbol, SymbolType, SymbolFrom } from "./symbols"
 import { SymbolExpression, NumberExpression } from "./expressions"
@@ -29,12 +29,20 @@ export class SourceFile {
   public statements: Statement[] = []
   // TODO: displayName for progress/error messages?
 
+  public tabStops: number[] = [0,0,0,0]
+  public opcodeUpperCase: boolean = false
+  public keywordUpperCase: boolean = false
+
   constructor(module: Module, fullPath: string, isShared: boolean, lines: string[]) {
     this.project = module.project
     this.fullPath = fullPath
     this.lines = lines
     this.isShared = isShared
     this.modules.push(module)
+  }
+
+  public get syntaxName(): string {
+    return SyntaxNames[this.project.syntax]
   }
 
   public getSymbolMap(): SymbolMap {
@@ -48,7 +56,13 @@ export class SourceFile {
     //  for normal source files included multiple times.
     if (!this.statements.length) {
       const parser = new Parser()
-      this.statements = parser.parseStatements(this, this.lines, syntaxStats)
+      const stats = new ParserStats(syntaxStats)
+
+      this.statements = parser.parseStatements(this, this.lines, stats)
+
+      this.tabStops = stats.getTabStops() ?? [0,0,0,0]
+      this.opcodeUpperCase = stats.opcodeUpperCase ?? false
+      this.keywordUpperCase = stats.keywordUpperCase ?? false
     }
     return this.statements
   }
@@ -58,15 +72,15 @@ export class SourceFile {
 
 export class Project {
 
-  private rpwProject?: RpwProject
+  public rpwProject?: RpwProject
   private defaultSettings?: RpwSettings
   private inferredSyntax = Syntax.UNKNOWN
 
+  public platform: string = ""
+  public keywords = new Map<string, number>()
+
   public syntax = Syntax.UNKNOWN
   public syntaxDef = SyntaxDefs[Syntax.UNKNOWN]
-  public upperCase: boolean = true
-  public tabSize = 4
-  public tabStops = [0, 16, 20, 40]
   public caseSensitive?: boolean    // overrides syntax definition
 
   public defines: RpwDefine[] = []
@@ -81,8 +95,9 @@ export class Project {
   public includePaths: string[] = []
   public isTemporary = false
   public inWorkspace = false
+  public sawError = false
 
-  constructor(defaultSettings: RpwSettings) {
+  constructor(defaultSettings?: RpwSettings) {
     this.defaultSettings = defaultSettings
     this.settingsChanged()
   }
@@ -102,6 +117,20 @@ export class Project {
 
     this.rpwProject = rpwProject
     this.settingsChanged()
+
+    let cartProject = false
+    let isAtari7800 = false
+    this.platform = (this.rpwProject.platform ?? "").toLowerCase()
+    if (this.platform == "atari2600") {
+      this.keywords = getAtari2600Keywords()
+      cartProject = true
+    } else if (this.platform == "atari7800") {
+      this.keywords = getAtari7800Keywords()
+      cartProject = true
+      isAtari7800 = true
+    } else if (this.platform.startsWith("apple")) {
+      this.keywords = getAppleKeywords()
+    }
 
     // rootDir + / + rpwProject.srcDir
     this.srcDir = this.buildFullDirName(rpwProject.srcDir)
@@ -142,6 +171,9 @@ export class Project {
     if (!rpwProject.modules) {
       return false
     }
+
+    let cartName: string | undefined
+
     for (let module of rpwProject.modules) {
       if (module.enabled ?? true) {
         if (module.src) {
@@ -173,12 +205,44 @@ export class Project {
               }
             }
           } else {
-            const saveName = module.save
+            let saveName = module.save
+            if (cartProject && cartName == undefined) {
+              if (saveName == undefined) {
+                const lastDot = srcName.lastIndexOf(".")
+                if (lastDot != -1) {
+                  saveName = srcName.substring(0, lastDot)
+                } else {
+                  saveName = srcName
+                }
+                if (isAtari7800) {
+                  saveName += ".a78"
+                } else {
+                  saveName += ".bin"
+                }
+              }
+              cartName = saveName
+            }
             this.modules.push(new Module(this, srcPath, srcName, saveName))
           }
         }
       }
     }
+
+    if (cartProject) {
+      if (!this.rpwProject.preloads) {
+        this.rpwProject.preloads = []
+      }
+      if (this.rpwProject.preloads.length == 0 && cartName) {
+        this.rpwProject.preloads.push({
+          entryPoint: "0xfffc",
+          bins: [{
+            name: cartName,
+            address: "auto"
+          }]
+        })
+      }
+    }
+
     return true
   }
 
@@ -205,7 +269,7 @@ export class Project {
     const defaults = this.defaultSettings
     const settings = this.rpwProject?.settings
 
-    const syntaxName = settings?.syntax ?? defaults?.syntax
+    const syntaxName = settings?.syntax ?? this.rpwProject?.assembler ?? defaults?.syntax
     if (syntaxName) {
       const syntax = SyntaxMap.get(syntaxName.toUpperCase())
       if (!syntax) {
@@ -217,18 +281,14 @@ export class Project {
     }
     this.syntaxDef = SyntaxDefs[this.syntax]
 
-    this.upperCase = settings?.upperCase ?? defaults?.upperCase ?? true
-    this.tabSize = settings?.tabSize ?? defaults?.tabSize ?? 4
-    this.tabStops = settings?.tabStops ?? defaults?.tabStops ?? [0, 16, 20, 40]
-    if (this.tabStops[0] != 0) {
-      this.tabStops.unshift(0)
-    }
-
     // optional override, not a hard setting
+    // TODO: is the needed anymore?
     this.caseSensitive = settings?.caseSensitive
   }
 
   update() {
+    let errorCount = 0
+    this.sawError = false
     while (true) {
       const syntaxStats = new Array(SyntaxDefs.length).fill(0)
 
@@ -254,7 +314,7 @@ export class Project {
 
       // disable includes mechanism while prepare includes files
       preMod.update_pass01(settingsMap, undefined, precompFiles, syntaxStats)
-      preMod.update_pass2()
+      errorCount += preMod.update_pass2()
 
       // assemble first pass using precompiled files/symbols
       for (let module of this.modules) {
@@ -321,13 +381,14 @@ export class Project {
 
       for (let module of this.modules) {
         // write all output data
-        module.update_pass2()
+        errorCount += module.update_pass2()
       }
 
       for (let module of this.modules) {
         module.update_finalize()
       }
 
+      this.sawError = errorCount != 0
       break
     }
   }
@@ -439,6 +500,7 @@ export class Project {
   public async binLoadProject(dbg: LspDebugger) {
 
     let entryPoint: number | undefined
+    let firstBinAddr: number | undefined
 
     // loadProject should have already set this
     if (!this.rpwProject) {
@@ -454,7 +516,7 @@ export class Project {
           const writeProtected = imageEntry.readonly || false
           if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
             const binBytes = fs.readFileSync(fullPath)
-            dbg.setDiskImage(fullPath, binBytes, drive - 1, writeProtected)
+            dbg.setDataImage(fullPath, binBytes, drive - 1, writeProtected)
           } else {
             throw new Error(`Failed to open disk image: ${fullPath}`)
           }
@@ -481,20 +543,30 @@ export class Project {
               if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
                 const binBytes = fs.readFileSync(fullPath)
                 let binAddr
-                try {
-                  binAddr = parseInt(rpwBin.address!)
-                } catch (e: any) {
-                  throw new Error(`Invalid patch address: ${rpwBin.address!}`)
+                if (rpwBin.address == "auto") {
+                  // TODO: this will require more logic as bank switching schemes are supported
+                  // NOTE: binAddr will go negative on bank switched images (> 64K)
+                  if (rpwBin.name.endsWith(".a78")) {
+                    binAddr = 0x10080 - binBytes.length
+                  } else {
+                    binAddr = 0x10000 - binBytes.length
+                  }
+                } else {
+                  try {
+                    binAddr = parseInt(rpwBin.address!)
+                  } catch (e: any) {
+                    throw new Error(`Invalid preload address: ${rpwBin.address!}`)
+                  }
                 }
                 // if no entryPoint provided, default to address of first bin
                 //  (but don't allow 0xD000 bank 2)
-                if (!entryPoint) {
-                  entryPoint = binAddr
+                if (!firstBinAddr) {
+                  firstBinAddr = binAddr
                 }
                 if (binAddr >= 0xD000 && binAddr <= 0xDFFF && rpwBin.bank == 2) {
                   binAddr -= 0x1000
                 }
-                await dbg.writeRam(binAddr, binBytes)
+                await dbg.writeRange(binAddr, binBytes)
               } else {
                 throw new Error(`Missing preload binary: ${fullPath}`)
               }
@@ -526,19 +598,26 @@ export class Project {
                   throw new Error(`Invalid patch ${patch.address} value ${patchValStr}`)
                 }
               }
-              await dbg.writeRam(patchAddr, patchVals)
+              await dbg.writeRange(patchAddr, patchVals)
             }
           }
         }
       }
     }
 
+    if (entryPoint == undefined) {
+      entryPoint = firstBinAddr
+    }
     if (entryPoint != undefined) {
-      dbg.setEntryPoint(entryPoint)
+      if (entryPoint == 0xfffc) {
+        await dbg.softReset()
+      } else {
+        await dbg.setEntryPoint(entryPoint)
+      }
     }
 
     // TODO: make checkStack a project parameter?
-    dbg.setParameter("checkStack", 1)
+    await dbg.setParameter("checkStack", 1)
   }
 
   private processBinName(bin: string | RpwBin): RpwBin {
@@ -612,19 +691,22 @@ export class Project {
       }
     }
 
-    // prove that addrStr is a valid number
-    if (!addrStr.startsWith("0x")) {
-      addrStr = "0x" + addrStr
-    }
-    let addrNum: number
-    try {
-      addrNum = parseInt(addrStr)
-    } catch (e: any) {
-      throw new Error(`Invalid address value: ${addrStr}`)
-    }
+    if (addrStr != "auto") {
 
-    if (addrNum == 0xd000 && !bankNum) {
-      throw new Error("Address 0xD000 must have a bank number")
+      // prove that addrStr is a valid number
+      if (!addrStr.startsWith("0x")) {
+        addrStr = "0x" + addrStr
+      }
+      let addrNum: number
+      try {
+        addrNum = parseInt(addrStr)
+      } catch (e: any) {
+        throw new Error(`Invalid address value: ${addrStr}`)
+      }
+
+      if (addrNum == 0xd000 && !bankNum) {
+        throw new Error("Address 0xD000 must have a bank number")
+      }
     }
 
     return { name: fullName, address: addrStr, bank: bankNum }
@@ -675,9 +757,9 @@ export class Module {
     this.asm.assemble_pass01(fileNames, syntaxStats)
   }
 
-  public update_pass2() {
+  public update_pass2(): number {
 
-    this.asm?.assemble_pass2()
+    let errorCount = this.asm?.assemble_pass2() ?? 0
     this.asm = undefined
 
     // link up all symbols
@@ -702,6 +784,8 @@ export class Module {
     // for (let i = 0; i < this.lineRecords.length; i += 1) {
     //   this.lineRecords[i].statement?.postParse()
     // }
+
+    return errorCount
   }
 
   public update_finalize() {
@@ -832,6 +916,150 @@ function cleanPath(path: string): string {
     result = result.substring(1)
   }
   return result
+}
+
+//------------------------------------------------------------------------------
+
+function getAtari2600Keywords(): Map<string, number> {
+  return new Map<string, number>([
+    [ "cxm0p",    0x00 ],
+    [ "cxm1p",    0x01 ],
+    [ "cxp0fb",   0x02 ],
+    [ "cxp1fb",   0x03 ],
+    [ "cxm0fb",   0x04 ],
+    [ "cxm1fb",   0x05 ],
+    [ "cxblpf",   0x06 ],
+    [ "cxppmm",   0x07 ],
+    [ "inpt0",    0x08 ],
+    [ "inpt1",    0x09 ],
+    [ "inpt2",    0x0A ],
+    [ "inpt3",    0x0B ],
+    [ "inpt4",    0x0C ],
+    [ "inpt5",    0x0D ],
+    [ "vsync",    0x00 ],
+    [ "vblank",   0x01 ],
+    [ "wsync",    0x02 ],
+    [ "rsync",    0x03 ],
+    [ "nusiz0",   0x04 ],
+    [ "nusiz1",   0x05 ],
+    [ "colup0",   0x06 ],
+    [ "colup1",   0x07 ],
+    [ "colupf",   0x08 ],
+    [ "colubk",   0x09 ],
+    [ "ctrlpf",   0x0A ],
+    [ "refp0",    0x0B ],
+    [ "refp1",    0x0C ],
+    [ "pf0",      0x0D ],
+    [ "pf1",      0x0E ],
+    [ "pf2",      0x0F ],
+    [ "resp0",    0x10 ],
+    [ "resp1",    0x11 ],
+    [ "resm0",    0x12 ],
+    [ "resm1",    0x13 ],
+    [ "resbl",    0x14 ],
+    [ "audc0",    0x15 ],
+    [ "audc1",    0x16 ],
+    [ "audf0",    0x17 ],
+    [ "audf1",    0x18 ],
+    [ "audv0",    0x19 ],
+    [ "audv1",    0x1A ],
+    [ "grp0",     0x1B ],
+    [ "grp1",     0x1C ],
+    [ "enam0",    0x1D ],
+    [ "enam1",    0x1E ],
+    [ "enabl",    0x1F ],
+    [ "hmp0",     0x20 ],
+    [ "hmp1",     0x21 ],
+    [ "hmm0",     0x22 ],
+    [ "hmm1",     0x23 ],
+    [ "hmbl",     0x24 ],
+    [ "vdelp0",   0x25 ],
+    [ "vdelp1",   0x26 ],
+    [ "vdelbl",   0x27 ],
+    [ "resmp0",   0x28 ],
+    [ "resmp1",   0x29 ],
+    [ "hmove",    0x2A ],
+    [ "hmclr",    0x2B ],
+    [ "cxclr",    0x2C ],
+    [ "swcha",    0x0280 ],
+    [ "swacnt",   0x0281 ],
+    [ "swchb",    0x0282 ],
+    [ "swbcnt",   0x0283 ],
+    [ "intim",    0x0284 ],
+    [ "tim1t",    0x0294 ],
+    [ "tim8t",    0x0295 ],
+    [ "tim64t",   0x0296 ],
+    [ "tim1024t", 0x0297 ],
+  ])
+}
+
+function getAtari7800Keywords(): Map<string, number> {
+  return new Map<string, number>([
+    [ "inptctrl", 0x01 ],
+    [ "inpt0",    0x08 ],
+    [ "inpt1",    0x09 ],
+    [ "inpt2",    0x0A ],
+    [ "inpt3",    0x0B ],
+    [ "inpt4",    0x0C ],
+    [ "inpt5",    0x0D ],
+    [ "audc0",    0x15 ],
+    [ "audc1",    0x16 ],
+    [ "audf0",    0x17 ],
+    [ "audf1",    0x18 ],
+    [ "audv0",    0x19 ],
+    [ "audv1",    0x1A ],
+    [ "backgrnd", 0x20 ],
+    [ "p0c1",     0x21 ],
+    [ "p0c2",     0x22 ],
+    [ "p0c3",     0x23 ],
+    [ "wsync",    0x24 ],
+    [ "p1c1",     0x25 ],
+    [ "p1c2",     0x26 ],
+    [ "p1c3",     0x27 ],
+    [ "mstat",    0x28 ],
+    [ "p2c1",     0x29 ],
+    [ "p2c2",     0x2A ],
+    [ "p2c3",     0x2B ],
+    [ "dpph",     0x2C ],
+    [ "p3c1",     0x2D ],
+    [ "p3c2",     0x2E ],
+    [ "p3c3",     0x2F ],
+    [ "dppl",     0x30 ],
+    [ "p4c1",     0x31 ],
+    [ "p4c2",     0x32 ],
+    [ "p4c3",     0x33 ],
+    [ "charbase", 0x34 ],
+    [ "p5c1",     0x35 ],
+    [ "p5c2",     0x36 ],
+    [ "p5c3",     0x37 ],
+    [ "offset",   0x38 ],
+    [ "p6c1",     0x39 ],
+    [ "p6c2",     0x3A ],
+    [ "p6c3",     0x3B ],
+    [ "ctrl",     0x3C ],
+    [ "p7c1",     0x3D ],
+    [ "p7c2",     0x3E ],
+    [ "p7c3",     0x3F ],
+    [ "swcha",    0x0280 ],
+    [ "swacnt",   0x0281 ],
+    [ "swchb",    0x0282 ],
+    [ "swbcnt",   0x0283 ],
+    [ "swcha",    0x0280 ],
+    [ "swacnt",   0x0281 ],
+    [ "swchb",    0x0282 ],
+    [ "swbcnt",   0x0283 ],
+    [ "intim",    0x0284 ],
+    [ "tim1t",    0x0294 ],
+    [ "tim8t",    0x0295 ],
+    [ "tim64t",   0x0296 ],
+    [ "tim1024t", 0x0297 ],
+  ])
+}
+
+function getAppleKeywords(): Map<string, number> {
+  return new Map<string, number>([
+    // TODO: add some Apple II keywords
+  ])
 }
 
 //------------------------------------------------------------------------------

@@ -21,7 +21,6 @@ import { TokenType } from "./asm/tokenizer"
 import { NajaTextStatement } from "./asm/statements"
 
 // TODO:
-//  - show timing
 //  - step forward
 //  - add default key-combos for all stepping operations
 //
@@ -42,7 +41,7 @@ import { NajaTextStatement } from "./asm/statements"
 
 // NOTE: duplicated in machine/debugger.ts
 
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 type RequestHeader = {
   command: string
@@ -71,6 +70,16 @@ type SetBreakpointsRequest = RequestHeader & {
   entries: BreakpointEntry[]
 }
 
+type DataBreakpointEntry = {
+  address: number
+  length: number
+  access: number  // 1: read, 2: write, 3: readWrite
+}
+
+type SetDataBreakpointsRequest = RequestHeader & {
+  entries: DataBreakpointEntry[]
+}
+
 type StackResponse = RequestHeader & {
   entries: StackEntry[]
 }
@@ -78,6 +87,7 @@ type StackResponse = RequestHeader & {
 type StopNotification = RequestHeader & {
   reason: string
   pc: number
+  cpuCycles: number
   dataAddress?: number
   dataString?: string,
   error?: string
@@ -110,14 +120,19 @@ type ReadMemoryResponse = RequestHeader & {
   dataString: string    // actual data read in base64, possibly < readLength
 }
 
-type ReadRamRequest = RequestHeader & {
+type ReadRangeRequest = RequestHeader & {
   dataAddress: number   // read address
   dataLength: number    // number of bytes to read
 }
 
-type ReadRamResponse = RequestHeader & {
+type ReadRangeResponse = RequestHeader & {
   dataAddress: number   // effective read address
   dataString: string    // actual data read in base64
+}
+
+type WriteOpMemoryRequest = RequestHeader & {
+  opBytes: number[]     // instruction bytes, to determine addressing mode
+  dataString: string    // bytes to write in base64
 }
 
 type WriteMemoryRequest = RequestHeader & {
@@ -131,19 +146,19 @@ type WriteMemoryResponse = RequestHeader & {
   bytesWritten: number  // bytes successfully written
 }
 
-type WriteRamRequest = RequestHeader & {
+type WriteRangeRequest = RequestHeader & {
   dataAddress: number     // direct write address
   dataString: string      // bytes to write in base64
 }
 
-type SetDiskImageRequest = RequestHeader & {
+type SetDataImageRequest = RequestHeader & {
   fullPath?: string     // no path means set drive as empty
   dataString: string    // disk contents in base64
   driveIndex: number
   writeProtected: boolean
 }
 
-type DiskWriteNotification = RequestHeader & {
+type DataWriteNotification = RequestHeader & {
   fullPath: string
   dataString: string    // disk contents in base64
 }
@@ -201,6 +216,63 @@ function isSimpleType(typeName: string): boolean {
     typeName == "text"
 }
 
+function parseValues(valueStr: string, typeSize: number): number[] | undefined {
+
+  const parser = new Parser()
+  parser.setSourceLine(deunderlineString(valueStr))
+
+  const values: number[] = []
+  while (true) {
+    let token = parser.getNextToken()
+    if (!token) {
+      break
+    }
+    let str = token.getString()
+    let base = 16
+    let sign = 1
+    if (str == "#") {
+      base = 10
+      token = parser.getNextToken()
+    } else if (str == "$") {
+      base = 16
+      token = parser.getNextToken()
+    } else if (str == "%") {
+      base = 2
+      token = parser.getNextToken()
+    }
+    if (!token) {
+      return
+    }
+    str = token.getString()
+    if (str == "-") {
+      sign = -1
+      token = parser.getNextToken()
+      if (!token) {
+        return
+      }
+      str = token.getString()
+    }
+    if (token.type != TokenType.DecNumber && token.type != TokenType.HexNumber) {
+      return
+    }
+    let value = parseInt(str, base)
+    if (isNaN(value)) {
+      return
+    }
+    value *= sign
+    if (typeSize == 1) {
+      value &= 0xFF
+    } else if (typeSize == 2) {
+      value &= 0xFFFF
+    } else if (typeSize == 3) {
+      value &= 0xFFFFFF
+    }
+    values.push(value)
+  }
+
+  return values
+}
+
 //------------------------------------------------------------------------------
 
 class DebugVariable {
@@ -256,63 +328,6 @@ class DebugVariable {
     }
     return result
   }
-
-  protected parseValues(valueStr: string, typeSize: number): number[] | undefined {
-
-    const parser = new Parser()
-    parser.setSourceLine(deunderlineString(valueStr))
-
-    const values: number[] = []
-    while (true) {
-      let token = parser.getNextToken()
-      if (!token) {
-        break
-      }
-      let str = token.getString()
-      let base = 16
-      let sign = 1
-      if (str == "#") {
-        base = 10
-        token = parser.getNextToken()
-      } else if (str == "$") {
-        base = 16
-        token = parser.getNextToken()
-      } else if (str == "%") {
-        base = 2
-        token = parser.getNextToken()
-      }
-      if (!token) {
-        return
-      }
-      str = token.getString()
-      if (str == "-") {
-        sign = -1
-        token = parser.getNextToken()
-        if (!token) {
-          return
-        }
-        str = token.getString()
-      }
-      if (token.type != TokenType.DecNumber && token.type != TokenType.HexNumber) {
-        return
-      }
-      let value = parseInt(str, base)
-      if (isNaN(value)) {
-        return
-      }
-      value *= sign
-      if (typeSize == 1) {
-        value &= 0xFF
-      } else if (typeSize == 2) {
-        value &= 0xFFFF
-      } else if (typeSize == 3) {
-        value &= 0xFFFFFF
-      }
-      values.push(value)
-    }
-
-    return values
-  }
 }
 
 class StructVariable extends DebugVariable {
@@ -362,7 +377,7 @@ class FieldVariable extends DebugVariable {
   }
 
   public override async setValue(dbg: LspDebugger, valueStr: string): Promise<void> {
-    const dataBytes = this.parseValues(valueStr, 1)
+    const dataBytes = parseValues(valueStr, 1)
     if (dataBytes && dataBytes.length == this.field.size) {
 
       const request: WriteMemoryRequest =  {
@@ -424,7 +439,7 @@ class ArrayRowVariable extends DebugVariable {
   }
 
   public override async setValue(dbg: LspDebugger, valueStr: string): Promise<void> {
-    const dataBytes = this.parseValues(valueStr, this.typeSize)
+    const dataBytes = parseValues(valueStr, this.typeSize)
     if (dataBytes) {
 
       const request: WriteMemoryRequest =  {
@@ -471,12 +486,12 @@ class ArrayRowVariable extends DebugVariable {
 
 class ArrayVariable extends DebugVariable {
   constructor(
-    rows: number,
-    columns: number,
-    typeSize: number,
-    address: number,
-    indexAddress: number | undefined,
-    dataBytes: Uint8Array) {
+      rows: number,
+      columns: number,
+      typeSize: number,
+      address: number,
+      indexAddress: number | undefined,
+      dataBytes: Uint8Array) {
 
     super("array", address)
 
@@ -496,7 +511,7 @@ class ArrayVariable extends DebugVariable {
 }
 
 class RegistersVariable extends DebugVariable {
-  constructor(stackEntry: StackEntry, isTop: boolean) {
+  constructor(stackEntry: StackEntry, isTop: boolean, startCycles?: number) {
     super("registers")
 
     for (let i = 0; i < stackEntry.regs.length; i += 1) {
@@ -507,6 +522,11 @@ class RegistersVariable extends DebugVariable {
       }
       const reg = stackEntry.regs[index]
       this.addChild(new RegisterVariable(reg, isTop))
+    }
+
+    if (startCycles != undefined) {
+      const deltaVar = new CyclesVariable("Cycles Δ", stackEntry.cpuCycles, startCycles)
+      this.addChild(deltaVar)
     }
   }
 }
@@ -581,7 +601,7 @@ class RegisterVariable extends DebugVariable {
       return (this.reg.value & ~clearMask) | setMask
     }
 
-    const values = this.parseValues(valueStr, (this.reg.bitSize ?? 8) / 8)
+    const values = parseValues(valueStr, (this.reg.bitSize ?? 8) / 8)
     if (values?.length == 1) {
       return values[0]
     }
@@ -606,6 +626,18 @@ class RegisterVariable extends DebugVariable {
       }
       this.valueStr = valueToString(this.reg.value, bitSize / 8)
     }
+  }
+}
+
+class CyclesVariable extends DebugVariable {
+  constructor(name: string, curCycles: number, startCycles?: number) {
+    super(name)
+    this.updateValueStr(curCycles, startCycles)
+  }
+
+  private updateValueStr(curCycles: number, startCycles?: number) {
+    const value = curCycles - (startCycles ?? 0)
+    this.valueStr = value.toString()
   }
 }
 
@@ -682,6 +714,8 @@ export class LspDebugger {
   private breakpoints = new Map<string, number[]>()
   public variableHandles = new Handles<DebugVariable>()
   private stackFrameHandles = new Handles<StackEntry>()
+  private prevStopCycles: number = 0
+  private curStopCycles: number = 0
 
   private connectEvent?: AwaitEvent
   private launchEvent?: AwaitEvent
@@ -782,13 +816,14 @@ export class LspDebugger {
 
       case "cpuStopped": {
         const msg = <StopNotification>message
-        if (msg.reason == "breakpoint" && this.mainProject) {
+        const isDataBreakpoint =  msg.reason == "dataBreakpoint"
+        if ((msg.reason == "breakpoint" || isDataBreakpoint) && this.mainProject) {
           let dataRange: DataRange | undefined
           if (msg.dataAddress && msg.dataString) {
             dataRange = new DataRange(msg.dataAddress, base64.toByteArray(msg.dataString))
           }
           let result = this.mainProject.findSourceByAddress(msg.pc, dataRange)
-          if (result) {
+          if (result && !isDataBreakpoint) {
             const addresses = this.breakpoints.get(result.objectDoc.sourceFile.fullPath)
             let matched = false
             if (addresses) {
@@ -804,22 +839,22 @@ export class LspDebugger {
             }
           }
           if (!result) {
-            // if breakpoint address is in file that isn't loaded,
-            //  restart target and don't report stop
-
-            // TODO: Invalidate cycle count numbers because will
-            //  cause them to be inaccurate.
-
-            this.sendCommand("startCpu")
-            break
+            if (!isDataBreakpoint) {
+              // if breakpoint address is in file that isn't loaded,
+              //  restart target and don't report stop
+              this.sendCommand("startCpu")
+              break
+            }
           }
         }
+        this.prevStopCycles = this.curStopCycles
+        this.curStopCycles = msg.cpuCycles
         this.connection.sendNotification("rpw65.debuggerStopped", { reason: msg.reason, error: msg.error })
         break
       }
 
-      case "diskWrite": {
-        const msg = <DiskWriteNotification>message
+      case "dataWrite": {
+        const msg = <DataWriteNotification>message
         const binBytes = base64.toByteArray(msg.dataString)
         fs.writeFileSync(msg.fullPath, binBytes)
         break
@@ -837,33 +872,36 @@ export class LspDebugger {
   }
 
   // direct writeMemory method for loading project binaries
-  public async writeRam(address: number, data: Uint8Array | number[]) {
+  public async writeRange(address: number, data: Uint8Array | number[]) {
     if (Array.isArray(data)) {
       data = new Uint8Array(data)
     }
-    const request: WriteRamRequest =  {
-      command: "writeRam",
+    const request: WriteRangeRequest =  {
+      command: "writeRange",
       dataAddress: address,
       dataString: base64.fromByteArray(data)
     }
     await this.sendRequest(request)
   }
 
-  // direct readMemory method for check binary load status
-  public async readRam(address: number, length: number): Promise<Uint8Array> {
-    const request: ReadRamRequest =  {
-      command: "readRam",
+  // direct readMemory method for checking binary load status
+  public async readRange(address: number, length: number): Promise<Uint8Array> {
+    if (length == 0) {
+      return new Uint8Array(0)
+    }
+    const request: ReadRangeRequest =  {
+      command: "readRange",
       dataAddress: address,
       dataLength: length
     }
-    const response: ReadRamResponse = await this.sendRequest(request)
+    const response: ReadRangeResponse = await this.sendRequest(request)
     return base64.toByteArray(response.dataString)
   }
 
-  public async setDiskImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {
+  public async setDataImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {
     const dataString = base64.fromByteArray(data)
-    const request: SetDiskImageRequest = {
-      command: "setDiskImage",
+    const request: SetDataImageRequest = {
+      command: "setDataImage",
       fullPath, dataString, driveIndex, writeProtected
     }
     await this.sendRequest(request)
@@ -877,6 +915,10 @@ export class LspDebugger {
       stopCpu: false
     }
     await this.sendRequest(request)
+  }
+
+  public async softReset() {
+    await this.sendRequest({ command: "softReset" })
   }
 
   public async setParameter(name: string, value: number) {
@@ -931,7 +973,10 @@ export class LspDebugger {
         this.sendCommand("stepCpuOutOf")
         break
 
-      // TODO: step forward
+      // NOTE: this is not a standard debugger command
+      case "stepForward":
+        this.sendCommand("stepCpuForward")
+        break
 
       case "breakpointLocations":
         return this.onBreakpointLocations(<DebugProtocol.BreakpointLocationsArguments>params.arguments![1])
@@ -940,7 +985,7 @@ export class LspDebugger {
       case "dataBreakpointInfo":
         return this.onDataBreakpointInfo(<DebugProtocol.DataBreakpointInfoArguments>params.arguments![1])
       case "setDataBreakpoints":
-        return this.onDataBreakpointsInfo(<DebugProtocol.SetDataBreakpointsArguments>params.arguments![1])
+        return this.onSetDataBreakpoints(<DebugProtocol.SetDataBreakpointsArguments>params.arguments![1])
 
       case "stackTrace":
         return this.onStackTrace(<DebugProtocol.StackTraceArguments>params.arguments![1])
@@ -997,7 +1042,17 @@ export class LspDebugger {
       }
     }
 
+    // Clear the per source file breakpoint address map.
+    //  This will get rebuilt as setBreakpoint commands
+    //  are processed.
+    this.breakpoints = new Map<string, number[]>()
+
     if (command == "launch") {
+      if (this.mainProject?.sawError) {
+        this.connection.sendNotification("rpw65.debuggerError", { error: "Project has build errors" })
+        return
+      }
+
       await this.sendRequest({ command: "hardReset" })
       try {
         await this.mainProject?.binLoadProject(this)
@@ -1144,12 +1199,135 @@ export class LspDebugger {
     return { breakpoints }
   }
 
-  // TODO: support these
-
-  private onDataBreakpointInfo(args: DebugProtocol.DataBreakpointInfoArguments) {
+  private parseNumber(s: string): number | undefined {
+    let radix: number | undefined
+    if (s[0] == "$") {
+      s = s.substring(1)
+      radix = 16
+    } else if (s[0] == "#") {
+      s = s.substring(1)
+      radix = 10
+    }
+    const n = parseInt(s, radix)
+    return isNaN(n) ? undefined : n
   }
 
-  private onDataBreakpointsInfo(args: DebugProtocol.SetDataBreakpointsArguments) {
+  private async onDataBreakpointInfo(args: DebugProtocol.DataBreakpointInfoArguments) {
+
+    let address: number | undefined
+    let bytes = args.bytes ?? 1
+    let description = ""
+
+    let canPersist = false
+
+    if (args.asAddress) {
+      address = this.parseNumber(args.name)
+      if (address == undefined) {
+        return { dataId: null, description: `Invalid address: ${args.name}` }
+      }
+      description = args.name
+      canPersist = true
+    } else if (args.variablesReference) {
+      return { dataId: null, description: `Expression not supported: ${args.name}` }
+    } else {
+      const ev = this.preEvaluate(args.name, args.frameId)
+      if (ev.parseError) {
+        return { dataId: null, description: `Invalid expression: ${args.name}` }
+      }
+      if (ev.typeDef) {
+        return { dataId: null, description: `Expression not supported: ${args.name}` }
+      }
+
+      const request: ReadOpMemoryRequest = {
+        command: "readOpMemory",
+        opBytes: ev.opBytes!
+      }
+
+      let typeSize
+      if (ev.typeName == "byte" || ev.typeName == "text") {
+        typeSize = 1
+      } else if (ev.typeName == "word") {
+        typeSize = 2
+      } else if (ev.typeName == "long") {
+        typeSize = 3
+      } else {
+        // TODO: choose length implicitly from opcode
+        typeSize = 1
+      }
+      request.typeSize = typeSize
+
+      // TODO: share this code
+      if (ev.columns != undefined) {
+        if (ev.columns == 0) {
+          ev.columns = 8
+          if (ev.rows == undefined || ev.rows == 0) {
+            ev.rows = 4
+          }
+        } else {
+          ev.columns = Math.max(Math.min(ev.columns, 16), 1)
+        }
+        if (ev.rows == undefined) {
+          ev.rows = 1
+        } if (ev.rows == 0) {
+          ev.rows = Math.ceil(16 / ev.columns)
+        } else {
+          ev.rows = Math.max(Math.min(ev.rows, 32), 1)
+        }
+        request.typeSize = ev.columns * typeSize * ev.rows
+      }
+
+      const response: ReadOpMemoryResponse = await this.sendRequest(request)
+      address = response.dataAddress
+      bytes = request.typeSize
+      description = args.name
+      // *** add address/size info? ***
+
+      // *** only canPersist if dataId is encoded in a way to works across sessions
+    }
+
+    const dataId = `addr:${address.toString(16)}:size:${bytes}`
+
+    // DebugProtocol.DataBreakpointInfoResponse.body
+    return {
+      dataId,
+      description,
+      accessTypes: ["read", "write", "readWrite"],
+      canPersist
+    }
+  }
+
+  private async onSetDataBreakpoints(args: DebugProtocol.SetDataBreakpointsArguments) {
+
+    const breakpoints: DebugProtocol.Breakpoint[] = []
+
+    const request: SetDataBreakpointsRequest = {
+      command: "setDataBreakpoints",
+      entries: []
+    }
+
+    for (const entry of args.breakpoints) {
+      const parts = entry.dataId.split(":")
+      const address = parseInt(parts[1], 16)
+      const length = parseInt(parts[3], 10)
+      let access = 0
+      if (entry.accessType == "read") {
+        access = 1
+      } else if (entry.accessType == "write") {
+        access = 2
+      } else {
+        access = 3
+      }
+      request.entries.push({ address, length, access})
+
+      // TODO: could push these after sendRequest response
+      breakpoints.push(new Breakpoint(true))
+    }
+
+    const response = await this.sendRequest(request)
+    // TODO: build breakpoints here instead based on validity?
+
+    // DebugProtocol.SetDataBreakpointsResponse.body
+    return { breakpoints }
   }
 
   //--------------------------------------------------------
@@ -1267,10 +1445,12 @@ export class LspDebugger {
     const stackEntry = this.stackFrameHandles.get(args.frameId)
     if (stackEntry) {
       const topOfStack = stackEntry.topOfStack ?? false
-      scopes.push(new Scope("Registers", this.variableHandles.create(new RegistersVariable(stackEntry, topOfStack)), false))
+      const startCycles = topOfStack ? this.prevStopCycles : undefined
+      scopes.push(new Scope("CPU", this.variableHandles.create(new RegistersVariable(stackEntry, topOfStack, startCycles)), false))
+
       if (topOfStack) {
-        // TODO: check for invalidated timing numbers above
-        // scopes.push(new Scope("Timing", this.variableHandles.create(new DebugVariable("timing")), false))
+        // TODO: hardware-specific scope
+        // scopes.push(new Scope("Hardware", this.variableHandles.create(new DebugVariable("hardware")), false))
       }
     }
     return { scopes }
@@ -1312,17 +1492,18 @@ export class LspDebugger {
     }
   }
 
-  private async onEvaluate(args: DebugProtocol.EvaluateArguments) {
-    let opBytes: number[] | undefined
+  private preEvaluate(expression: string, frameId?: number) {
 
-    // hover is handled in lsp_server
-    if (args.context == "hover") {
-      return
-    }
+    let opBytes = undefined
+    let rows = undefined
+    let columns = undefined
+    let typeName = undefined
+    let typeDef = undefined
+    let parseError = false
 
     let scopeModule: Module | undefined
-    if (args.frameId != undefined) {
-      const stackEntry = this.stackFrameHandles.get(args.frameId)
+    if (frameId != undefined) {
+      const stackEntry = this.stackFrameHandles.get(frameId)
       if (stackEntry) {
         const objectDoc: ObjectDoc = (stackEntry as any).objectDoc
         if (objectDoc) {
@@ -1332,7 +1513,7 @@ export class LspDebugger {
     }
 
     // look for type name at end of expression and strip it off
-    let expStr = args.expression.trim()
+    let expStr = expression.trim()
     let typeStr = ""
     const n = expStr.lastIndexOf(":")
     if (n >= 0) {
@@ -1342,15 +1523,10 @@ export class LspDebugger {
 
     opBytes = evalOpExpression(this.mainProject!, scopeModule, expStr)
     if (!opBytes) {
-      return
+      // callers assume this is a parse error
+      parseError = true
+      return { parseError }
     }
-
-    // [<type-name>][ "[" <number> "]" [ "[" <number> "]" ] ]
-
-    let rows: number | undefined
-    let columns: number | undefined
-    let typeName: string | undefined
-    let typeDef: TypeDef | undefined
 
     // see if expStr is a symbol with a typeRef
     if (scopeModule) {
@@ -1368,8 +1544,6 @@ export class LspDebugger {
     }
 
     if (typeStr) {
-
-      let parseError = false
 
       const parser = new Parser()
       parser.setSourceLine(typeStr)
@@ -1391,7 +1565,6 @@ export class LspDebugger {
       // get optional first bracketed term
       if (token) {
         if (token.getString() == "[") {
-          rows = 1
           token = parser.getNextToken()
           if (token) {
             if (token.type == TokenType.DecNumber) {
@@ -1407,7 +1580,9 @@ export class LspDebugger {
               } else {
                 parseError = true
               }
-            } else if (token.getString() != "]") {
+            } else if (token.getString() == "]") {
+              columns = 0
+            } else {
               parseError = true
             }
           } else {
@@ -1435,6 +1610,9 @@ export class LspDebugger {
             } else {
               parseError = true
             }
+          } else if (token.getString() == "]") {
+            rows = columns
+            columns = 0
           } else {
             parseError = true
           }
@@ -1443,41 +1621,52 @@ export class LspDebugger {
         }
         token = parser.getNextToken()
       }
+    }
 
-      if (parseError) {
-        return
-      }
+    return { opBytes, rows, columns, typeName, typeDef, parseError }
+  }
+
+  private async onEvaluate(args: DebugProtocol.EvaluateArguments) {
+
+    // hover is handled in lsp_server
+    if (args.context == "hover") {
+      return
+    }
+
+    const ev = this.preEvaluate(args.expression, args.frameId)
+    if (ev.parseError) {
+      return
     }
 
     const request: ReadOpMemoryRequest = {
       command: "readOpMemory",
-      opBytes
+      opBytes: ev.opBytes!
     }
 
-    if (typeDef) {
-      if (columns != undefined) {
-        if (rows != undefined) {
+    if (ev.typeDef) {
+      if (ev.columns != undefined) {
+        if (ev.rows != undefined) {
           // TODO: "typeDef[][]"
         } else {
           // TODO: "typeDef[]"
         }
       } else {
         // "typeDef"
-        request.typeSize = typeDef.size
+        request.typeSize = ev.typeDef.size
         const response: ReadMemoryResponse = await this.sendRequest(request)
         const dataBytes = base64.toByteArray(response.dataString)
 
-        const structVar = new StructVariable(this, typeDef, response.dataAddress, dataBytes)
+        const structVar = new StructVariable(this, ev.typeDef, response.dataAddress, dataBytes)
         const result = "{ }"
         return { result, variablesReference: structVar.handle }
       }
     } else {
       let typeSize
-      if (typeName == "byte" || typeName == "text") {
+      if (ev.typeName == "byte" || ev.typeName == "text") {
         typeSize = 1
-      } else if (typeName == "word") {
+      } else if (ev.typeName == "word") {
         typeSize = 2
-      } else if (typeName == "long") {
+      } else if (ev.typeName == "long") {
         typeSize = 3
       } else {
         // TODO: choose length implicitly from opcode
@@ -1487,12 +1676,23 @@ export class LspDebugger {
       request.typeSize = typeSize
       let arrayView = false
 
-      if (columns != undefined) {
-        columns = Math.max(Math.min(columns, 16), 1)
-        if (rows != undefined) {
-          rows = Math.max(Math.min(rows, 16), 1)
+      if (ev.columns != undefined) {
+        if (ev.columns == 0) {
+          ev.columns = 8
+          if (ev.rows == undefined || ev.rows == 0) {
+            ev.rows = 4
+          }
+        } else {
+          ev.columns = Math.max(Math.min(ev.columns, 16), 1)
         }
-        request.typeSize = columns * typeSize * (rows ?? 1)
+        if (ev.rows == undefined) {
+          ev.rows = 1
+        } if (ev.rows == 0) {
+          ev.rows = Math.ceil(16 / ev.columns)
+        } else {
+          ev.rows = Math.max(Math.min(ev.rows, 32), 1)
+        }
+        request.typeSize = ev.columns * typeSize * ev.rows
         arrayView = true
       }
 
@@ -1501,24 +1701,20 @@ export class LspDebugger {
       let varRef = 0
 
       if (!arrayView && response.indexAddress != undefined) {
-        columns = Math.min(dataBytes.length, 8)
-        rows = Math.max(Math.floor(dataBytes.length / columns), 1)
+        ev.columns = Math.min(dataBytes.length, 8)
+        ev.rows = Math.max(Math.floor(dataBytes.length / ev.columns), 1)
         arrayView = true
       }
 
       if (arrayView) {
-        if (rows == undefined) {
-          rows = Math.floor(dataBytes.length / columns!)
-        }
-
-        const arrayVar = new ArrayVariable(rows, columns!, typeSize, response.dataAddress, response.indexAddress, dataBytes)
+        const arrayVar = new ArrayVariable(ev.rows!, ev.columns!, typeSize, response.dataAddress, response.indexAddress, dataBytes)
         varRef = this.variableHandles.create(arrayVar)
       }
 
       const offset = (response.indexAddress ?? response.dataAddress) - response.dataAddress
 
       let result = ""
-      if (typeName == "text") {
+      if (ev.typeName == "text") {
         result = buildTextString(dataBytes)
       } else {
         result = dataToString(dataBytes, offset, typeSize)
@@ -1527,8 +1723,63 @@ export class LspDebugger {
     }
   }
 
-  private onSetExpression(args: DebugProtocol.SetExpressionArguments) {
-    // TODO: need to implement this?
+  private async onSetExpression(args: DebugProtocol.SetExpressionArguments) {
+
+    const ev = this.preEvaluate(args.expression, args.frameId)
+    if (ev.parseError || ev.typeDef != undefined) {
+      return
+    }
+
+    let typeSize
+    if (ev.typeName == "byte" || ev.typeName == "text") {
+      typeSize = 1
+    } else if (ev.typeName == "word") {
+      typeSize = 2
+    } else if (ev.typeName == "long") {
+      typeSize = 3
+    } else {
+      // TODO: choose length implicitly from opcode
+      typeSize = 1
+    }
+
+    let dataBytes: Uint8Array
+    if (ev.typeName == "text") {
+      // TODO: for now, not supported
+      return
+    } else {
+      const values = parseValues(args.value, typeSize)
+      if (!values || values.length != 1) {
+        return
+      }
+
+      let value = values[0]
+      dataBytes = new Uint8Array(typeSize)
+      for (let i = 0; i < typeSize; i += 1) {
+        dataBytes[i] = value & 0xff
+        value >>= 8
+      }
+    }
+
+    const request: WriteOpMemoryRequest = {
+      command: "writeOpMemory",
+      opBytes: ev.opBytes!,
+      dataString: base64.fromByteArray(dataBytes)
+    }
+
+    await this.sendRequest(request)
+
+    const varRef = 0
+    const offset = 0
+
+    let result: string
+    if (ev.typeName == "text") {
+      // TODO: support setting text?
+      // result = buildTextString(dataBytes)
+      return
+    } else {
+      result = dataToString(dataBytes, offset, typeSize)
+    }
+    return { value: result, variablesReference: varRef }
   }
 
   //--------------------------------------------------------
@@ -1591,6 +1842,10 @@ export class LspDebugger {
       const objectLine = objectDoc.getObjectLines(line)[0]
       if (objectLine?.dataBytes) {
         opBytes = objectLine.dataBytes
+        // remove data mismatch negation
+        for (let i = 0; i < opBytes.length; i += 1) {
+          opBytes[i] = Math.abs(opBytes[i])
+        }
       }
     }
     if (!opBytes) {

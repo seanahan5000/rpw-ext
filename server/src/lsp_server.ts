@@ -3,20 +3,35 @@ import * as fs from 'fs'
 import * as lsp from 'vscode-languageserver'
 import { URI } from 'vscode-uri'
 import { TextDocument } from 'vscode-languageserver-textdocument'
-import { TextDocuments, DidChangeConfigurationNotification } from 'vscode-languageserver/node'
+import { DidChangeConfigurationNotification } from 'vscode-languageserver/node'
+import * as base64 from 'base64-js'
 
 import { RpwProject, RpwSettings } from "./shared/rpw_types"
 import { Project, Module, SourceFile } from "./asm/project"
+import { ObjectDoc } from "./asm/object_doc"
 import { Node, NodeErrorType, Token, TokenType } from "./asm/tokenizer"
 import { Expression, FileNameExpression, SymbolExpression, NumberExpression } from "./asm/expressions"
-import { Statement, OpStatement } from "./asm/statements"
+import { Statement, OpStatement, EquStatement, StorageStatement, DataStatement } from "./asm/statements"
 import { SymbolType } from "./asm/symbols"
-import { renumberLocals, renameSymbol } from "./asm/labels"
+import { renumberLocals, renameSymbol, FileEdits } from "./asm/labels"
 import { Completions, getCommentHeader } from "./lsp_utils"
-import { SyntaxNames } from "./asm/syntaxes/syntax_types"
 import { OpcodeDef, OpMode, isaSet65xx } from "./isa65xx"
 
 import { LspDebugger } from "./lsp_debugger"
+
+//------------------------------------------------------------------------------
+
+function equalArrays(a?: number[], b?: number[]): boolean {
+  if (!a || !b || a.length != b.length) {
+    return false
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] != b[i]) {
+      return false
+    }
+  }
+  return true
+}
 
 //------------------------------------------------------------------------------
 
@@ -69,25 +84,40 @@ function uriFromPath(path: string) {
 }
 
 //------------------------------------------------------------------------------
+// also in client/src/extension.ts
 // TODO: figure out how to share this with client extension
 
-type GetCodeBytesArgs = {
-  startLine?: number
-  endLine?: number
-  cycleCounts?: boolean
-}
-
-export type CodeBytesEntry = {
-  a?: number      // address
-  d?: number[]    // data bytes
-  c?: string      // cycle count ("3", "2/3", "4+", etc.)
-}
-
-// response to GetCodeBytes
-type CodeBytes = {
+type ObjectBytesRange = {
   startLine: number
-  cycleCounts?: boolean
-  entries: CodeBytesEntry[]
+  startAddress: number
+  offsetsString?: string
+  dataString?: string
+  refDataString?: string
+  cyclesString?: string
+}
+
+type ObjectBytesChangedParams = {
+	uri: string
+	version: number
+  ranges?: ObjectBytesRange[]
+  cyclesNames?: string[]
+}
+
+type ParsingChangedParams = {
+	uri: string
+	version: number
+	syntax: string
+	tabStops: number[]
+	opcodeUpperCase: boolean
+	keywordUpperCase: boolean
+}
+
+// NOTE: intentionally different than version in client/src/extension.ts
+type OpenDocsState = {
+  document: TextDocument
+  sourceFile?: SourceFile
+  sentParsing?: ParsingChangedParams
+  sentObject?: ObjectBytesChangedParams
 }
 
 //------------------------------------------------------------------------------
@@ -96,7 +126,7 @@ export class LspProject extends Project {
 
   private server: LspServer
 
-  constructor(server: LspServer, defaultSettings: RpwSettings) {
+  constructor(server: LspServer, defaultSettings?: RpwSettings) {
     super(defaultSettings)
     this.server = server
   }
@@ -104,16 +134,16 @@ export class LspProject extends Project {
   getFileContents(fullPath: string): string | undefined {
     // look through open documents first
     const uri = uriFromPath(fullPath)
-    const document = this.server.documents.get(uri)
-    if (document) {
-      return document.getText()
+    const state = this.server.openDocs.get(uri)
+    if (state) {
+      return state.document.getText()
     }
     // if no open document, go look in file system
     return super.getFileContents(fullPath)
   }
 
   openSourceFile(module: Module, fullPath: string): SourceFile | undefined {
-    this.server.removeTemporary(this, fullPath)
+    this.server.removeTemporary(module, fullPath)
     return super.openSourceFile(module, fullPath)
   }
 }
@@ -139,7 +169,8 @@ type DiagnosticState = {
 export class LspServer {
 
   private connection: lsp.Connection
-  /*private*/ documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument)
+  public openDocs = new Map<string, OpenDocsState>
+  private visibleDocs: string[] = []
 
   private isInitialized: Promise<boolean>
   private isInitialized_resolve: any
@@ -161,22 +192,21 @@ export class LspServer {
 
   constructor(connection: lsp.Connection) {
     this.connection = connection
-    this.documents.listen(this.connection)
 
     this.isInitialized = new Promise<boolean>((resolve) => {
       this.isInitialized_resolve = resolve
     })
 
-    this.documents.onDidOpen(e => {
-      this.onDidOpenTextDocument(e.document.uri)
+    this.connection.onDidOpenTextDocument((e: lsp.DidOpenTextDocumentParams) => {
+      this.onDidOpenTextDocument(e)
     })
 
-    this.documents.onDidChangeContent(e => {
-      this.onDidChangeTextDocument(e.document.uri)
+    this.connection.onDidChangeTextDocument((e: lsp.DidChangeTextDocumentParams) => {
+      this.onDidChangeTextDocument(e)
     })
 
-    this.documents.onDidClose(e => {
-      this.onDidCloseTextDocument(e.document.uri)
+    this.connection.onDidCloseTextDocument((e: lsp.DidCloseTextDocumentParams) => {
+      this.onDidCloseTextDocument(e)
     })
 
     this.connection.onDidChangeConfiguration(e => {
@@ -194,6 +224,7 @@ export class LspServer {
     this.connection.onReferences(this.onReferences.bind(this))
     this.connection.onPrepareRename(this.onPrepareRename.bind(this))
     this.connection.onRenameRequest(this.onRename.bind(this))
+    this.connection.onDocumentSymbol(this.onDocumentSymbol.bind(this))
     this.connection.languages.semanticTokens.on(this.onSemanticTokensFull.bind(this))
     this.connection.languages.semanticTokens.onRange(this.onSemanticTokensRange.bind(this))
 
@@ -227,10 +258,21 @@ export class LspServer {
 
   // if a file was opened in a project,
   //  remove a temporary project that already owned the file
-  removeTemporary(curProject: Project, filePath: string) {
+  removeTemporary(curModule: Module, filePath: string) {
+    const curProject = curModule.project
     for (let project of this.projects) {
       if (project != curProject && project.isTemporary) {
-        if (project.findSourceFile(filePath)) {
+        const sourceFile = project.findSourceFile(filePath)
+        if (sourceFile) {
+
+          // clear this sourceFile from openDocs state so
+          //  the new file will get refound later
+          for (const [key, state] of this.openDocs) {
+            if (state.sourceFile == sourceFile) {
+              state.sourceFile = undefined
+            }
+          }
+
           // only remove if it's alone in its project/module
           // NOTE: for now, just disable the project by removing its modules
           // Removing it completely will cause problems because caller is
@@ -272,7 +314,8 @@ export class LspServer {
         hoverProvider: true,
         renameProvider: { prepareProvider: true },
         referencesProvider: true,
-        foldingRangeProvider: true
+        foldingRangeProvider: true,
+        documentSymbolProvider: true
       }
     }
 
@@ -365,6 +408,12 @@ export class LspServer {
         this.defaultSettings = this.buildRpwSettings()
       }
 
+      // fs.watch('./data', (eventType, filename) => {
+      //     if (filename && filename.endsWith('.txt')) {
+      //         console.log(`${filename} changed`);
+      //     }
+      // });
+
       const project = new LspProject(this, await this.defaultSettings)
 
       if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
@@ -388,10 +437,6 @@ export class LspServer {
     // })
 
     this.scheduleUpdate()
-
-    // send this so client will ask for initial syntax, etc.
-    this.connection.sendNotification("rpw65.syntaxChanged")
-    this.connection.sendNotification("rpw65.codeBytesChanged")
   }
 
   private async onDidChangeConfiguration() {
@@ -402,10 +447,6 @@ export class LspServer {
     }
 
     this.scheduleUpdate()
-
-    // send this so client will ask for syntax, etc.
-    this.connection.sendNotification("rpw65.syntaxChanged")
-    this.connection.sendNotification("rpw65.codeBytesChanged")
   }
 
   // TODO: need fallback if vscode client not present
@@ -446,8 +487,37 @@ export class LspServer {
         project.update()
       }
 
-      // *** okay to always do this? or only on actual change? ***
-      this.connection.sendNotification("rpw65.syntaxChanged")
+      // remove any temporary projects that are now empty
+      for (let i = 0; i < this.projects.length; ) {
+        const project = this.projects[i]
+        if (project.modules.length == 0) {
+          this.projects.splice(i, 1)
+          continue
+        }
+        i += 1
+      }
+
+      // check for a file becoming orphaned again
+      for (const [key, docState] of this.openDocs) {
+
+        // always clear cached source file so new version will be found
+        docState.sourceFile = undefined
+
+        const filePath = pathFromUriString(docState.document.uri)
+        if (filePath) {
+          const sourceFile = this.findSourceFile(filePath)
+          if (!sourceFile) {
+            const project = this.addFileProject(filePath)
+            if (!project) {
+              // TODO: error handling?
+              return
+            }
+            project.update()
+          }
+        }
+      }
+
+      this.sendUpdates()
 
       this.scheduleDiagnostics(this.updateFile)
       delete this.updateFile
@@ -489,7 +559,7 @@ export class LspServer {
   }
 
   // build a tempory project given a file path
-  private async addFileProject(path: string): Promise<LspProject | undefined> {
+  private addFileProject(path: string): LspProject | undefined {
     let fileName: string
     let directory: string
     let inWorkspace: boolean
@@ -514,45 +584,90 @@ export class LspServer {
     rpwProject.modules = []
     rpwProject.modules.push({src: fileName})
 
-    if (!this.defaultSettings) {
-      this.defaultSettings = this.buildRpwSettings()
-    }
+    // if (!this.defaultSettings) {
+    //   // *** this is causing addFileProject to be async ***
+    //   this.defaultSettings = this.buildRpwSettings()
+    // }
 
-    const project = new LspProject(this, await this.defaultSettings)
+    const project = new LspProject(this, undefined/*await this.defaultSettings*/)
     const isTemporary = true
     project.loadProject(directory, rpwProject, isTemporary, inWorkspace)
     this.projects.push(project)
     return project
   }
 
-  async onDidOpenTextDocument(uri: string) {
+  //----------------------------------------------------------------------------
+  // MARK: File State
+
+  async onDidOpenTextDocument(e: lsp.DidOpenTextDocumentParams) {
+
+    const td = e.textDocument
+    const document = TextDocument.create(td.uri, td.languageId, td.version, td.text)
+
+    let docState: OpenDocsState = { document }
+    this.openDocs.set(docState.document.uri, docState)
 
     // Don't process documents opening until project load has completed,
     //  otherwise, temporary projects get created for files that will
     //  eventually be part of the main project.
     //
-    // TODO: why does the project load not correct consume these
+    // TODO: why does the project load not correctly consume these
     //  temporary projects as the files are identified?
     await this.isInitialized
 
-    this.executeUpdate()
+    this.executeUpdate()    // *** this is also sending updates ***
 
-    const filePath = pathFromUriString(uri)
+    const filePath = pathFromUriString(docState.document.uri)
     if (filePath) {
-      let sourceFile = this.findSourceFile(filePath)
+      const sourceFile = this.findSourceFile(filePath)
       if (!sourceFile) {
         const project = await this.addFileProject(filePath)
         if (!project) {
           // *** error handling ***
           return
         }
-        this.scheduleUpdate(sourceFile)
+        this.scheduleUpdate(docState.sourceFile)
+        return
       }
-      this.connection.sendNotification("rpw65.syntaxChanged")
+
+      docState.sourceFile = sourceFile
+      this.sendUpdates()
     }
   }
 
-  onDidCloseTextDocument(uri: string): void {
+  onDidChangeTextDocument(e: lsp.DidChangeTextDocumentParams): void {
+    const td = e.textDocument
+    const docState = this.openDocs.get(td.uri)
+    if (docState?.document && e.contentChanges) {
+      let didChange = false
+      for (const change of e.contentChanges) {
+        if (!lsp.TextDocumentContentChangeEvent.isIncremental(change)) {
+          didChange = true
+          break
+        }
+        if (change.range) {
+          if (docState.document.getText(change.range) != change.text) {
+            didChange = true
+            break
+          }
+        }
+      }
+      if (didChange) {
+        const { version } = td
+        if (version == null || version == undefined) {
+          throw new Error(`Bad document change event version for ${td.uri}`)
+        }
+        docState.document = TextDocument.update(docState.document, e.contentChanges, version)
+        this.openDocs.set(docState.document.uri, docState)
+        this.scheduleUpdate(docState.sourceFile)
+      }
+    }
+  }
+
+  onDidCloseTextDocument(e: lsp.DidCloseTextDocumentParams): void {
+    const uri = e.textDocument.uri
+    this.openDocs.delete(uri)
+
     const filePath = pathFromUriString(uri)
     if (filePath) {
       let sourceFile = this.findSourceFile(filePath)
@@ -580,21 +695,192 @@ export class LspServer {
     }
   }
 
-  // NOTE: This gets called by VSCode in cases where the actual
-  //  contents of a file have not changed -- when it's first opened,
-  //  or when clicking through the files of a project where they
-  //  are shown in the same italicized/quick file tab.
-  // For performance purposes, it may be worth scanning the file
-  //  contents against known to contents to check for differences.
-  onDidChangeTextDocument(uri: string): void {
-    const filePath = pathFromUriString(uri)
-    if (filePath) {
-      const sourceFile = this.findSourceFile(filePath)
-      if (sourceFile) {
-        this.scheduleUpdate(sourceFile)
+  private sendUpdates() {
+    // prioritize updates for visible docs
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const [key, state] of this.openDocs) {
+
+        let isVisible = false
+        for (const visibleDoc of this.visibleDocs) {
+          if (key == visibleDoc) {
+            isVisible = true
+            break
+          }
+        }
+
+        if (pass == 0 && !isVisible) {
+          continue
+        } else if (pass == 1 && isVisible) {
+          continue
+        }
+
+        let srcFile = state.sourceFile
+        if (!srcFile) {
+          const filePath = pathFromUriString(state.document.uri)
+          if (filePath) {
+            srcFile = this.findSourceFile(filePath)
+            state.sourceFile = srcFile
+          }
+          if (!srcFile) {
+            continue
+          }
+        }
+
+        let objectDoc: ObjectDoc | undefined
+        for (const module of srcFile.project.modules) {
+          for (const doc of module.objectDocs) {
+            if (doc.sourceFile.fullPath == srcFile.fullPath) {
+              objectDoc = doc
+              break
+            }
+          }
+        }
+
+        if (objectDoc) {
+          const objSnapshot = objectDoc.snapshot
+          let sendObject = true
+          if (objSnapshot && state.sentObject) {
+            if (objSnapshot.length == state.sentObject.ranges?.length) {
+              sendObject = false
+              for (let i = 0; i < objSnapshot.length; i += 1) {
+                const snapRange = objSnapshot[i]
+                const stateRange = state.sentObject.ranges![i]
+                // NOTE: undefined comparison matches okay
+                if (snapRange.startLine != stateRange.startLine ||
+                    snapRange.startAddress != stateRange.startAddress ||
+                    snapRange.offsetsString != stateRange.offsetsString ||
+                    snapRange.dataString != stateRange.dataString ||
+                    snapRange.refDataString != stateRange.refDataString ||
+                    snapRange.cyclesString != stateRange.cyclesString) {
+                  sendObject = true
+                  break
+                }
+              }
+            }
+          }
+          if (sendObject) {
+            state.sentObject = this.buildObjDocSnapshot(state, objectDoc, srcFile.project)
+            this.connection.sendNotification("rpw65.objectBytesChanged", state.sentObject)
+          }
+        }
+
+        if (!state.sentParsing ||
+            srcFile.syntaxName != state.sentParsing.syntax ||
+            !equalArrays(srcFile.tabStops, state.sentParsing.tabStops) ||
+            srcFile.opcodeUpperCase != state.sentParsing.opcodeUpperCase ||
+            srcFile.keywordUpperCase != state.sentParsing.keywordUpperCase) {
+          state.sentParsing = {
+            uri: state.document.uri,
+            version: state.document.version,
+            syntax: srcFile.syntaxName,
+            tabStops: srcFile.tabStops,
+            opcodeUpperCase: srcFile.opcodeUpperCase,
+            keywordUpperCase: srcFile.keywordUpperCase
+          }
+          this.connection.sendNotification("rpw65.parsingChanged", state.sentParsing)
+        }
       }
     }
   }
+
+  private buildObjDocSnapshot(state: OpenDocsState, objectDoc: ObjectDoc, project: Project): ObjectBytesChangedParams {
+    const cyclesNameMap = new Map<string, number>()
+    const obRanges: ObjectBytesRange[] = []
+
+    // build code bytes and let client decide to use them or not
+    if (true/*project.showCodeBytes*/) {
+
+      for (const range of objectDoc.objectRanges) {
+
+        const obRange: ObjectBytesRange = {
+          startLine: range.startLine,
+          startAddress: range.startAddress
+        }
+
+        const outOffsets = []
+        for (let i = 0; i < range.offsets.length; i += 1) {
+          let value = range.offsets[i]
+          while (value >= 254) {
+            outOffsets.push(254)
+            value -= 254
+          }
+          outOffsets.push(value)
+        }
+        obRange.offsetsString = base64.fromByteArray(new Uint8Array(outOffsets))
+
+        if (range.dataLength > 0) {
+          obRange.dataString = base64.fromByteArray(range.dataRange!.bytes)
+        }
+
+        if (range.refRange) {
+          const refDataStr = base64.fromByteArray(range.refRange.bytes)
+          if (refDataStr != obRange.dataString) {
+            obRange.refDataString = refDataStr
+          }
+        }
+
+        // build cycle counts and let client decide to use them or not
+        if (true/*project.showCycleCounts*/) {
+
+          // TODO: choose ISA by current mode (maybe from statement?)
+          const isa = isaSet65xx.getIsa("65c02")
+
+          const cyclesIndexes = []
+          for (let lineNum = range.startLine; lineNum < range.endLine; lineNum += 1) {
+
+            let cyclesStr = ""
+            const statement = objectDoc.sourceFile.statements[lineNum]
+            if (statement instanceof OpStatement) {
+              const dataBytes = range.getDataBytes(lineNum)
+              if (dataBytes?.length) {
+                cyclesStr = isa.opcodes[Math.abs(dataBytes[0])].cy    // *** why needed? ***
+                if (cyclesStr == "2/3+") {
+                  let pageCross = false
+                  let negBranch = false
+                  const dataAddress = range.getAddress(lineNum)
+                  if (dataAddress && dataBytes[1]) {
+                    let offset = dataBytes[1]
+                    if (offset > 127) {
+                      offset -= 256
+                      negBranch = true
+                    }
+                    const dstPage = (dataAddress + 2 + offset) >> 8
+                    pageCross = (dataAddress + 2) >> 8 != dstPage
+                  }
+                  cyclesStr = pageCross ? (negBranch ? "4/2" : "2/4") : (negBranch ? "3/2" : "2/3")
+                } else if (cyclesStr == "4+") {
+                  if (dataBytes[1] == 0x00) {
+                    cyclesStr = "4"
+                  }
+                }
+              }
+            }
+
+            let index = cyclesNameMap.get(cyclesStr)
+            if (index == undefined) {
+              index = cyclesNameMap.size
+              cyclesNameMap.set(cyclesStr, index)
+            }
+            cyclesIndexes.push(index)
+          }
+
+          obRange.cyclesString = base64.fromByteArray(new Uint8Array(cyclesIndexes))
+        }
+
+        obRanges.push(obRange)
+      }
+    }
+    const sentObject: ObjectBytesChangedParams = {
+      uri: state.document.uri,
+      version: state.document.version,
+      ranges: obRanges,
+      cyclesNames: Array.from(cyclesNameMap.keys())
+    }
+    objectDoc.snapshot = sentObject
+    return sentObject
+  }
+
+  //----------------------------------------------------------------------------
 
   async onCompletion(params: lsp.CompletionParams, cancelToken?: lsp.CancellationToken): Promise<lsp.CompletionList | null> {
     this.executeUpdate()
@@ -642,6 +928,13 @@ export class LspServer {
       }
     }
 
+    if (params.command == "rpw65.visibleEditorsChanged") {
+      // array of documents uri strings
+      this.visibleDocs = params.arguments ?? []
+      this.sendUpdates()
+      return
+    }
+
     if (params.arguments === undefined || params.arguments.length == 0) {
       return
     }
@@ -651,7 +944,7 @@ export class LspServer {
       return
     }
 
-    const textDocument = this.documents.get(params.arguments[0])
+    const textDocument = this.openDocs.get(params.arguments[0])?.document
     if (textDocument === undefined) {
       return
     }
@@ -670,7 +963,15 @@ export class LspServer {
         return
       }
 
-      const fileEdits = renumberLocals(sourceFile, range.start.line, range.end.line)
+      let fileEdits: (FileEdits | undefined)
+      try {
+        fileEdits = renumberLocals(sourceFile, range.start.line, range.end.line)
+      } catch (e: any) {
+        if (typeof e == "string") {
+          return { error: e }
+        }
+      }
+
       if (!fileEdits || fileEdits.size > 1) {
         return
       }
@@ -693,155 +994,6 @@ export class LspServer {
         edits.push(edit)
       }
       return { textDocument: { uri: textDocument.uri, version: textDocument.version }, edits: edits }
-
-    } else if (params.command == "rpw65.getSyntax") {
-
-      let syntax = SyntaxNames[sourceFile.project.syntax]
-      if (syntax) {
-        const syntaxes: string[] = []
-        syntax = syntax.toUpperCase()
-        for (let name of SyntaxNames) {
-          syntaxes.push(name.toUpperCase())
-        }
-        return { syntax, syntaxes }
-      }
-
-    } else if (params.command == "rpw65.getCodeBytes") {
-
-      let startLine: number | undefined
-      let endLine: number | undefined
-      let cycleCounts = false
-      if (params.arguments && params.arguments.length > 1) {
-        startLine = params.arguments[1].startLine
-        endLine = params.arguments[1].endLine
-        cycleCounts = params.arguments[1].cycleCounts ?? false
-      }
-      if (startLine === undefined) {
-        startLine = 0
-      }
-      if (endLine === undefined) {
-        endLine = sourceFile.lines.length
-      }
-
-      const module = sourceFile.modules[0]
-      let objectDoc = module.findObjectDoc(sourceFile)
-      if (!objectDoc) {
-        return
-      }
-
-      // TODO: choose ISA by current mode
-      const isa = cycleCounts ? isaSet65xx.getIsa("65c02") : undefined
-
-      const codeBytes: CodeBytes = {
-        startLine,
-        cycleCounts,
-        entries: []
-      }
-
-      let memoryBlocks: Uint8Array[] | undefined
-      let isLoaded = false
-
-      if (this.debugger.isConnected()) {
-        memoryBlocks = []
-        let matchCount = 0
-        let byteCount = 0
-        for (const range of objectDoc.objectRanges) {
-          const memory = await this.debugger.readRam(range.getAddress(range.startLine), range.dataLength)
-          memoryBlocks.push(memory)
-          const endLine = range.endLine
-          for (let i = range.startLine; i < endLine; i += 1) {
-            const dataBytes = range.getDataBytes(i)
-            if (dataBytes) {
-              const dataAddress = range.getAddress(i)
-              // limit large block influence to only first 16 bytes
-              const compareCount = Math.min(dataBytes.length, 16)
-              for (let i = 0; i < compareCount; i += 1) {
-                byteCount += 1
-                const memValue = memory[dataAddress! - range.startAddress + i]
-                if (dataBytes[i] == memValue) {
-                  matchCount += 1
-                }
-              }
-            }
-          }
-        }
-        if (matchCount / byteCount >= .75) {
-          isLoaded = true
-        }
-      }
-
-      for (let i = 0; i < objectDoc.objectRanges.length; i += 1) {
-        const range = objectDoc.objectRanges[i]
-        if (range.endLine <= startLine) {
-          continue
-        }
-        if (range.startLine >= endLine) {
-          break
-        }
-
-        const memory = isLoaded ? memoryBlocks![i] : undefined
-
-        let lineNum = range.startLine
-        while (lineNum < range.endLine) {
-          if (lineNum >= startLine) {
-            let entry: CodeBytesEntry = {}
-
-            const dataBytes = range.getDataBytes(lineNum)
-            if (dataBytes) {
-
-              const dataAddress = range.getAddress(lineNum)
-              entry.a = dataAddress
-
-              if (dataBytes.length > 0) {
-
-                entry.d = []
-                for (let i = 0; i < dataBytes.length; i += 1) {
-                  let value = dataBytes[i]
-                  if (memory) {
-                    const memValue = memory[dataAddress! - range.startAddress + i]
-                    if (value != memValue) {
-                      value = -memValue
-                    }
-                  }
-                  entry.d.push(value)
-                }
-
-                const statement = objectDoc.sourceFile.statements[lineNum]
-                if (isa && statement instanceof OpStatement) {
-                  // dataByte might have error and be negative
-                  const opByte = Math.abs(dataBytes[0])
-                  entry.c = isa.opcodes[opByte].cy
-                  if (entry.c == "2/3+") {
-                    let pageCross = false
-                    if (dataAddress && dataBytes[1]) {
-                      let offset = dataBytes[1]
-                      if (offset > 127) {
-                        offset -= 256
-                      }
-                      const dstPage = (dataAddress + 2 + offset) >> 8
-                      pageCross = dataAddress >> 8 != dstPage
-                    }
-                    entry.c = pageCross ? "2/4" : "2/3"
-                    // TODO: swap to 4/2 and 3/2 if negative branch
-                  } else if (entry.c == "4+") {
-                    if (dataBytes[1] == 0x00) {
-                      entry.c = "4"
-                    }
-                  }
-                }
-              }
-            }
-            codeBytes.entries.push(entry)
-          }
-
-          lineNum += 1
-          if (lineNum >= endLine) {
-            break
-          }
-        }
-      }
-
-      return codeBytes
     }
   }
 
@@ -882,7 +1034,7 @@ export class LspServer {
         if (hoverExp instanceof SymbolExpression) {
           if (hoverExp.symbol) {
             const defExp = hoverExp.symbol.definition
-            if (defExp && defExp.sourceFile) {
+            if (defExp && defExp.sourceFile && defExp != hoverExp) {
               hoverStr = getCommentHeader(defExp.sourceFile, defExp.lineNumber) ?? ""
             }
           }
@@ -893,10 +1045,9 @@ export class LspServer {
             if (hoverExp != statement.opExp) {
               let sourceFile = this.getSourceFile(params.textDocument.uri)
               if (sourceFile) {
-                let debugStr = hoverStr
-                debugStr += await this.debugger.buildDebugHover(sourceFile.fullPath, params.position.line)
+                const debugStr = await this.debugger.buildDebugHover(sourceFile.fullPath, params.position.line)
                 if (debugStr) {
-                  return { contents: "```\n" + debugStr + "\n```" }
+                  return { contents: "```\n" + hoverStr + debugStr + "\n```" }
                 }
               }
             }
@@ -917,12 +1068,14 @@ export class LspServer {
                   }
                 } else {
                   const value = hoverExp.resolve()
-                  if (value != undefined) {
+                  if (value != undefined && !Array.isArray(value)) {
+                    hoverStr += hoverExp.getSimpleName().asString
                     if (hoverExp.symbol.isConstant || value < 256) {
-                      hoverStr += hoverExp.getSimpleName().asString
-                        + " = " + value.toString(10)
+                      hoverStr +=  " = " + value.toString(10)
                         + ", $" + value.toString(16).padStart(2, "0").toUpperCase()
                         + ", %" + value.toString(2).padStart(8, "0")
+                    } else {
+                      hoverStr +=  " = $" + value.toString(16).padStart(4, "0").toUpperCase()
                     }
                   }
                 }
@@ -1227,6 +1380,63 @@ export class LspServer {
     }
   }
 
+  async onDocumentSymbol(params: lsp.DocumentSymbolParams): Promise<lsp.DocumentSymbol[] | lsp.SymbolInformation[]> {
+    this.executeUpdate()
+
+    const result: lsp.DocumentSymbol[] = []
+    const sourceFile = this.getSourceFile(params.textDocument.uri)
+    if (sourceFile) {
+      let startLine = -1
+      let startStatement: Statement | undefined
+      for (let lineNumber = 0; lineNumber < sourceFile.statements.length; lineNumber += 1) {
+        const statement = sourceFile.statements[lineNumber]
+        if (!statement.labelExp) {
+          continue
+        }
+        if (statement.labelExp.isLocalType()) {
+          continue
+        }
+        if (statement.labelExp.isVariableType()) {
+          continue
+        }
+        if (statement instanceof EquStatement
+          || statement instanceof StorageStatement
+          || statement instanceof DataStatement) {
+          continue
+        }
+        if (startLine != -1 && startStatement?.labelExp) {
+          const symRange = startStatement.labelExp.getRange()!
+          const name = startStatement.labelExp.getSimpleName().asString
+          if (name != "") {
+            result.push(lsp.DocumentSymbol.create(
+              name,
+              undefined,
+              lsp.SymbolKind.Function,
+              lsp.Range.create(startLine, 0, lineNumber, 0),
+              lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+          } else {
+            continue
+          }
+        }
+        startLine = lineNumber
+        startStatement = statement
+      }
+      if (startLine != -1 && startStatement?.labelExp) {
+        const symRange = startStatement.labelExp.getRange()!
+        const name = startStatement.labelExp.getSimpleName().asString
+        if (name != "") {
+          result.push(lsp.DocumentSymbol.create(
+            name,
+            undefined,
+            lsp.SymbolKind.Function,
+            lsp.Range.create(startLine, 0, sourceFile.statements.length, 0),
+            lsp.Range.create(startLine, symRange.start, startLine, symRange.end)))
+        }
+      }
+    }
+    return result
+  }
+
   //----------------------------------------------------------------------------
 
   private removeDiagnostics(sourceFile: SourceFile) {
@@ -1307,7 +1517,7 @@ export class LspServer {
       // TODO: for any duplicate symbol, add information link back to definition
 
     } else if (expression instanceof FileNameExpression) {
-      if (expression.hasAnyError()) {
+      if (expression.hasAnyError() && expression.errorMessage == "File not found") {
         const expRange = expression.getRange()
         if (expRange && expRange.start >= state.startOffset && expRange.end <= state.endOffset) {
           let diagRange: lsp.Range
@@ -1465,6 +1675,8 @@ export class LspServer {
               if (symExp.symbol.type == SymbolType.MacroName ||
                   symExp.symbol.type == SymbolType.TypeName) {
                 index = SemanticToken.macro
+              } else if (symExp.symbol.isKeyword) {
+                index = SemanticToken.keyword
               } else if (symExp.symbol.isZPage) {
                 index = SemanticToken.zpage
               } else if (symExp.symbol.isConstant) {
