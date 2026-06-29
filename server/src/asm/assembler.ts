@@ -1393,74 +1393,7 @@ export class Assembler {
 
     let header: Uint8Array | undefined
     if (binFileName.endsWith(".a78")) {
-      header = new Uint8Array(128)
-      header.fill(0)
-
-      // catch easy-to-make typo
-      const a78Header = this.module.project.rpwProject?.a78Header ??
-                        this.module.project.rpwProject?.a78header
-      const gameName = a78Header?.gameName ?? "Your Cart Name"
-
-      let sizeIndex = -1
-      let romSize = a78Header?.romSize ?? buffer.length
-      if (Array.isArray(romSize)) {
-        for (let i = 0; i < romSize.length; i += 1) {
-          let size = romSize[i]
-          if (typeof(size) == "string") {
-            size = parseInt(size)
-          }
-          if (size == buffer.length) {
-            sizeIndex = i
-            break
-          }
-        }
-        if (sizeIndex == -1) {
-          // throw new Error("Cart size not found in romSize array")
-          romSize = buffer.length
-        } else {
-          romSize = romSize[sizeIndex]
-        }
-      }
-      if (typeof(romSize) == "string") {
-        romSize = parseInt(romSize)
-      }
-
-      let cartType = a78Header?.cartType ?? 0
-      if (Array.isArray(cartType)) {
-        if (sizeIndex == -1) {
-          // throw new Error("romSize index not available for cartType array")
-          sizeIndex = 0
-        }
-        cartType = cartType[sizeIndex]
-      }
-      if (typeof(cartType) == "string") {
-        cartType = parseInt(cartType)
-      }
-
-      const controller1Type = a78Header?.controller1Type ?? 0
-      const controller2Type = a78Header?.controller2Type ?? 0
-      const tvFormat = a78Header?.tvFormat?.toUpperCase() ?? "NTSC"
-
-      let saveDevice = a78Header?.saveDevice ?? 0
-      if (typeof(saveDevice) == "string") {
-        saveDevice = parseInt(saveDevice)
-      }
-
-      const encoder = new TextEncoder()
-      header[0] = 1   // version
-      header.set(encoder.encode("ATARI7800       "), 0x01)
-      header.set(encoder.encode(gameName), 0x11)
-      header[0x31] = (romSize >> 24) & 0xff
-      header[0x32] = (romSize >> 16) & 0xff
-      header[0x33] = (romSize >>  8) & 0xff
-      header[0x34] = (romSize >>  0) & 0xff
-      header[0x35] = (cartType >> 8) & 0xff
-      header[0x36] = (cartType >> 0) & 0xff
-      header[0x37] = controller1Type
-      header[0x38] = controller2Type
-      header[0x39] = tvFormat == "PAL" ? 1 : 0
-      header[0x3A] = saveDevice ?? 0
-      header.set(encoder.encode("ACTUAL CART DATA STARTS HERE"), 0x64)
+      header = this.buildA78Header(buffer)
     }
 
     let imageData = buffer
@@ -1469,7 +1402,13 @@ export class Assembler {
       imageData.set(header, 0)
       imageData.set(buffer, header.length)
     }
-    fs.writeFileSync(binFileName, imageData, { encoding: null, flag: "w" })
+
+    try {
+      fs.writeFileSync(binFileName, imageData, { encoding: null, flag: "w" })
+    } catch (err) {
+      console.log(`Unable to write ${binFileName}`)
+      return false
+    }
 
     // TODO: debug code, to be removed
     if (Assembler.verifyOnWrite) {
@@ -1508,6 +1447,106 @@ export class Assembler {
 
     this.curSeg.finalize()
     return true
+  }
+
+  private buildA78Header(buffer: Uint8Array): Uint8Array {
+    const header = new Uint8Array(128).fill(0)
+
+    // catch easy-to-make typo
+    const a78Header = this.module.project.rpwProject?.a78Header ??
+                      this.module.project.rpwProject?.a78header
+    const gameName = a78Header?.gameName ?? "Your Cart Name"
+
+    let sizeIndex = -1
+    let romSize = a78Header?.romSize ?? buffer.length
+    if (Array.isArray(romSize)) {
+      for (let i = 0; i < romSize.length; i += 1) {
+        let size = romSize[i]
+        if (typeof(size) == "string") {
+          size = parseInt(size)
+        }
+        if (size == buffer.length) {
+          sizeIndex = i
+          break
+        }
+      }
+      if (sizeIndex == -1) {
+        // throw new Error("Cart size not found in romSize array")
+        romSize = buffer.length
+      } else {
+        romSize = romSize[sizeIndex]
+      }
+    }
+    if (typeof(romSize) == "string") {
+      romSize = parseInt(romSize)
+    }
+
+    let cartType = a78Header?.cartType ?? 0
+    if (Array.isArray(cartType)) {
+      if (sizeIndex == -1) {
+        // throw new Error("romSize index not available for cartType array")
+        sizeIndex = 0
+      }
+      cartType = cartType[sizeIndex]
+    }
+    if (typeof(cartType) == "string") {
+      const cartTypes = cartType.split(" ")
+      cartType = 0
+      for (const type of cartTypes) {
+        const typeName = type.toLowerCase()
+        if (typeName == "linear") {
+          // do nothing
+        } else if (typeName == "supergame") {
+          cartType |= 0x02
+        } else if (typeName == "ram@4000") {
+          cartType |= 0x04
+        } else if (typeName == "bank6@4000") {
+          cartType |= 0x10
+        } else if (typeName == "pokey@450") {
+          cartType |= 0x40
+        // *** else others ***
+        } else {
+          throw new Error(`Unknown cartType value "${typeName}"`)
+        }
+      }
+    }
+
+    const controller1Type = a78Header?.controller1Type ?? 0
+    const controller2Type = a78Header?.controller2Type ?? 0
+    const tvFormat = a78Header?.tvFormat?.toLowerCase() ?? "ntsc"
+
+    let saveDevice = a78Header?.saveDevice ?? 0
+    if (typeof(saveDevice) == "string") {
+      const devices = saveDevice.split(" ")
+      saveDevice = 0
+      for (const device of devices) {
+        const devName = device.toLowerCase()
+        if (devName == "hsc") {
+          saveDevice |= 1
+        } else if (devName == "savekey") {
+          saveDevice |= 2
+        } else {
+          throw new Error(`Unknown saveDevice value "${devName}"`)
+        }
+      }
+    }
+
+    const encoder = new TextEncoder()
+    header[0] = 1   // version
+    header.set(encoder.encode("ATARI7800       "), 0x01)
+    header.set(encoder.encode(gameName), 0x11)
+    header[0x31] = (romSize >> 24) & 0xff
+    header[0x32] = (romSize >> 16) & 0xff
+    header[0x33] = (romSize >>  8) & 0xff
+    header[0x34] = (romSize >>  0) & 0xff
+    header[0x35] = (cartType >> 8) & 0xff
+    header[0x36] = (cartType >> 0) & 0xff
+    header[0x37] = controller1Type
+    header[0x38] = controller2Type
+    header[0x39] = tvFormat == "pal" ? 1 : 0
+    header[0x3A] = saveDevice ?? 0
+    header.set(encoder.encode("ACTUAL CART DATA STARTS HERE"), 0x64)
+    return header
   }
 
   public getBinFile(fileName: string): Uint8Array | undefined {

@@ -1,6 +1,6 @@
 # RPW 65 Changelog
 
-### [2.0.4] - 2026-xx-xx
+### [2.0.4] - 2026-06-29
 
 Rewrite object bytes and cycle counts decorator mechanism for performance.
 Automatically determine tab tops and upper/lower case, deprecating associated project settings.
