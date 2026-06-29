@@ -1638,6 +1638,7 @@ export class Parser extends Tokenizer {
     } else if (beginChar == "<") {
       endChar = ">"
     } else {
+      // TODO: only merlin allows unquoted file names
       this.position -= 1
     }
 

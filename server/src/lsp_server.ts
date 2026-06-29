@@ -408,6 +408,12 @@ export class LspServer {
         this.defaultSettings = this.buildRpwSettings()
       }
 
+      // fs.watch('./data', (eventType, filename) => {
+      //     if (filename && filename.endsWith('.txt')) {
+      //         console.log(`${filename} changed`);
+      //     }
+      // });
+
       const project = new LspProject(this, await this.defaultSettings)
 
       if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
