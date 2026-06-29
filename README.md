@@ -13,6 +13,7 @@ Features include:
 * Go To Definition
 * Show References
 * Code folding
+* Document symbols
 * Diagnostic errors and warnings
 
 Newest addition:
