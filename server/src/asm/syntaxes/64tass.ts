@@ -26,6 +26,7 @@ export class Tass64Syntax extends SyntaxDef {
   public allowIndentedAssignment = true
   public allowLineContinuation = false
   public stringEscapeChars = ""
+  public fileNameQuoteChars = "\"\'"
   public scopeSeparator = "."
   public defaultOrg = 0x0800        // TODO: choose correct value
 

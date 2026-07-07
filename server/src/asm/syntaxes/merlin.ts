@@ -28,6 +28,7 @@ export class MerlinSyntax extends SyntaxDef {
   public allowIndentedAssignment = false
   public allowLineContinuation = false
   public stringEscapeChars = "\\'\"tnr"
+  public fileNameQuoteChars = "!"     // ! indicates no quote character
   public scopeSeparator = "."
   public defaultOrg = 0x8000
 

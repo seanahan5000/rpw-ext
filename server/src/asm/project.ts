@@ -1,6 +1,6 @@
 
 import * as fs from 'fs'
-import { RpwProject, RpwSettings, RpwDefine, RpwBin } from "../shared/rpw_types"
+import { RpwProject, RpwSettings, RpwDefine, RpwBin, RpwDisk } from "../shared/rpw_types"
 import { Syntax, SyntaxMap, SyntaxNames } from "./syntaxes/syntax_types"
 import { SyntaxDefs } from "./syntaxes/syntax_defs"
 import { Statement } from "./statements"
@@ -16,6 +16,18 @@ function fixBackslashes(inString: string): string {
 }
 
 export type SymbolMap = Map<string, Symbol>
+
+//------------------------------------------------------------------------------
+
+function getStringNumber(value: number | string): number | undefined {
+  if (typeof value == "string") {
+    value = parseInt(value)
+    if (isNaN(value)) {
+      return
+    }
+  }
+  return value
+}
 
 //------------------------------------------------------------------------------
 
@@ -86,6 +98,7 @@ export class Project {
   public defines: RpwDefine[] = []
   public includes: string[] = []    // NOTE: shared files, not include paths
   public modules: Module[] = []
+  public disks: Disk[] = []
 
   public rootDir = "."
   public srcDir: string = ""
@@ -102,7 +115,7 @@ export class Project {
     this.settingsChanged()
   }
 
-  loadProject(extRootDir: string, rpwProject: RpwProject, isTemporary = false, inWorkspace = false): boolean {
+  loadProject(extRootDir: string, rpwProject: RpwProject, isTemporary = false, inWorkspace = false) {
 
     this.isTemporary = isTemporary
     this.inWorkspace = inWorkspace
@@ -169,7 +182,7 @@ export class Project {
     }
 
     if (!rpwProject.modules) {
-      return false
+      throw new Error("No modules found in project")
     }
 
     let cartName: string | undefined
@@ -180,6 +193,7 @@ export class Project {
 
           let srcPath = ""
           let srcName = fixBackslashes(module.src)
+          let extName = module.ext ? fixBackslashes(module.ext) : undefined
 
           const lastSlash = srcName.lastIndexOf("/")
           if (lastSlash != -1) {
@@ -222,9 +236,15 @@ export class Project {
               }
               cartName = saveName
             }
-            this.modules.push(new Module(this, srcPath, srcName, saveName))
+            this.modules.push(new Module(this, srcPath, srcName, saveName, extName))
           }
         }
+      }
+    }
+
+    if (rpwProject.disks) {
+      for (const rpwDisk of rpwProject.disks) {
+        this.disks.push(new Disk(this, rpwDisk))
       }
     }
 
@@ -242,8 +262,6 @@ export class Project {
         })
       }
     }
-
-    return true
   }
 
   // TODO: This should be done once when the workspace directory
@@ -391,6 +409,13 @@ export class Project {
       this.sawError = errorCount != 0
       break
     }
+
+    // TODO: maybe don't skip on error? (then write shouldn't throw error)
+    if (!this.sawError && this.disks) {
+      for (const disk of this.disks) {
+        disk.write()
+      }
+    }
   }
 
   // overridden to get contents from elsewhere
@@ -466,6 +491,26 @@ export class Project {
   }
 
   //--------------------------------------------------------
+  // Path utilities
+  //--------------------------------------------------------
+
+  public getBinFilePath(extFileName: string): string {
+    let binName = fixBackslashes(extFileName)
+    if (binName[0] == "/") {
+      binName = binName.substring(1)
+    }
+    return cleanPath(this.binDir + "/" + binName)
+  }
+
+  public getDiskFilePath(extFileName: string): string {
+    let diskName = fixBackslashes(extFileName)
+    if (diskName[0] == "/") {
+      diskName = diskName.substring(1)
+    }
+    return cleanPath(this.imgDir + "/" + diskName)
+  }
+
+  //--------------------------------------------------------
   // Debugger-related functionality
   //--------------------------------------------------------
 
@@ -508,11 +553,11 @@ export class Project {
     }
 
     // load disk images
-    if (this.rpwProject.images) {
-      for (let imageEntry of this.rpwProject.images) {
+    if (this.rpwProject.drives) {
+      for (let imageEntry of this.rpwProject.drives) {
         if (imageEntry.enabled == undefined || imageEntry.enabled == true) {
-          const fullPath = this.imgDir + "/" + imageEntry.name
-          const drive = imageEntry.drive ?? 1
+          const fullPath = this.imgDir + "/" + imageEntry.diskName
+          const drive = imageEntry.driveIndex ?? 1
           const writeProtected = imageEntry.readonly || false
           if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
             const binBytes = fs.readFileSync(fullPath)
@@ -721,6 +766,7 @@ export class Module {
   public srcPath: string      // always in the form "/path" or ""
   public srcName: string      // always just the file name (*** without suffix?)
   public saveName?: string
+  public extName?: string
 
   private asm?: Assembler
 
@@ -734,11 +780,12 @@ export class Module {
   // list of pseudo documents that map object data to source file lines
   public objectDocs: ObjectDoc[] = []
 
-  constructor(project: Project, srcPath: string, srcName: string, saveName?: string) {
+  constructor(project: Project, srcPath: string, srcName: string, saveName?: string, extName?: string) {
     this.project = project
     this.srcPath = srcPath
     this.srcName = srcName
     this.saveName = saveName
+    this.extName = extName
   }
 
   public update_pass01(startingMap: SymbolMap, startingFiles: SourceFile[] | undefined, fileNames: string[], syntaxStats: number[]) {
@@ -755,6 +802,17 @@ export class Module {
 
     this.asm = new Assembler(this)
     this.asm.assemble_pass01(fileNames, syntaxStats)
+
+    // if export file name was provided, generate it from exportMap
+    if (this.extName && this.exportMap.size > 0) {
+      let str = ""
+      for (const [key, value] of this.exportMap) {
+        str += key.padEnd(15, " ") + " EXT\n"
+      }
+
+      const writePath = cleanPath(this.project.srcDir + this.srcPath + "/" + this.extName)
+      fs.writeFileSync(writePath, str)
+    }
   }
 
   public update_pass2(): number {
@@ -795,11 +853,7 @@ export class Module {
   }
 
   public getBinFilePath(extFileName: string): string {
-    let binName = fixBackslashes(extFileName)
-    if (binName[0] == "/") {
-      binName = binName.substring(1)
-    }
-    return cleanPath(this.project.binDir + "/" + binName)
+    return this.project.getBinFilePath(extFileName)
   }
 
   // <workspace-dir>/<srcDir>/<src>/<fileName>
@@ -1060,6 +1114,194 @@ function getAppleKeywords(): Map<string, number> {
   return new Map<string, number>([
     // TODO: add some Apple II keywords
   ])
+}
+
+//------------------------------------------------------------------------------
+
+// TODO: share code from rpw-a2 filesys (requires project refactor?)
+
+type DiskFile = {
+  fileName: string
+  track: number
+  sector: number
+}
+
+class Disk {
+
+  protected fileName: string
+  protected volume: number
+  protected files: DiskFile[]
+
+  constructor(project: Project, rpwDisk: RpwDisk) {
+    this.fileName = project.getDiskFilePath(rpwDisk.name)
+    this.volume = getStringNumber(rpwDisk?.volume ?? 254)!
+    this.files = []
+
+    if (rpwDisk.files) {
+      for (const file of rpwDisk.files) {
+        if (file.bin && file.t) {
+
+          let track = getStringNumber(file.t)
+          if (track == undefined || track >= 35) {
+            throw new Error(`Invalid track: ${file.t}`)
+          }
+
+          let sector = getStringNumber(file.s ?? 0)
+          if (sector == undefined || sector >= 16) {
+            throw new Error(`Invalid sector: ${file.s}`)
+          }
+
+          const fileName = project.getBinFilePath(file.bin)
+          this.files.push({ fileName, track, sector })
+        }
+      }
+    }
+  }
+
+  public write() {
+
+    // TODO: support other target image formats and interleaves
+
+    const linearData = new Uint8Array(16 * 35 * 256).fill(0)
+
+    for (const file of this.files) {
+      const fileData = fs.readFileSync(file.fileName)
+      if (!fileData) {
+        throw new Error(`File ${file.fileName} not found`)
+      }
+      const offset = (file.track * 16 + file.sector) * 256
+      linearData.set(fileData, offset)
+    }
+
+    const nibWriter = new NibWriter()
+    const outData = nibWriter.nibblize(linearData, this.volume, this.linearToProdos)
+
+    // *** catch error if write fails (path the doesn't exist) ***
+    fs.writeFileSync(this.fileName, outData)
+  }
+
+  protected readonly dos33ToLinear  = [ 0, 13, 11, 9, 7, 5, 3, 1, 14, 12, 10, 8, 6, 4, 2, 15 ]
+  protected readonly prodosToLinear = [ 0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15 ]
+  protected readonly linearToDos33  = [ 0, 7, 14, 6, 13, 5, 12, 4, 11, 3, 10, 2, 9, 1, 8, 15 ]
+  protected readonly linearToProdos = [ 0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15 ]
+}
+
+const NibbleTrackSize = 6656
+const NibbleFileSize = 35 * NibbleTrackSize
+
+class NibWriter {
+
+  private linearData?: Uint8Array
+  private buffer342 = new Array(342)
+
+  public nibblize(linearData: Uint8Array, volume: number, linearToDos: number[]): Uint8Array {
+
+    this.linearData = linearData
+    const outData = new Uint8Array(NibbleFileSize).fill(0xFF)
+
+    let offset = 0
+    for (let t = 0; t < 35; t += 1) {
+      const trackData = outData.subarray(offset, offset + NibbleTrackSize)
+      this.nibbilizeTrack(volume, t, trackData, linearToDos)
+      offset += NibbleTrackSize
+    }
+
+    return outData
+  }
+
+  private nibbilizeTrack(volume: number, track: number, trackData: Uint8Array, linearToDos: number[]) {
+
+    const dstBuffer = trackData
+    let dstOffset = this.writeSync(48, dstBuffer, 0)
+
+    for (let physSector = 0; physSector < 16; physSector += 1) {
+
+      dstBuffer[dstOffset++] = 0xD5
+      dstBuffer[dstOffset++] = 0xAA
+      dstBuffer[dstOffset++] = 0x96
+      dstOffset = this.writeOddEven(volume, dstBuffer, dstOffset)
+      dstOffset = this.writeOddEven(track, dstBuffer, dstOffset)
+      dstOffset = this.writeOddEven(physSector, dstBuffer, dstOffset)
+      dstOffset = this.writeOddEven(volume ^ track ^ physSector, dstBuffer, dstOffset)
+      dstBuffer[dstOffset++] = 0xDE
+      dstBuffer[dstOffset++] = 0xAA
+      dstBuffer[dstOffset++] = 0xEB
+
+      dstOffset = this.writeSync(6, dstBuffer, dstOffset)
+
+      dstBuffer[dstOffset++] = 0xD5
+      dstBuffer[dstOffset++] = 0xAA
+      dstBuffer[dstOffset++] = 0xAD
+
+      const offset = (track * 16 + linearToDos[physSector]) * 256
+      const sectorData = this.linearData!.subarray(offset, offset + 256)
+      dstOffset = this.writeSectorData(sectorData, dstBuffer, dstOffset)
+
+      dstBuffer[dstOffset++] = 0xDE
+      dstBuffer[dstOffset++] = 0xAA
+      dstBuffer[dstOffset++] = 0xEB
+
+      dstOffset = this.writeSync(27, dstBuffer, dstOffset)
+    }
+  }
+
+  private writeSync(count: number, buffer: Uint8Array, offset: number): number {
+    const endOffset = offset + count
+    buffer.fill(0xFF, offset, endOffset)
+    return endOffset
+  }
+
+  private writeOddEven(value: number, buffer: Uint8Array, offset: number): number {
+    buffer[offset++] = (value >> 1) | 0xAA
+    buffer[offset++] = (value >> 0) | 0xAA
+    return offset
+  }
+
+  private writeSectorData(sectorData: Uint8Array, dstBuffer: Uint8Array, dstOffset: number): number {
+
+    this.buffer342.fill(0)
+
+    let j = 256 + 2
+    for (let i = 256; --i >= 0; ) {
+      let byte = sectorData[i]
+      let outBits = this.buffer342![j]
+
+      outBits <<= 1
+      outBits |= byte & 1
+      byte >>= 1
+
+      outBits <<= 1
+      outBits |= byte & 1
+      byte >>= 1
+
+      this.buffer342![j] = outBits
+      this.buffer342![i ^ 255] = byte
+
+      if (++j == 342) {
+        j = 256
+      }
+    }
+
+    let last = 0
+    for (let i = 342; --i >= 0; ) {
+      const value = this.buffer342![i]
+      dstBuffer[dstOffset++] = NibWriter.WriteTranslateTable[value ^ last]
+      last = value
+    }
+    dstBuffer[dstOffset++] = NibWriter.WriteTranslateTable[last]
+    return dstOffset
+  }
+
+  private static readonly WriteTranslateTable = [
+		0x96, 0x97, 0x9A, 0x9B, 0x9D, 0x9E, 0x9F, 0xA6,
+		0xA7, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB2, 0xB3,
+		0xB4, 0xB5, 0xB6, 0xB7, 0xB9, 0xBA, 0xBB, 0xBC,
+		0xBD, 0xBE, 0xBF, 0xCB, 0xCD, 0xCE, 0xCF, 0xD3,
+		0xD6, 0xD7, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE,
+		0xDF, 0xE5, 0xE6, 0xE7, 0xE9, 0xEA, 0xEB, 0xEC,
+		0xED, 0xEE, 0xEF, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6,
+		0xF7, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF
+  ]
 }
 
 //------------------------------------------------------------------------------

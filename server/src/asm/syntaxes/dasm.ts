@@ -39,6 +39,7 @@ export class DasmSyntax extends SyntaxDef {
   public allowIndentedAssignment = false
   public allowLineContinuation = false
   public stringEscapeChars = ""
+  public fileNameQuoteChars = "!\""       // ! indicates no quote character
   public scopeSeparator = ""
   public defaultOrg = undefined
 

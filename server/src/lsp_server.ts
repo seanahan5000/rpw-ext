@@ -93,6 +93,7 @@ type ObjectBytesRange = {
   offsetsString?: string
   dataString?: string
   refDataString?: string
+	isMemRefData?: boolean
   cyclesString?: string
 }
 
@@ -176,6 +177,7 @@ export class LspServer {
   private isInitialized_resolve: any
 
   public workspaceFolderPath = ""
+  private rpwProjectFilePath?: string
   private rpwProject?: RpwProject
 
   private projects: LspProject[] = []
@@ -361,13 +363,29 @@ export class LspServer {
     if (params.workspaceFolders) {
 
       // TODO: walk each folder or don't support multiple folders
-
       const workspaceFolder = params.workspaceFolders[0]
-      const folderPath = pathFromUriString(workspaceFolder.uri) || ""
-      if (fs.existsSync(folderPath)) {
+
+      const folderPath = pathFromUriString(workspaceFolder.uri)
+      if (folderPath) {
+        this.onProjectDirectoryChanged(folderPath)
+        if (!this.rpwProject) {
+          fs.watch(folderPath, (eventType, filename) => {
+            this.onProjectDirectoryChanged(folderPath)
+          })
+        }
+      }
+    }
+
+    return result
+  }
+
+  private onProjectDirectoryChanged(workspaceFolderPath: string) {
+
+    if (!this.workspaceFolderPath) {
+      if (fs.existsSync(workspaceFolderPath)) {
 
         // save folder once it's know to exist
-        this.workspaceFolderPath = folderPath
+        this.workspaceFolderPath = workspaceFolderPath
         const files = fs.readdirSync(this.workspaceFolderPath)
 
         // first scan for .rpw-project file
@@ -383,7 +401,8 @@ export class LspServer {
             break
           }
 
-          const jsonData = fs.readFileSync(file, 'utf8')
+          const fileName = this.workspaceFolderPath + "/" + file
+          const jsonData = fs.readFileSync(fileName, 'utf8')
           try {
             this.rpwProject = <RpwProject>JSON.parse(jsonData)
           } catch (e: any) {
@@ -391,40 +410,29 @@ export class LspServer {
               { error: "Failed to parse project JSON: " + e.toString() })
             break
           }
+
+          this.rpwProjectFilePath = fileName
         }
       }
 
       // *** change trigger character after project parsed ***
     }
-
-    return result
   }
 
   private async onInitialized() {
 
-    if (this.rpwProject) {
+    if (!this.defaultSettings) {
+      this.defaultSettings = this.buildRpwSettings()
+    }
 
-      if (!this.defaultSettings) {
-        this.defaultSettings = this.buildRpwSettings()
-      }
+    if (this.rpwProjectFilePath) {
 
-      // fs.watch('./data', (eventType, filename) => {
-      //     if (filename && filename.endsWith('.txt')) {
-      //         console.log(`${filename} changed`);
-      //     }
-      // });
+      this.onProjectFileChanged()
 
-      const project = new LspProject(this, await this.defaultSettings)
-
-      if (!project.loadProject(this.workspaceFolderPath, this.rpwProject)) {
-        this.connection.sendNotification("rpw65.debuggerError",
-          { error: "Failed to load project" })
-      }
-
-      this.projects.push(project)
-
-      this.mainProject = project
-      this.debugger.startup(project)
+      fs.watch(this.rpwProjectFilePath, (eventType, filename) => {
+        this.onProjectFileChanged()
+        this.scheduleUpdate()
+      })
     }
 
     this.isInitialized_resolve(true)
@@ -437,6 +445,38 @@ export class LspServer {
     // })
 
     this.scheduleUpdate()
+  }
+
+  private async onProjectFileChanged() {
+
+    const jsonData = fs.readFileSync(this.rpwProjectFilePath!, 'utf8')
+    try {
+      this.rpwProject = <RpwProject>JSON.parse(jsonData)
+    } catch (e: any) {
+      this.connection.sendNotification("rpw65.debuggerError",
+        { error: "Failed to parse project JSON: " + e.toString() })
+      return
+    }
+
+    const project = new LspProject(this, await this.defaultSettings)
+    try {
+      project.loadProject(this.workspaceFolderPath, this.rpwProject!)
+    } catch (e: any) {
+      this.connection.sendNotification("rpw65.debuggerError",
+        { error: "Failed to load project: " + e.toString() })
+      return
+    }
+
+    if (this.mainProject) {
+      const index = this.projects.indexOf(this.mainProject)
+      if (index != -1) {
+        this.projects.splice(index, 1)
+      }
+    }
+
+    this.mainProject = project
+    this.projects.push(project)
+    this.debugger.startup(project)
   }
 
   private async onDidChangeConfiguration() {
@@ -695,7 +735,7 @@ export class LspServer {
     }
   }
 
-  private sendUpdates() {
+  private async sendUpdates() {
     // prioritize updates for visible docs
     for (let pass = 0; pass < 2; pass += 1) {
       for (const [key, state] of this.openDocs) {
@@ -759,7 +799,7 @@ export class LspServer {
             }
           }
           if (sendObject) {
-            state.sentObject = this.buildObjDocSnapshot(state, objectDoc, srcFile.project)
+            state.sentObject = await this.buildObjDocSnapshot(state, objectDoc, srcFile.project)
             this.connection.sendNotification("rpw65.objectBytesChanged", state.sentObject)
           }
         }
@@ -783,7 +823,7 @@ export class LspServer {
     }
   }
 
-  private buildObjDocSnapshot(state: OpenDocsState, objectDoc: ObjectDoc, project: Project): ObjectBytesChangedParams {
+  private async buildObjDocSnapshot(state: OpenDocsState, objectDoc: ObjectDoc, project: Project): Promise<ObjectBytesChangedParams> {
     const cyclesNameMap = new Map<string, number>()
     const obRanges: ObjectBytesRange[] = []
 
@@ -816,6 +856,15 @@ export class LspServer {
           const refDataStr = base64.fromByteArray(range.refRange.bytes)
           if (refDataStr != obRange.dataString) {
             obRange.refDataString = refDataStr
+            obRange.isMemRefData = false
+          }
+        } else if (this.debugger.isConnected()) {
+          if (range.dataLength > 0) {
+            const memDataStr = await this.debugger.readRangeDataString(range.startAddress, range.dataLength)
+            if (memDataStr && memDataStr != obRange.dataString) {
+              obRange.refDataString = memDataStr
+              obRange.isMemRefData = true
+            }
           }
         }
 

@@ -1,5 +1,18 @@
 # RPW 65 Changelog
 
+### [2.0.5] - 2026-xx-xx
+
+#### Added:
+* Reload project on file change
+* All: Error on invalid alignment values
+* All: Per-syntax valid file quoting characters, error on invalid
+
+#### Changed:
+* Smarter auto-tab colum selection
+
+#### Fixed:
+* DASM: filename quoting regression
+
 ### [2.0.4] - 2026-06-29
 
 Rewrite object bytes and cycle counts decorator mechanism for performance.

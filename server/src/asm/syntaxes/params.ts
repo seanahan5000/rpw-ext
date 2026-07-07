@@ -155,10 +155,6 @@ class TermParam extends Param {
 
     if (this.termType == "filename") {
 
-      // TODO: quoting information (no quotes, single, double, <>, etc.)
-      // TODO: check for quoted fileName, based on syntax
-        // optional on DASM
-        // never on MERLIN
       const fileName = parser.getNextFileNameExpression()
       if (!fileName) {
         parser.addMissingToken("expecting file name")

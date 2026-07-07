@@ -21,6 +21,7 @@ export class UnknownSyntax extends SyntaxDef {
   public allowIndentedAssignment = true
   public allowLineContinuation = true
   public stringEscapeChars = "\\'\"0tnrx"
+  public fileNameQuoteChars = "\"\'<"
   public scopeSeparator = "::"
   public defaultOrg = 0x0800
 

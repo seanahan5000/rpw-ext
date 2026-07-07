@@ -32,6 +32,7 @@ export class LisaSyntax extends SyntaxDef {
   public allowIndentedAssignment = false
   public allowLineContinuation = false
   public stringEscapeChars = ""
+  public fileNameQuoteChars = "\""
   public scopeSeparator = ""
   public defaultOrg = 0x0800
 

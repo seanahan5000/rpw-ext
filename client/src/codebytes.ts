@@ -64,7 +64,7 @@ function decodeObjectRanges(obParams: ObjectBytesChangedParams): CodeBytes {
       refDataBytes = base64.toByteArray(obRange.refDataString)
       for (let i = 0; i < dataArray.length; i += 1) {
         if (refDataBytes[i] != dataBytes[i]) {
-          dataArray[i] = -dataArray[i]
+          dataArray[i] = obRange.isMemRefData ? -refDataBytes[i] : -dataArray[i]
         }
       }
     }

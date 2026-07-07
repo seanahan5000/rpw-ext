@@ -26,6 +26,7 @@ export class OrcaMSyntax extends SyntaxDef {
   public allowIndentedAssignment = false
   public allowLineContinuation = false
   public stringEscapeChars = ""
+  public fileNameQuoteChars = "!"      // TODO: confirm no quoting
   public scopeSeparator = ""
   public defaultOrg = 0x0800        // TODO: choose correct value
 

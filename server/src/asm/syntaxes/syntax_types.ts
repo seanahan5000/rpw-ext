@@ -163,6 +163,8 @@ export class SyntaxDef {
 
   public stringEscapeChars: string = ""
 
+  public fileNameQuoteChars: string = ""        // ! indicates no quote character
+
   // normally "::" or "." for syntaxes that support scoping
   public scopeSeparator: string = ""
 

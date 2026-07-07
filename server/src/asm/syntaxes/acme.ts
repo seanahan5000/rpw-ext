@@ -27,6 +27,7 @@ export class AcmeSyntax extends SyntaxDef {
   public allowIndentedAssignment = true
   public allowLineContinuation = false
   public stringEscapeChars = "\\'\"0tnr"
+  public fileNameQuoteChars = "\"<"
   public scopeSeparator = ""
   public defaultOrg = 0x0800        // TODO: choose correct value
 

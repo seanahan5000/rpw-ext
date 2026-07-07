@@ -1711,6 +1711,10 @@ export class AlignStatement extends Statement {
         return
       }
       this.padValue = (equalValue - (this.PC ?? 0)) & andValue
+      if (this.padValue > 0x10000) {
+        this.padValue = 0
+        this.setError("Invalid alignment")
+      }
       return
     }
 
@@ -1748,6 +1752,11 @@ export class AlignStatement extends Statement {
     const size = (misalign ? boundaryValue - misalign : 0) + offsetValue
     // TODO: how are negative offsets handled in 64TASS?
     this.padValue = Math.max(size, 0)
+
+    if (this.padValue > 0x10000) {
+      this.padValue = 0
+      this.setError("Invalid alignment")
+    }
   }
 
   pass1(asm: Assembler): number {
@@ -1837,6 +1846,17 @@ function scanHex(hexString: string, buffer: number[]) {
 
 // *** !convtab here too?
 
+// MERLIN:  filename
+//   DASM:  filename
+//          "filename"
+//   ACME:  !SOURCE "filename"
+//          !SOURCE <filename>
+//   CA65:  .INCLUDE "filename"
+//   LISA:  ICL "filename"
+// 64TASS:  .include "filename"
+//          .include 'filename'
+//    APW:  filename              // TODO: confirm
+
 class FileStatement extends Statement {
 
   protected fileName?: exp.FileNameExpression
@@ -1847,18 +1867,20 @@ class FileStatement extends Statement {
     if (this.fileName) {
       let fileNameStr = this.fileName.getString() || ""
       if (fileNameStr.length > 0) {
-        // TODO: only strip quotes for non-Merlin?
-        // TODO: require quoting for CA65? other syntaxes?
         const quoteChar = fileNameStr[0]
-        if (quoteChar == "'" || quoteChar == '"' || quoteChar == "<") {
-          fileNameStr = fileNameStr.substring(1)
-          if (fileNameStr.length > 0) {
-            const lastChar = fileNameStr[fileNameStr.length - 1]
-            if (lastChar == quoteChar || (quoteChar == "<" && lastChar == ">")) {
-              fileNameStr = fileNameStr.substring(0, fileNameStr.length - 1)
+        if (quoteChar == '"' || quoteChar == "'" || quoteChar == "<") {
+          if (parser.syntaxDef.fileNameQuoteChars.includes(quoteChar)) {
+            fileNameStr = fileNameStr.substring(1)
+            if (fileNameStr.length > 0) {
+              const lastChar = fileNameStr[fileNameStr.length - 1]
+              if (lastChar == quoteChar || (quoteChar == "<" && lastChar == ">")) {
+                fileNameStr = fileNameStr.substring(0, fileNameStr.length - 1)
+              }
             }
+          } else {
+            this.fileName.setError(`File quoting character "${quoteChar}" not allowed`)
           }
-        } else if (parser.syntax != Syntax.MERLIN) {
+        } else if (!parser.syntaxDef.fileNameQuoteChars.includes("!")) {
           this.fileName.setError("Quoted file name required")
         }
         this.fileNameStr = fileNameStr
@@ -1870,6 +1892,7 @@ class FileStatement extends Statement {
 // MERLIN:  PUT filename
 //          USE filename
 //   DASM:  [.]INCLUDE "filename"
+//          [.]INCLUDE filename
 //   ACME:  !SOURCE "filename"
 //          !SOURCE <filename>
 //   CA65:  .INCLUDE "filename"

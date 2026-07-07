@@ -31,6 +31,7 @@ export type ObjectBytesRange = {
   offsetsString?: string
   dataString?: string
   refDataString?: string
+	isMemRefData?: boolean
   cyclesString?: string
 }
 
@@ -144,6 +145,14 @@ export function activate(context: vscode.ExtensionContext) {
     state.objectState = params
 		openDocs.set(params.uri, state)
     decorator.scheduleUpdate()
+	})
+
+	client.onNotification("rpw65.debuggerError", (params) => {
+		let error = "Server error"
+		if (params?.error) {
+			error += ": " + params.error
+		}
+		vscode.window.showErrorMessage(error)
 	})
 
   vscode.window.onDidChangeVisibleTextEditors(event => {

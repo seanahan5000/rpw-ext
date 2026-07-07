@@ -17,7 +17,7 @@ export const RpwSettingsDefaults = {
 
 export type RpwModule = {
   src?: string
-  lst?: string
+  ext?: string
   dis65?: string
   enabled?: boolean
   save?: string
@@ -28,9 +28,23 @@ export type RpwDefine = {
   value?: number
 }
 
-export type RpwImage = {
+export type RpwFile = {
+  bin?: string
+  t?: string | number
+  s?: string | number
+  comment?: string
+}
+
+export type RpwDisk = {
   name: string
-  drive: number
+  volume?: string | number
+  files?: RpwFile[]
+  comment?: string
+}
+
+export type RpwDrive = {
+  diskName: string
+  driveIndex: number
   readonly?: boolean
   enabled?: boolean
 }
@@ -75,7 +89,8 @@ export type RpwProject = {
   defines?: RpwDefine[]
   includes?: string[]
   modules?: RpwModule[]
-  images?: RpwImage []
+  disks?: RpwDisk[]
+  drives?: RpwDrive []
   preloads?: RpwPreload[]
   a78Header?: A78Header
   a78header?: A78Header         // catch easy-to-make typo

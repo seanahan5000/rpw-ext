@@ -78,22 +78,25 @@ export class ParserStats {
         return
       }
     }
-    const argCol = this.pickColumn(this.opArgCols)
+    const argCol = this.pickColumn(this.opArgCols, opCol)
     if (argCol == undefined || argCol <= opCol) {
       return
     }
-    let commentCol = this.pickColumn(this.commentCols) ?? 40
+    let commentCol = this.pickColumn(this.commentCols, argCol) ?? 40
     if (commentCol <= argCol) {
       commentCol = argCol + 24
     }
     return [0, opCol, argCol, commentCol]
   }
 
-  private pickColumn(map: Map<number, number>): number | undefined {
+  private pickColumn(map: Map<number, number>, minCol: number = 0): number | undefined {
     let column: number | undefined
     let count = -1
     for (const [key, value] of map) {
       if (key != 0 && value > count) {
+        if (key <= minCol) {
+          continue
+        }
         count = value
         column = key
       }
@@ -1624,13 +1627,13 @@ export class Parser extends Tokenizer {
     return new exp.StringExpression(this.endExpression(), this.syntax)
   }
 
-  // TODO: pass in a list of required quote characters
+  // NOTE: It's up to the statement using this expression to enforce
+  //  syntax-specific quote character legality.
   getNextFileNameExpression(): exp.FileNameExpression | undefined {
 
     this.skipWhitespace()
     const startPosition = this.position
 
-    // TODO: decide which quote chars are supported, by syntax
     const beginChar = this.sourceLine[this.position++]
     let endChar = ""
     if (beginChar == '"' || beginChar == "'") {
@@ -1638,14 +1641,12 @@ export class Parser extends Tokenizer {
     } else if (beginChar == "<") {
       endChar = ">"
     } else {
-      // TODO: only merlin allows unquoted file names
       this.position -= 1
     }
 
     if (this.position < this.sourceLine.length) {
 
       if (endChar != "") {
-        // TODO: enforce/allow quotes for only some syntaxes?
         while (this.position < this.sourceLine.length) {
           const nextChar = this.sourceLine[this.position++]
           if (nextChar == endChar) {

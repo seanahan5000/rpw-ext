@@ -727,7 +727,17 @@ export class LspDebugger {
 
   public startup(mainProject: LspProject) {
 
+    const prevMainProject = this.mainProject
     this.mainProject = mainProject
+
+    if (prevMainProject) {
+      if (this.socket) {
+        this.socket.close()
+        this.socket = undefined
+      }
+      return
+    }
+
     this.connectEvent = new AwaitEvent()
 
     try {
@@ -885,9 +895,9 @@ export class LspDebugger {
   }
 
   // direct readMemory method for checking binary load status
-  public async readRange(address: number, length: number): Promise<Uint8Array> {
+  public async readRangeDataString(address: number, length: number): Promise<string> {
     if (length == 0) {
-      return new Uint8Array(0)
+      return ""
     }
     const request: ReadRangeRequest =  {
       command: "readRange",
@@ -895,7 +905,7 @@ export class LspDebugger {
       dataLength: length
     }
     const response: ReadRangeResponse = await this.sendRequest(request)
-    return base64.toByteArray(response.dataString)
+    return response.dataString
   }
 
   public async setDataImage(fullPath: string, data: Uint8Array, driveIndex: number, writeProtected: boolean) {

@@ -29,6 +29,7 @@ export class Ca65Syntax extends SyntaxDef {
   public allowIndentedAssignment = true
   public allowLineContinuation = true
   public stringEscapeChars = "\\'\"tnrx"
+  public fileNameQuoteChars = "\""
   public scopeSeparator = "::"
   public defaultOrg = undefined
 
